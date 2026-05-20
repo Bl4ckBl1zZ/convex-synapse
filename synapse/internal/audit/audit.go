@@ -81,6 +81,14 @@ const (
 	ActionCreateDeployKey = "createDeployKey"
 	ActionRevokeDeployKey = "revokeDeployKey"
 
+	// Reissue admin key (v1.7+). Re-mints deployments.admin_key from the
+	// existing instance_secret WITHOUT rotating the secret. Operator
+	// escape hatch when the stored key drifted out of sync with the
+	// running container (rare; usually after manual interventions or a
+	// half-applied revoke). Distinct from createDeployKey because the
+	// target is the deployment row itself, not a named row in deploy_keys.
+	ActionReissueAdminKey = "reissueAdminKey"
+
 	// Per-deployment custom domains (v1.1+, migration 000012).
 	// Synapse-original; Convex Cloud manages domains at the project
 	// level. Matches the existing "<verb><Noun>" pattern with a

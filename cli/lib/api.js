@@ -75,10 +75,23 @@ class SynapseAPI {
         pageURL.searchParams.set("cursor", cursor);
       }
       const page = await this.request("GET", `${pageURL.pathname}${pageURL.search}`, undefined, { includeHeaders: true });
-      if (!Array.isArray(page.data)) {
-        throw new SynapseAPIError(0, "bad_response", `Expected ${path} to return a JSON array`);
+      // Backend currently returns a bare JSON array for every paginated
+      // endpoint, but the dashboard already tolerates both `[...]` and
+      // `{ <noun>: [...] }` (see `collectPaginated` in dashboard/lib/api.ts).
+      // Mirror that resilience here so a future server-side reshape doesn't
+      // brick `synapse select` for every CLI user simultaneously.
+      const arr = extractListPayload(page.data);
+      if (arr === null) {
+        const shape = page.data && typeof page.data === "object"
+          ? `object with keys [${Object.keys(page.data).join(", ")}]`
+          : typeof page.data;
+        throw new SynapseAPIError(
+          0,
+          "bad_response",
+          `Expected ${path} to return a JSON array (got ${shape})`,
+        );
       }
-      items.push(...page.data);
+      items.push(...arr);
       cursor = page.headers.get("x-next-cursor") || "";
     } while (cursor);
     return items;
@@ -113,7 +126,36 @@ class SynapseAPI {
   }
 }
 
+// Known envelope keys, in priority order. We try these explicitly before
+// falling back to a generic "first array-valued property" lookup so a
+// future endpoint that wraps results in `{ items: [...] }` (or similar)
+// keeps working. The fallback handles the unlikely case of a renamed
+// envelope without crashing the CLI.
+const KNOWN_LIST_KEYS = [
+  "teams",
+  "projects",
+  "deployments",
+  "members",
+  "items",
+  "data",
+  "results",
+];
+
+function extractListPayload(data) {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === "object") {
+    for (const key of KNOWN_LIST_KEYS) {
+      if (Array.isArray(data[key])) return data[key];
+    }
+    for (const value of Object.values(data)) {
+      if (Array.isArray(value)) return value;
+    }
+  }
+  return null;
+}
+
 module.exports = {
   SynapseAPI,
   SynapseAPIError,
+  extractListPayload,
 };

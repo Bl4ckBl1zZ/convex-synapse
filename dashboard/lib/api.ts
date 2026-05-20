@@ -1,7 +1,16 @@
 // Typed wrapper around Synapse's REST surface. All authenticated calls
-// pull the bearer from localStorage; on 401 we wipe state and redirect.
+// pull the bearer from localStorage; on 401 we transparently try to
+// refresh the access token using the saved refresh token before falling
+// back to "wipe state + redirect to /login".
 
-import { clearAuth, getAccessToken, saveAuth, type AuthBundle, type User } from "./auth";
+import {
+  clearAuth,
+  getAccessToken,
+  loadAuth,
+  saveAuth,
+  type AuthBundle,
+  type User,
+} from "./auth";
 
 // Pre-v1.6.11: BASE_URL was a build-time-baked constant pointing at
 // the operator's main install URL (e.g. https://synapsepanel.com).
@@ -476,9 +485,98 @@ type ResponseWithHeaders<T> = {
   headers: Headers;
 };
 
+// Silent refresh state ------------------------------------------------
+//
+// On 401 we POST to /v1/auth/refresh once with the saved refresh token
+// before falling back to the clear-auth + redirect path. Multiple
+// concurrent 401s share one in-flight refresh promise (single-flight),
+// otherwise a freshly-mounted page firing N parallel SWR fetches would
+// burn N rotations and leave us racing the server's refresh-token-reuse
+// detection.
+//
+// `refreshPromise` is module-scoped: it lives for the duration of a tab
+// session and is the same closure every requestWithHeaders call reaches.
+// We null it out as soon as the underlying fetch resolves so the *next*
+// 401 starts a fresh refresh — refresh tokens are single-use by design,
+// so reusing a resolved promise would post a now-invalid token.
+let refreshPromise: Promise<AuthBundle> | null = null;
+
+// Exposed for tests so a Playwright spec can prove no zombie promise
+// survives between cases. Production code never imports this.
+export function __resetRefreshPromiseForTests() {
+  refreshPromise = null;
+}
+
+async function refreshAccessToken(): Promise<AuthBundle> {
+  if (refreshPromise) return refreshPromise;
+  const bundle = loadAuth();
+  if (!bundle || !bundle.refreshToken) {
+    throw new ApiError(401, "no_refresh_token", "No refresh token saved");
+  }
+  refreshPromise = (async () => {
+    let res: Response;
+    try {
+      res = await fetch(`${resolveBaseURL()}/v1/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: bundle.refreshToken }),
+        cache: "no-store",
+      });
+    } catch (err) {
+      throw new ApiError(0, "network_error", (err as Error).message);
+    }
+    if (!res.ok) {
+      // Surface the server's reason verbatim (e.g. "expired", "revoked")
+      // so the redirect URL the caller eventually lands on can hint at
+      // why. The dashboard doesn't currently read these — the .catch in
+      // requestWithHeaders just falls through to clear + redirect — but
+      // future code may want to differentiate.
+      let code = "refresh_failed";
+      let message = `refresh failed with ${res.status}`;
+      try {
+        const j = (await res.json()) as { code?: string; message?: string };
+        if (j.code) code = j.code;
+        if (j.message) message = j.message;
+      } catch {
+        /* ignore non-JSON refresh response */
+      }
+      throw new ApiError(res.status, code, message);
+    }
+    const data = (await res.json()) as TokenResponse;
+    if (!data.accessToken) {
+      throw new ApiError(res.status, "refresh_failed", "Refresh response missing accessToken");
+    }
+    const next: AuthBundle = {
+      accessToken: data.accessToken,
+      // Synapse rotates refresh tokens on every refresh: the server invalidates
+      // the previous refresh token the instant it issues a new one. We MUST
+      // save the new value or the next 401 will try to refresh with a token
+      // the server now rejects. Fall back to the previous value defensively
+      // for the unlikely case where the response omits it.
+      refreshToken: data.refreshToken || bundle.refreshToken,
+      user: data.user || bundle.user,
+    };
+    saveAuth(next);
+    return next;
+  })();
+
+  try {
+    return await refreshPromise;
+  } finally {
+    // Always clear so the next 401 (with the now-current tokens) starts a
+    // fresh refresh promise. If the refresh failed, we also clear so
+    // callers can retry login flow without us caching a rejected promise.
+    refreshPromise = null;
+  }
+}
+
+// requestWithHeaders is the single chokepoint every API method funnels
+// through. The optional `_retry` arg is a private flag used by the
+// silent-refresh retry path; never set by callers directly.
 async function requestWithHeaders<T>(
   path: string,
   opts: RequestOpts = {},
+  _retry: boolean = false,
 ): Promise<ResponseWithHeaders<T>> {
   const { method = "GET", body, auth = true } = opts;
   const headers: Record<string, string> = {};
@@ -498,6 +596,22 @@ async function requestWithHeaders<T>(
     });
   } catch (err) {
     throw new ApiError(0, "network_error", (err as Error).message);
+  }
+
+  if (res.status === 401 && auth && !_retry) {
+    // First 401 on an authenticated request: try the refresh-then-retry
+    // path before tearing down the session. If refresh succeeds, we
+    // re-issue the original request once with the new token. Mark
+    // `_retry=true` so a second 401 cannot loop here and instead falls
+    // through to the existing clear-and-redirect logic below.
+    try {
+      await refreshAccessToken();
+      return await requestWithHeaders<T>(path, opts, true);
+    } catch {
+      // Fall through to the redirect path. The original 401's response
+      // body is already consumed — we'll synthesize the "Session expired"
+      // ApiError on the way out.
+    }
   }
 
   if (res.status === 401 && auth) {
@@ -1015,6 +1129,20 @@ export const api = {
     cliCredentials(name: string): Promise<CliCredentials> {
       return request<CliCredentials>(
         `/v1/deployments/${encodeURIComponent(name)}/cli_credentials`
+      );
+    },
+    // Re-mint deployments.admin_key from the current INSTANCE_SECRET
+    // without rotating the secret. Operator escape hatch for the "iframe
+    // says 'admin key invalid'" symptom when the stored key drifted out
+    // of sync with the running container (rare; recoverable). Triggers
+    // an audit row + invalidates anyone else's cached value, but does
+    // NOT touch deploy_keys or recreate the container.
+    reissueAdminKey(
+      name: string,
+    ): Promise<{ deploymentName: string; adminKey: string; prefix: string }> {
+      return request(
+        `/v1/deployments/${encodeURIComponent(name)}/reissue_admin_key`,
+        { method: "POST", body: {} },
       );
     },
     delete(name: string): Promise<void> {

@@ -175,7 +175,13 @@ func Load() (*Config, error) {
 		return nil, errors.New("SYNAPSE_DB_URL must be set")
 	}
 
-	accessTTL, err := time.ParseDuration(getEnvDefault("SYNAPSE_JWT_ACCESS_TTL", "15m"))
+	// 24h matches the developer-tool ergonomics we want for a self-hosted
+	// control plane: operators keep dashboards open all day and shouldn't
+	// have to re-authenticate before lunch. The refresh token (720h / 30d)
+	// remains the real session boundary — operators who want a stricter
+	// access TTL for compliance can override via SYNAPSE_JWT_ACCESS_TTL.
+	// Prior default 15m bounced operators to /login on every short break.
+	accessTTL, err := time.ParseDuration(getEnvDefault("SYNAPSE_JWT_ACCESS_TTL", "24h"))
 	if err != nil {
 		return nil, fmt.Errorf("SYNAPSE_JWT_ACCESS_TTL: %w", err)
 	}

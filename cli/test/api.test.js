@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { SynapseAPI, SynapseAPIError } = require("../lib/api");
+const { SynapseAPI, SynapseAPIError, extractListPayload } = require("../lib/api");
 
 function jsonResponse(status, data) {
   return new Response(JSON.stringify(data), {
@@ -125,6 +125,73 @@ test("successful non-JSON responses get a stable bad_response error", async () =
     assert.equal(err.status, 200);
     assert.equal(err.code, "bad_response");
     assert.match(err.message, /did not return JSON/);
+    return true;
+  });
+});
+
+test("extractListPayload returns the array for every supported shape", () => {
+  assert.deepEqual(extractListPayload([1, 2]), [1, 2]);
+  assert.deepEqual(extractListPayload({ teams: [{ id: "t" }] }), [{ id: "t" }]);
+  assert.deepEqual(extractListPayload({ projects: [] }), []);
+  assert.deepEqual(extractListPayload({ deployments: [{ name: "x" }] }), [{ name: "x" }]);
+  assert.deepEqual(extractListPayload({ members: [{ id: "m" }] }), [{ id: "m" }]);
+  // Generic fallback when the wrapper key is something new.
+  assert.deepEqual(extractListPayload({ widgets: [{ id: "w" }] }), [{ id: "w" }]);
+});
+
+test("extractListPayload returns null for non-list shapes", () => {
+  assert.equal(extractListPayload(null), null);
+  assert.equal(extractListPayload(undefined), null);
+  assert.equal(extractListPayload("not a list"), null);
+  assert.equal(extractListPayload(42), null);
+  assert.equal(extractListPayload({}), null);
+  assert.equal(extractListPayload({ unrelated: "value" }), null);
+});
+
+test("listAll consumes both bare-array and envelope responses across pages", async () => {
+  // First page: array shape with cursor; second page: {deployments:[...]}.
+  // Mixing intentionally — if the server ever ships an envelope on one
+  // endpoint and not another, we still collect the full list.
+  let calls = 0;
+  const api = new SynapseAPI({
+    baseUrl: "https://synapse.example.com",
+    accessToken: "tok",
+    fetchImpl: async (url) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify([{ id: "d1", name: "dep-one" }]), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Next-Cursor": "d1",
+          },
+        });
+      }
+      return new Response(
+        JSON.stringify({ deployments: [{ id: "d2", name: "dep-two" }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  const deployments = await api.deployments("project-id");
+  assert.deepEqual(deployments.map((d) => d.name), ["dep-one", "dep-two"]);
+});
+
+test("listAll surfaces a useful bad_response when the payload has no list inside", async () => {
+  const api = new SynapseAPI({
+    baseUrl: "https://synapse.example.com",
+    accessToken: "tok",
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ message: "nope" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  });
+  await assert.rejects(() => api.teams(), (err) => {
+    assert.ok(err instanceof SynapseAPIError);
+    assert.equal(err.code, "bad_response");
+    assert.match(err.message, /object with keys \[message\]/);
     return true;
   });
 });

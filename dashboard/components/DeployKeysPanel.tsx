@@ -124,9 +124,13 @@ function DeployKeysPanelExpanded({
         </div>
 
         <p className="rounded border border-yellow-900/60 bg-yellow-900/20 px-3 py-2 text-[11px] text-yellow-200">
-          Revoking a deploy key rotates this deployment's credentials and
-          restarts its container. All existing deploy keys for this deployment
-          stop working after the rotation.
+          Revoking a deploy key rotates this deployment&apos;s INSTANCE_SECRET
+          and restarts its container. All existing deploy keys for this
+          deployment stop working after the rotation. If the in-dashboard
+          embed ever shows &ldquo;admin key invalid&rdquo; after a credential
+          issue, click <span className="font-semibold">Refresh credentials</span>
+          {" "}in the embed header to re-mint the dashboard&apos;s own admin key
+          without rotating INSTANCE_SECRET.
         </p>
 
         {error && (

@@ -53,7 +53,7 @@ services:
       SYNAPSE_HTTP_ADDR: 0.0.0.0:8080
       SYNAPSE_DB_URL: postgres://${POSTGRES_USER:-synapse}:${POSTGRES_PASSWORD:-synapse}@postgres:5432/${POSTGRES_DB:-synapse}?sslmode=disable
       SYNAPSE_JWT_SECRET: ${SYNAPSE_JWT_SECRET}
-      SYNAPSE_JWT_ACCESS_TTL: ${SYNAPSE_JWT_ACCESS_TTL:-15m}
+      SYNAPSE_JWT_ACCESS_TTL: ${SYNAPSE_JWT_ACCESS_TTL:-24h}
       SYNAPSE_JWT_REFRESH_TTL: ${SYNAPSE_JWT_REFRESH_TTL:-720h}
       SYNAPSE_DOCKER_HOST: unix:///var/run/docker.sock
       SYNAPSE_BACKEND_IMAGE: ${SYNAPSE_BACKEND_IMAGE:-ghcr.io/get-convex/convex-backend:latest}

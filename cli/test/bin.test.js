@@ -3,9 +3,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { PassThrough } = require("node:stream");
 
 const {
   clientFromConfig,
+  deploy,
+  dev,
+  extractYesFlag,
   inferConvexTarget,
   main,
   parseConvexInvocation,
@@ -13,6 +17,19 @@ const {
 } = require("../bin/synapse");
 const config = require("../lib/config");
 const projectConfig = require("../lib/project");
+
+function makeStdin({ isTTY = true } = {}) {
+  const stream = new PassThrough();
+  Object.defineProperty(stream, "isTTY", { value: isTTY, configurable: true });
+  return stream;
+}
+
+function makeStderr() {
+  const buffer = [];
+  const stream = new PassThrough();
+  stream.on("data", (c) => buffer.push(c.toString("utf8")));
+  return { stream, text: () => buffer.join("") };
+}
 
 test("clientFromConfig refreshes an expired access token and retries", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-bin-"));
@@ -126,6 +143,167 @@ test("resolveConvexInvocation fetches dev or prod credentials from project metad
     assert.equal(override.deploymentName, "dev-cat");
     assert.deepEqual(requested, ["dev-cat", "prod-cat", "dev-cat"]);
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("extractYesFlag strips --yes / -y and keeps everything else", () => {
+  assert.deepEqual(extractYesFlag([]), { yes: false, rest: [] });
+  assert.deepEqual(extractYesFlag(["--yes"]), { yes: true, rest: [] });
+  assert.deepEqual(extractYesFlag(["-y"]), { yes: true, rest: [] });
+  assert.deepEqual(extractYesFlag(["--once", "--yes", "extra"]), {
+    yes: true,
+    rest: ["--once", "extra"],
+  });
+  // Synapse-level only; downstream --yes-foo flag must pass through untouched.
+  assert.deepEqual(extractYesFlag(["--yes-typecheck"]), {
+    yes: false,
+    rest: ["--yes-typecheck"],
+  });
+});
+
+test("synapse deploy aborts without calling convex when the user declines", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-deploy-"));
+  const previousCwd = process.cwd();
+  process.env.SYNAPSE_CLI_CONFIG = path.join(dir, "config.json");
+  try {
+    config.writeConfig({ baseUrl: "https://synapse.example.com", accessToken: "tok" });
+    projectConfig.writeProjectConfig(dir, {
+      synapseUrl: "https://synapse.example.com",
+      team: { id: "t", slug: "team", name: "Team" },
+      project: { id: "p", slug: "app", name: "App" },
+      deployments: {
+        dev: { name: "dev-cat", deploymentType: "dev" },
+        prod: { name: "prod-cat", deploymentType: "prod" },
+      },
+    });
+    process.chdir(dir);
+
+    let convexCalled = false;
+    const out = makeStderr();
+    await deploy([], {
+      input: makeStdin({ isTTY: true }),
+      output: out.stream,
+      confirmImpl: async () => false,
+      convexImpl: async () => {
+        convexCalled = true;
+      },
+    });
+
+    assert.equal(convexCalled, false);
+    assert.match(out.text(), /Deploy cancelled/);
+  } finally {
+    process.chdir(previousCwd);
+    delete process.env.SYNAPSE_CLI_CONFIG;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("synapse deploy --yes skips the confirmation entirely and forwards args to convex", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-deploy-yes-"));
+  const previousCwd = process.cwd();
+  process.env.SYNAPSE_CLI_CONFIG = path.join(dir, "config.json");
+  try {
+    config.writeConfig({ baseUrl: "https://synapse.example.com", accessToken: "tok" });
+    projectConfig.writeProjectConfig(dir, {
+      synapseUrl: "https://synapse.example.com",
+      team: { id: "t", slug: "team", name: "Team" },
+      project: { id: "p", slug: "app", name: "App" },
+      deployments: { prod: { name: "prod-cat", deploymentType: "prod" } },
+    });
+    process.chdir(dir);
+
+    let promptedDespiteYes = false;
+    let forwardedArgs = null;
+    await deploy(["--yes", "--debug-bundle-path", "/tmp/bundle"], {
+      input: makeStdin({ isTTY: false }), // non-TTY still OK with --yes
+      output: makeStderr().stream,
+      confirmImpl: async () => {
+        promptedDespiteYes = true;
+        return true;
+      },
+      convexImpl: async (args) => {
+        forwardedArgs = args;
+      },
+    });
+
+    assert.equal(promptedDespiteYes, false, "confirm must not be invoked under --yes");
+    assert.deepEqual(forwardedArgs, [
+      "--target", "prod", "deploy", "--debug-bundle-path", "/tmp/bundle",
+    ]);
+  } finally {
+    process.chdir(previousCwd);
+    delete process.env.SYNAPSE_CLI_CONFIG;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("synapse deploy refuses when stdin is not a TTY and --yes is missing", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-deploy-notty-"));
+  const previousCwd = process.cwd();
+  process.env.SYNAPSE_CLI_CONFIG = path.join(dir, "config.json");
+  try {
+    config.writeConfig({ baseUrl: "https://synapse.example.com", accessToken: "tok" });
+    projectConfig.writeProjectConfig(dir, {
+      synapseUrl: "https://synapse.example.com",
+      team: { id: "t", slug: "team", name: "Team" },
+      project: { id: "p", slug: "app", name: "App" },
+      deployments: { prod: { name: "prod-cat", deploymentType: "prod" } },
+    });
+    process.chdir(dir);
+
+    let convexCalled = false;
+    await assert.rejects(
+      () => deploy([], {
+        input: makeStdin({ isTTY: false }),
+        output: makeStderr().stream,
+        convexImpl: async () => { convexCalled = true; },
+      }),
+      /Pass --yes to skip/,
+    );
+    assert.equal(convexCalled, false);
+  } finally {
+    process.chdir(previousCwd);
+    delete process.env.SYNAPSE_CLI_CONFIG;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("synapse dev delegates straight to convex without any confirmation", async () => {
+  let forwardedArgs = null;
+  await dev(["--once"], {
+    convexImpl: async (args) => {
+      forwardedArgs = args;
+    },
+  });
+  assert.deepEqual(forwardedArgs, ["--target", "dev", "dev", "--once"]);
+});
+
+test("synapse deploy without saved project metadata falls through to convex (which will error helpfully)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-deploy-noproj-"));
+  const previousCwd = process.cwd();
+  process.env.SYNAPSE_CLI_CONFIG = path.join(dir, "config.json");
+  try {
+    config.writeConfig({ baseUrl: "https://synapse.example.com", accessToken: "tok" });
+    process.chdir(dir);
+    let promptOpened = false;
+    let convexArgs = null;
+    await deploy([], {
+      input: makeStdin({ isTTY: true }),
+      output: makeStderr().stream,
+      confirmImpl: async () => {
+        promptOpened = true;
+        return true;
+      },
+      convexImpl: async (args) => { convexArgs = args; },
+    });
+    // No project => we skip the confirmation entirely; convex() handles the
+    // "run `synapse select`" guidance with its own clearer error.
+    assert.equal(promptOpened, false);
+    assert.deepEqual(convexArgs, ["--target", "prod", "deploy"]);
+  } finally {
+    process.chdir(previousCwd);
+    delete process.env.SYNAPSE_CLI_CONFIG;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

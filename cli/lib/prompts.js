@@ -1,5 +1,10 @@
 const readline = require("node:readline");
 
+// Sentinel returned by `choose` when the user asks to go back to the
+// previous step. Use a Symbol so it can never collide with a legitimate
+// choice payload.
+const BACK = Symbol("synapse-choose-back");
+
 function ask(question, { input = process.stdin, output = process.stderr } = {}) {
   const rl = readline.createInterface({ input, output });
   return new Promise((resolve) => {
@@ -89,12 +94,69 @@ async function askCredentials({ input = process.stdin, output = process.stderr }
   };
 }
 
-async function choose(label, choices, { input = process.stdin, output = process.stderr } = {}) {
+// confirm prompts the user with a yes/no question and resolves to a boolean.
+//
+// - Empty answer applies `defaultAnswer` (so `[y/N]` matches "no by default"
+//   and `[Y/n]` matches "yes by default"). The hint in the question is the
+//   caller's responsibility — we render the prompt literally.
+// - "y" / "yes" / "n" / "no" (case-insensitive) are accepted.
+// - Anything else re-prompts with a tip, capped at `maxAttempts` to keep
+//   pasted-shell-history scenarios from looping forever.
+// - Non-interactive callers (no TTY) cannot disambiguate — they must use a
+//   skip-confirmation flag at the call site instead of relying on `confirm`.
+//
+// We open a single readline interface for the whole prompt session.
+// Calling `ask()` multiple times would re-create the interface and re-bind
+// `data` listeners on the input stream — which is fine for real stdin but
+// produces flaky behaviour on a buffered PassThrough where the second
+// listener can't see data the first consumed. One rl, multiple questions.
+async function confirm(question, {
+  input = process.stdin,
+  output = process.stderr,
+  defaultAnswer = false,
+  maxAttempts = 3,
+} = {}) {
+  const rl = readline.createInterface({ input, output });
+  try {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const raw = await new Promise((resolve) => rl.question(question, resolve));
+      const answer = raw.trim().toLowerCase();
+      if (answer === "") return defaultAnswer;
+      if (answer === "y" || answer === "yes") return true;
+      if (answer === "n" || answer === "no") return false;
+      output.write("Please answer y or n.\n");
+    }
+    throw new Error("Confirmation prompt cancelled after too many invalid answers");
+  } finally {
+    rl.close();
+  }
+}
+
+// choose prompts the user to pick one of `choices`.
+//
+// - `label` is the plural noun used for the menu header ("dev deployments").
+// - `singularLabel` defaults to `label` stripped of a trailing "s" — it's
+//   the noun used when only one option exists and we auto-select silently.
+//   Pass a custom value when the strip heuristic produces something
+//   awkward ("members" → "member" is fine; "people" → "peopl" is not).
+// - `allowBack` lets the user type "b" / "back" / "0" to return the BACK
+//   sentinel, which the caller maps to a previous step.
+// - `maxInvalid` caps how many garbage answers in a row we tolerate
+//   before throwing. Protects against pasted shell history / broken
+//   stdin where the loop would otherwise spin forever.
+async function choose(label, choices, {
+  input = process.stdin,
+  output = process.stderr,
+  singularLabel,
+  allowBack = false,
+  maxInvalid = 3,
+} = {}) {
   if (!Array.isArray(choices) || choices.length === 0) {
     throw new Error(`No ${label} available.`);
   }
+  const singular = singularLabel || label.replace(/s$/, "") || label;
   if (choices.length === 1) {
-    output.write(`Using ${label}: ${choices[0].label}\n`);
+    output.write(`Auto-selected ${singular}: ${choices[0].label} (only one available)\n`);
     return choices[0].value;
   }
 
@@ -103,20 +165,34 @@ async function choose(label, choices, { input = process.stdin, output = process.
     output.write(`  ${index + 1}. ${choice.label}\n`);
   });
 
+  const hint = allowBack
+    ? `[1-${choices.length}, b=back]`
+    : `[1-${choices.length}]`;
+
+  let invalid = 0;
   while (true) {
-    const answer = await ask(`Choose ${label} [1-${choices.length}]: `, { input, output });
+    const answer = (await ask(`Choose ${label} ${hint}: `, { input, output })).trim();
+    if (allowBack && (answer === "b" || answer === "B" || answer === "back" || answer === "0")) {
+      return BACK;
+    }
     const n = Number.parseInt(answer, 10);
     if (Number.isInteger(n) && n >= 1 && n <= choices.length) {
       return choices[n - 1].value;
     }
-    output.write(`Enter a number from 1 to ${choices.length}.\n`);
+    invalid += 1;
+    if (invalid >= maxInvalid) {
+      throw new Error(`Cancelled ${label} prompt after ${invalid} invalid answers`);
+    }
+    output.write(`Enter a number from 1 to ${choices.length}${allowBack ? " (or 'b' to go back)" : ""}.\n`);
   }
 }
 
 module.exports = {
+  BACK,
   ask,
   askCredentials,
   askHidden,
   choose,
+  confirm,
   parseCredentialsInput,
 };

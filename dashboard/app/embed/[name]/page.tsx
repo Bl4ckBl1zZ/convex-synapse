@@ -88,7 +88,35 @@ export default function EmbedDashboardPage({
   const { name } = use(params);
   const [auth, setAuth] = useState<DeploymentAuth | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by the "Refresh credentials" button. Drives both the `/auth`
+  // re-fetch (via the useEffect dep below) and the iframe key (so the
+  // upstream Convex Dashboard remounts and re-asks for credentials with
+  // a fresh postMessage handshake). Without this, calling reissueAdminKey
+  // would update the DB but the operator would see the same stale auth
+  // until they reloaded the whole page.
+  const [authNonce, setAuthNonce] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  async function handleRefreshCredentials() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      await api.deployments.reissueAdminKey(name);
+      // Force the auth refetch effect to fire and the iframe to remount.
+      setAuth(null);
+      setAuthNonce((n) => n + 1);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Could not refresh deployment credentials",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   // Full deployment record — needed for projectId. The /auth endpoint
   // is intentionally narrow (just creds), so we issue a sibling fetch.
@@ -121,8 +149,10 @@ export default function EmbedDashboardPage({
     () => api.teams.get(project!.teamId),
   );
 
-  // Fetch creds once per deployment name. Re-fetched when the
-  // operator picks a sibling and `name` changes.
+  // Fetch creds once per deployment name. Re-fetched when the operator
+  // picks a sibling and `name` changes, OR when authNonce bumps via the
+  // "Refresh credentials" button — that path doesn't change `name`, so
+  // we list it explicitly in the dep array.
   useEffect(() => {
     let cancelled = false;
     setAuth(null);
@@ -143,7 +173,7 @@ export default function EmbedDashboardPage({
     return () => {
       cancelled = true;
     };
-  }, [name]);
+  }, [name, authNonce]);
 
   // Stamp the localStorage "last viewed at" for this (project,
   // deployment) so the picker dropdown can render "visited 5m ago"
@@ -256,6 +286,24 @@ export default function EmbedDashboardPage({
           </nav>
         )}
         <div className="flex-1" />
+        {/* v1.7+: operator escape hatch. The upstream Convex Dashboard
+            renders "deployment URL or admin key is invalid" entirely
+            inside its iframe — we can't catch that error from out
+            here, but we can offer a one-click re-issue. POST /reissue_
+            admin_key mints a fresh key from the deployment's current
+            INSTANCE_SECRET (no rotation, no recreate) and the
+            authNonce bump forces both the /auth refetch and an iframe
+            remount, so the postMessage handshake fires with the new
+            credentials. Cheap when not needed; lifesaving when it is. */}
+        <button
+          type="button"
+          onClick={handleRefreshCredentials}
+          disabled={refreshing}
+          className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:border-neutral-700 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+          title="Re-mint this deployment's admin key from the current INSTANCE_SECRET. Use this if the dashboard reports 'admin key invalid' or you suspect the cached credential drifted."
+        >
+          {refreshing ? "Refreshing…" : "Refresh credentials"}
+        </button>
         {team && project && (
           <DeploymentPicker
             current={deployment}
@@ -277,7 +325,12 @@ export default function EmbedDashboardPage({
         // deployment's creds from its own localStorage and surfaced
         // "deployment URL or admin key is invalid" the moment the
         // operator clicked a sibling in the picker.
-        key={name}
+        //
+        // v1.7+: the key also folds in `authNonce` so "Refresh
+        // credentials" — which doesn't change `name` — still
+        // unmounts + remounts the iframe and replays the handshake
+        // with the freshly-minted admin key.
+        key={`${name}:${authNonce}`}
         ref={iframeRef}
         src={CONVEX_DASHBOARD_URL}
         title={`${name} — Convex Dashboard`}

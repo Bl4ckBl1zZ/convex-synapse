@@ -590,6 +590,12 @@ func (h *DeploymentsHandler) Routes() chi.Router {
 		r.Get("/cli_credentials", h.deploymentCLICredentials)
 		r.Get("/backend_version", h.getBackendVersion)
 		r.Post("/upgrade_to_ha", h.upgradeToHA)
+		// reissue_admin_key (v1.7+). Re-mints d.admin_key from the
+		// current d.instance_secret WITHOUT rotating the secret —
+		// operator escape hatch when the stored key drifted out of
+		// sync with the running container. See reissueAdminKey for
+		// the contract.
+		r.Post("/reissue_admin_key", h.reissueAdminKey)
 		// Scoped access tokens (v1.0+). Created tokens carry
 		// scope=deployment + scope_id=<this deployment>; the auth
 		// middleware enforces the scope at every subsequent request.
@@ -1622,6 +1628,104 @@ func (h *DeploymentsHandler) getDeployment(w http.ResponseWriter, r *http.Reques
 	}
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), d)
 	writeJSON(w, http.StatusOK, d)
+}
+
+// ---------- POST /v1/deployments/{name}/reissue_admin_key ----------
+
+// reissueAdminKeyResp shape mirrors deploymentAuthResp's admin-key half
+// so the dashboard can drop the new value straight into the postMessage
+// payload without an extra /auth roundtrip.
+type reissueAdminKeyResp struct {
+	DeploymentName string `json:"deploymentName"`
+	AdminKey       string `json:"adminKey"`
+	// Prefix is the dashboard's chip text — same derivation as deploy_keys
+	// so operators can correlate the panel and the audit row visually.
+	Prefix string `json:"prefix"`
+}
+
+// reissueAdminKey re-mints the deployment's admin_key from the CURRENT
+// instance_secret WITHOUT rotating the secret. This is a no-cost
+// operator escape hatch for the "stored admin_key drifted out of sync
+// with the running container" failure mode — symptom is the Convex
+// Dashboard iframe surfacing "deployment URL or admin key is invalid"
+// despite the deployment being up.
+//
+// Contract:
+//   - Does NOT recreate the container (the backend accepts any key
+//     signed by the current INSTANCE_SECRET, so a regenerate is enough).
+//   - Does NOT rotate INSTANCE_SECRET (revokeDeployKey already covers
+//     that path when a credential is suspected compromised).
+//   - Refused for adopted deployments (Synapse doesn't control their
+//     INSTANCE_SECRET).
+//   - Gate: canAdminProject. Same trust level as deploy_keys CRUD.
+//
+// We deliberately stop short of touching deploy_keys rows — those are
+// independent admin keys with their own audit story. This endpoint
+// touches the single deployments.admin_key column that /auth and
+// /cli_credentials read from.
+func (h *DeploymentsHandler) reissueAdminKey(w http.ResponseWriter, r *http.Request) {
+	d, _, t, role, ok := h.loadDeploymentForRequest(w, r)
+	if !ok {
+		return
+	}
+	if !canAdminProject(role) {
+		writeError(w, http.StatusForbidden, "forbidden",
+			"Only project admins can reissue deployment credentials")
+		return
+	}
+	if d.Adopted {
+		writeError(w, http.StatusBadRequest, "cannot_reissue_adopted",
+			"Adopted deployments are managed externally; rotate the admin key on the source side and re-adopt")
+		return
+	}
+	if d.InstanceSecret == "" {
+		// instance_secret is NOT NULL on the column, but a sufficiently
+		// old / restored row could in principle carry an empty string.
+		// Surface a clear error rather than producing a useless key.
+		writeError(w, http.StatusConflict, "missing_instance_secret",
+			"Deployment is missing INSTANCE_SECRET; cannot reissue admin key")
+		return
+	}
+
+	newKey, err := h.Docker.GenerateAdminKey(r.Context(), d.Name, d.InstanceSecret)
+	if err != nil {
+		logErr("reissue admin key: generate_key", err)
+		writeError(w, http.StatusInternalServerError, "internal",
+			"Failed to mint a fresh admin key")
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(),
+		`UPDATE deployments SET admin_key = $1 WHERE id = $2`,
+		newKey, d.ID,
+	); err != nil {
+		logErr("reissue admin key: update db", err)
+		writeError(w, http.StatusInternalServerError, "internal",
+			"Failed to persist the new admin key")
+		return
+	}
+
+	uid, _ := auth.UserID(r.Context())
+	teamID := ""
+	if t != nil {
+		teamID = t.ID
+	}
+	prefix := deployKeyPrefix(newKey)
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		TeamID:     teamID,
+		ActorID:    uid,
+		Action:     audit.ActionReissueAdminKey,
+		TargetType: audit.TargetDeployment,
+		TargetID:   d.ID,
+		Metadata: map[string]any{
+			"deploymentName": d.Name,
+			"prefix":         prefix,
+		},
+	})
+	writeJSON(w, http.StatusOK, reissueAdminKeyResp{
+		DeploymentName: d.Name,
+		AdminKey:       newKey,
+		Prefix:         prefix,
+	})
 }
 
 // ---------- POST /v1/deployments/{name}/upgrade_to_ha ----------

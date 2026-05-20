@@ -15,6 +15,26 @@ npm install -g @iann29/synapse
 synapse --help
 ```
 
+### Windows: ensure the npm global bin directory is in PATH
+
+On a fresh Node.js install, Windows does **not** always add
+`%APPDATA%\npm` to the user PATH. After `npm install -g`, the
+`synapse` binary exists but `synapse --help` errors with
+*"not recognised as the name of a cmdlet"*. Fix once in PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'PATH',
+  "$([Environment]::GetEnvironmentVariable('PATH','User'));$env:APPDATA\npm",
+  'User'
+)
+```
+
+Close every terminal (and your IDE — VS Code caches the env at launch)
+and reopen. `synapse --help` should now print the usage. This is a
+one-time, Node-installer-version-dependent issue; it is not specific
+to this package.
+
 For one app/project:
 
 ```bash

@@ -18,10 +18,17 @@ test("writes config with private file permissions", () => {
   try {
     const file = config.writeConfig({ baseUrl: "http://localhost:8080", accessToken: "tok" });
     assert.deepEqual(config.readConfig(), { baseUrl: "http://localhost:8080", accessToken: "tok" });
-    const dirMode = fs.statSync(path.dirname(file)).mode & 0o777;
-    const mode = fs.statSync(file).mode & 0o777;
-    assert.equal(dirMode, 0o700);
-    assert.equal(mode, 0o600);
+    // NTFS doesn't model POSIX modes — fs.statSync().mode returns 0o666 even
+    // after a successful fs.chmodSync(file, 0o600). The Windows secret-at-rest
+    // story is user-profile ACL inheritance, not POSIX bits, so the chmodSync
+    // call in lib/config.js is already wrapped in try/catch. Assert the modes
+    // only on POSIX hosts; on Windows we verify the file exists + round-trips.
+    if (process.platform !== "win32") {
+      const dirMode = fs.statSync(path.dirname(file)).mode & 0o777;
+      const mode = fs.statSync(file).mode & 0o777;
+      assert.equal(dirMode, 0o700);
+      assert.equal(mode, 0o600);
+    }
     assert.equal(config.clearConfig(), true);
     assert.equal(config.readConfig(), null);
   } finally {

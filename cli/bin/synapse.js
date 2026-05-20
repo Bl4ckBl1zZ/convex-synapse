@@ -9,8 +9,15 @@ const {
   readProjectConfig,
   writeProjectConfig,
 } = require("../lib/project");
-const { askCredentials, choose } = require("../lib/prompts");
+const { BACK, askCredentials, choose, confirm } = require("../lib/prompts");
+const colors = require("../lib/colors");
 const { runConvex } = require("../lib/convex");
+
+function debugLog(msg) {
+  if (process.env.DEBUG_SYNAPSE) {
+    process.stderr.write(`[DEBUG] ${msg}\n`);
+  }
+}
 
 function usage() {
   return `Usage:
@@ -18,8 +25,13 @@ function usage() {
   synapse logout
   synapse whoami
   synapse select
+  synapse dev [...args]                                    Run \`convex dev\` against the linked dev deployment.
+  synapse deploy [--yes] [...args]                          Run \`convex deploy\` against the linked prod deployment (asks for confirmation).
   synapse credentials <deployment> [--format env|shell|json]
-  synapse convex [--target dev|prod] [...args]
+  synapse convex [--target dev|prod] [...args]              Escape hatch for any other \`convex\` subcommand.
+
+Tip: \`synapse select\` writes the deployment credentials to .env.local, so you can also
+run \`npx convex <args>\` directly without going through this wrapper.
 `;
 }
 
@@ -73,12 +85,13 @@ function teamRef(team) {
 }
 
 function deploymentLabel(deployment) {
-  const bits = [deployment.name];
-  if (deployment.deploymentType || deployment.type) {
-    bits.push(deployment.deploymentType || deployment.type);
+  const bits = [colors.bold(deployment.name)];
+  const type = deployment.deploymentType || deployment.type;
+  if (type) {
+    bits.push(colors.dim(type));
   }
   if (deployment.status) {
-    bits.push(deployment.status);
+    bits.push(colors.statusBadge(deployment.status));
   }
   return bits.filter(Boolean).join(" - ");
 }
@@ -96,9 +109,13 @@ function sortDeploymentsForChoice(deployments) {
   });
 }
 
-async function chooseDeploymentForType(type, deployments) {
+async function chooseDeploymentForType(type, deployments, chooseOpts = {}) {
   const matches = sortDeploymentsForChoice(
     deployments.filter((d) => deploymentType(d) === type && d.status !== "deleted"),
+  );
+  debugLog(
+    `chooseDeploymentForType(${type}): matched ${matches.length} of ${deployments.length} ` +
+    `(types: ${deployments.map((d) => deploymentType(d) || "?").join(",")})`,
   );
   if (matches.length === 0) {
     return null;
@@ -106,6 +123,7 @@ async function chooseDeploymentForType(type, deployments) {
   return await choose(
     `${type} deployments`,
     matches.map((d) => ({ label: deploymentLabel(d), value: d })),
+    { singularLabel: `${type} deployment`, ...chooseOpts },
   );
 }
 
@@ -259,18 +277,94 @@ async function whoami() {
   process.stdout.write(`${name ? `${name} ` : ""}<${email}> on ${cfg.baseUrl}\n`);
 }
 
+// selectDeployment walks the operator through team → project → dev → prod
+// pickers, then writes .synapse/project.json + .env.local. Implemented as a
+// small state machine so the user can type `b` / `back` at any step to
+// re-choose the previous selection without restarting the whole CLI.
+//
+// Network results are cached per (team, project) so back-navigation stays
+// snappy and doesn't burn pagination roundtrips. `DEBUG_SYNAPSE=1` dumps
+// the raw lists at each step — useful when an expected deployment is
+// missing from the menu.
 async function selectDeployment() {
   const { cfg, api } = clientFromConfig();
-  const teams = await api.teams();
-  const team = await choose("teams", teams.map((t) => ({ label: labelName(t), value: t })));
-  const projects = await api.projects(teamRef(team));
-  const project = await choose("projects", projects.map((p) => ({ label: labelName(p), value: p })));
-  const deployments = await api.deployments(project.id);
-  const dev = await chooseDeploymentForType("dev", deployments);
-  if (!dev) {
-    throw new Error("No dev deployments available in this project. Create one first.");
+
+  const cache = {
+    teamsList: null,
+    projectsByTeamKey: new Map(),
+    deploymentsByProjectId: new Map(),
+  };
+  async function fetchTeams() {
+    if (!cache.teamsList) {
+      cache.teamsList = await api.teams();
+      debugLog(`teams loaded: ${cache.teamsList.length}`);
+    }
+    return cache.teamsList;
   }
-  const prod = await chooseDeploymentForType("prod", deployments);
+  async function fetchProjects(team) {
+    const key = team.id || team.slug || team.name;
+    if (!cache.projectsByTeamKey.has(key)) {
+      const projects = await api.projects(teamRef(team));
+      cache.projectsByTeamKey.set(key, projects);
+      debugLog(`projects for team ${key}: ${projects.length}`);
+    }
+    return cache.projectsByTeamKey.get(key);
+  }
+  async function fetchDeployments(project) {
+    if (!cache.deploymentsByProjectId.has(project.id)) {
+      const deployments = await api.deployments(project.id);
+      cache.deploymentsByProjectId.set(project.id, deployments);
+      debugLog(`deployments for project ${project.id}: ${deployments.length}`);
+    }
+    return cache.deploymentsByProjectId.get(project.id);
+  }
+
+  let team = null;
+  let project = null;
+  let dev = null;
+  let prod = null;
+  let step = "team";
+  while (step !== "done") {
+    if (step === "team") {
+      const teams = await fetchTeams();
+      // Back from team would be "exit" — not useful at the top of the flow.
+      const picked = await choose(
+        "teams",
+        teams.map((t) => ({ label: labelName(t), value: t })),
+        { singularLabel: "team", allowBack: false },
+      );
+      team = picked;
+      step = "project";
+    } else if (step === "project") {
+      const projects = await fetchProjects(team);
+      const picked = await choose(
+        "projects",
+        projects.map((p) => ({ label: labelName(p), value: p })),
+        { singularLabel: "project", allowBack: true },
+      );
+      if (picked === BACK) { step = "team"; continue; }
+      project = picked;
+      step = "dev";
+    } else if (step === "dev") {
+      const deployments = await fetchDeployments(project);
+      const picked = await chooseDeploymentForType("dev", deployments, { allowBack: true });
+      if (picked === BACK) { step = "project"; continue; }
+      if (picked === null) {
+        throw new Error(
+          "No dev deployments available in this project. Create one first in the dashboard.",
+        );
+      }
+      dev = picked;
+      step = "prod";
+    } else if (step === "prod") {
+      const deployments = await fetchDeployments(project);
+      const picked = await chooseDeploymentForType("prod", deployments, { allowBack: true });
+      if (picked === BACK) { step = "dev"; continue; }
+      prod = picked; // null is a valid outcome here (project has no prod yet)
+      step = "done";
+    }
+  }
+
   const projectPath = writeProjectConfig(
     process.cwd(),
     buildProjectConfig({
@@ -282,16 +376,34 @@ async function selectDeployment() {
   );
   const creds = await api.cliCredentials(dev.name);
   const envPath = writeProjectEnv(process.cwd(), creds);
-  process.stderr.write(`Linked ${labelName(project)} to ${projectPath}.\n`);
-  process.stderr.write(`Selected dev deployment ${dev.name}. Updated ${envPath}.\n`);
+
+  process.stderr.write(`\nLinked ${labelName(project)} to ${projectPath}.\n`);
+  process.stderr.write(`Selected dev deployment ${colors.bold(dev.name)}. Updated ${envPath}.\n`);
   if (prod) {
-    process.stderr.write(`Selected prod deployment ${prod.name}.\n`);
+    process.stderr.write(`Selected prod deployment ${colors.bold(prod.name)}.\n`);
   } else {
-    process.stderr.write("Warning: no prod deployment found. `synapse convex deploy` will require a prod deployment saved by `synapse select`.\n");
+    process.stderr.write(
+      `\n${colors.yellow("Warning:")} no prod deployment found. ` +
+      "`synapse deploy` (and `synapse convex deploy`) will fail with a clear " +
+      "error until you create a prod deployment and run `synapse select` again.\n",
+    );
   }
   if (process.env.CONVEX_DEPLOYMENT) {
-    process.stderr.write("Warning: shell CONVEX_DEPLOYMENT is set. Use `synapse convex ...` or unset it before running `npx convex` directly.\n");
+    process.stderr.write(
+      `\n${colors.yellow("Warning:")} shell CONVEX_DEPLOYMENT is set. ` +
+      "Use `synapse dev` / `synapse deploy` / `synapse convex ...` " +
+      "or unset CONVEX_DEPLOYMENT before running `npx convex` directly.\n",
+    );
   }
+  // Discoverability hint (P3-012). The upstream Convex CLI's `dev` command
+  // is what pushes the project's schema/functions and starts a dev server;
+  // many operators land here from frameworks (Next/Vite) without knowing
+  // that, then hit "page hangs forever" the first time their client tries
+  // to query a backend that has no code deployed yet. Spell it out.
+  process.stderr.write(
+    `\nNext step: run ${colors.bold("synapse dev")} (or ${colors.bold("npx convex dev")}) once in this directory ` +
+    "to push your schema and watch for changes.\n",
+  );
 }
 
 async function credentials(args) {
@@ -327,6 +439,71 @@ async function convex(args) {
   process.exitCode = code;
 }
 
+// extractYesFlag pulls --yes / -y out of an arg vector so the rest can be
+// passed verbatim to the underlying `convex` invocation. We strip only
+// these synapse-level flags; everything else is forwarded.
+function extractYesFlag(args) {
+  let yes = false;
+  const rest = [];
+  for (const arg of args) {
+    if (arg === "--yes" || arg === "-y") {
+      yes = true;
+    } else {
+      rest.push(arg);
+    }
+  }
+  return { yes, rest };
+}
+
+// dev is a convenience for `synapse convex --target dev dev`. We delegate
+// to the existing convex pipeline so target resolution, credential fetching,
+// and env-var sanitization stay in one place.
+//
+// The `convexImpl` seam exists so unit tests can short-circuit before
+// runConvex actually spawns `npx`. Production wiring uses the local
+// `convex` function above unchanged.
+async function dev(args, { convexImpl = convex } = {}) {
+  return await convexImpl(["--target", "dev", "dev", ...args]);
+}
+
+// deploy is the same delegation pattern as `dev`, but with a confirmation
+// gate because publishing to prod is destructive (overwrites functions and
+// schema). The gate is skippable via --yes / -y for CI use. Non-interactive
+// callers without --yes get a clear refusal rather than a hang on
+// readline.question() that never fires.
+//
+// We resolve the prod deployment name from the local project metadata so the
+// prompt names the exact target. When there's no metadata (no `synapse
+// select` yet), we let `convex()` produce its own "run select first" error
+// without prompting — the operator obviously isn't ready to deploy.
+async function deploy(args, {
+  input = process.stdin,
+  output = process.stderr,
+  confirmImpl = confirm,
+  convexImpl = convex,
+} = {}) {
+  const { yes, rest } = extractYesFlag(args);
+  const projectConfig = readProjectConfig(process.cwd());
+  const deploymentName = deploymentNameForTarget(projectConfig, "prod");
+  if (deploymentName && !yes) {
+    if (!input.isTTY) {
+      throw new Error(
+        "synapse deploy needs confirmation. Pass --yes to skip in non-interactive contexts (CI, scripts), " +
+        "or run `synapse deploy` again inside a regular terminal.",
+      );
+    }
+    const ok = await confirmImpl(
+      `About to run \`convex deploy\` against PROD deployment ${deploymentName}. Continue? [y/N] `,
+      { input, output, defaultAnswer: false },
+    );
+    if (!ok) {
+      output.write("Deploy cancelled.\n");
+      return;
+    }
+  }
+  return await convexImpl(["--target", "prod", "deploy", ...rest]);
+}
+
 async function main(argv) {
   const [command, ...args] = argv;
   switch (command) {
@@ -340,6 +517,10 @@ async function main(argv) {
       return await selectDeployment();
     case "credentials":
       return await credentials(args);
+    case "dev":
+      return await dev(args);
+    case "deploy":
+      return await deploy(args);
     case "convex":
       return await convex(args);
     case "-h":
@@ -356,6 +537,16 @@ async function main(argv) {
 if (require.main === module) {
   main(process.argv.slice(2)).catch((err) => {
     process.stderr.write(`${err.message}\n`);
+    // Surface a concrete next step for the most common failure mode —
+    // the user typed a Synapse URL that doesn't resolve or whose server
+    // refused the connection. Without this hint, "fetch failed" reads
+    // like a Node bug instead of a config / connectivity problem.
+    if (err && err.code === "network_error") {
+      process.stderr.write(
+        "Hint: double-check the URL is reachable from this machine (try `curl <url>/v1/install_status`) " +
+        "and that the Synapse server is running.\n",
+      );
+    }
     process.exitCode = 1;
   });
 }
@@ -363,6 +554,9 @@ if (require.main === module) {
 module.exports = {
   chooseDeploymentForType,
   clientFromConfig,
+  deploy,
+  dev,
+  extractYesFlag,
   formatCredentials,
   inferConvexTarget,
   main,
