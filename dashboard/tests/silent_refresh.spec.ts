@@ -59,23 +59,35 @@ test("silent refresh: a single 401 on /v1/teams is retried after /v1/auth/refres
     await route.continue();
   });
 
-  // Force a navigation that re-fetches teams. waitUntil=load avoids the
-  // race where assert-on-URL fires before the silent retry settles.
+  // Trigger the navigation. We use expect.poll for the count-based
+  // assertions instead of a static expect — the silent-refresh path is
+  // asynchronous (401 → /v1/auth/refresh → retry) and the assert can
+  // otherwise fire mid-flight, before the retry's network roundtrip
+  // lands. page.goto with waitUntil=load was racing the SWR fetch on CI.
   await page.goto("/teams", { waitUntil: "load" });
 
-  // We never bounced to /login.
+  // We never bounced to /login: the page stays on /teams once the
+  // retry resolves with a fresh token.
   await expect(page).toHaveURL(/\/teams\b/);
-  expect(teamsCalls).toBeGreaterThanOrEqual(2);
-  expect(refreshCalls).toBe(1);
+  await expect
+    .poll(() => teamsCalls, { timeout: 10_000, message: "teams retry never fired" })
+    .toBeGreaterThanOrEqual(2);
+  await expect
+    .poll(() => refreshCalls, { timeout: 10_000, message: "refresh never fired" })
+    .toBe(1);
 
   // The saved access token rotated to the value returned by /v1/auth/refresh.
   // (Refresh tokens are single-use; the server invalidates the previous one
-  // and issues a fresh pair on every call.)
-  const after = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("synapse.auth") || "{}"),
-  );
-  expect(after.accessToken).toBeTruthy();
-  expect(after.accessToken).not.toEqual(initial.accessToken);
+  // and issues a fresh pair on every call.) Same polling story — the
+  // localStorage write happens inside refreshAccessToken's resolve.
+  await expect
+    .poll(async () => {
+      const a = await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("synapse.auth") || "{}"),
+      );
+      return a.accessToken;
+    }, { timeout: 10_000, message: "accessToken never rotated" })
+    .not.toEqual(initial.accessToken);
 });
 
 test("silent refresh: if the refresh itself 401s, fall back to /login with return_to", async ({
