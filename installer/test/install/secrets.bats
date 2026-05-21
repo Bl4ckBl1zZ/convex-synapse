@@ -227,6 +227,65 @@ EOF
     assert_output "1"
 }
 
+# ---- migrate_env_var ------------------------------------------------
+# Conditional rewrite — heals operators carrying an old default value
+# forward across upgrades without touching custom overrides.
+
+@test "migrate_env_var: rewrites when current value matches old default" {
+    secrets::ensure_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m
+    secrets::migrate_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m 24h
+    run secrets::env_get "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL
+    assert_output "24h"
+}
+
+@test "migrate_env_var: leaves operator override untouched" {
+    # Operator picked a stricter TTL than either default — must not be
+    # mutated by the migration.
+    secrets::ensure_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 30m
+    secrets::migrate_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m 24h
+    run secrets::env_get "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL
+    assert_output "30m"
+}
+
+@test "migrate_env_var: leaves the new default untouched (re-run is no-op)" {
+    secrets::ensure_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 24h
+    secrets::migrate_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m 24h
+    run secrets::env_get "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL
+    assert_output "24h"
+    # And applying twice in a row is still a no-op (no duplicate lines).
+    secrets::migrate_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m 24h
+    run grep -c '^SYNAPSE_JWT_ACCESS_TTL=' "$ENV_FILE"
+    assert_output "1"
+}
+
+@test "migrate_env_var: missing key is a no-op (does NOT inject)" {
+    : >"$ENV_FILE"
+    secrets::migrate_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m 24h
+    run grep -c '^SYNAPSE_JWT_ACCESS_TTL=' "$ENV_FILE"
+    assert_output "0"
+}
+
+@test "migrate_env_var: missing file is a no-op (no error, no creation)" {
+    rm -f "$ENV_FILE"
+    run secrets::migrate_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m 24h
+    assert_success
+    [ ! -f "$ENV_FILE" ]
+}
+
+@test "ensure_env: applies JWT 15m → 24h migration on existing install" {
+    # Simulate a .env rendered by pre-v1.7.0 setup.sh (15m default).
+    secrets::ensure_env_var "$ENV_FILE" SYNAPSE_JWT_SECRET existing-jwt-secret
+    secrets::ensure_env_var "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL 15m
+    secrets::ensure_env_var "$ENV_FILE" POSTGRES_PASSWORD existing-pg-pwd
+    secrets::ensure_env_var "$ENV_FILE" SYNAPSE_UPDATER_TOKEN existing-utok
+    secrets::ensure_env "$ENV_FILE"
+    run secrets::env_get "$ENV_FILE" SYNAPSE_JWT_ACCESS_TTL
+    assert_output "24h"
+    # Other preserved values were not disturbed.
+    run secrets::env_get "$ENV_FILE" SYNAPSE_JWT_SECRET
+    assert_output "existing-jwt-secret"
+}
+
 # ---- render_env_tmpl ------------------------------------------------
 
 @test "render_env_tmpl: substitutes {{KEY}} from exported vars" {

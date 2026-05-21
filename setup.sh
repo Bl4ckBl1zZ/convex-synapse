@@ -27,7 +27,7 @@
 
 set -Eeuo pipefail
 
-readonly INSTALLER_VERSION="1.6.17"
+readonly INSTALLER_VERSION="1.7.1"
 readonly INSTALL_DIR_DEFAULT="/opt/synapse"
 readonly LOG_FILE="${SYNAPSE_INSTALL_LOG:-/tmp/synapse-install.log}"
 readonly LOCK_FILE="/var/lock/synapse-installer.lock"
@@ -850,10 +850,11 @@ phase_compose_up() {
     # Pre-pull the Convex backend image. Synapse calls `docker run`
     # against this image when provisioning the very first deployment;
     # without it pre-pulled, the first create_deployment hits
-    # "No such image: ghcr.io/get-convex/convex-backend:latest" and
-    # returns 500. Pulling here turns first-deployment latency into
+    # "No such image: ghcr.io/get-convex/convex-backend:<pinned-tag>"
+    # and returns 500. Pulling here turns first-deployment latency into
     # known-and-visible install time (the image is ~150 MB).
-    local backend_image="${SYNAPSE_BACKEND_IMAGE:-ghcr.io/get-convex/convex-backend:latest}"
+    # v1.7.1+: pinned upstream tag (see docker-compose.yml).
+    local backend_image="${SYNAPSE_BACKEND_IMAGE:-ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a}"
     ui::spin "Pre-pulling $backend_image (first run, ~150MB)" \
         docker pull "$backend_image"
 }

@@ -142,6 +142,29 @@ secrets::ensure_env_var() {
     mv -f "$tmp" "$file"
 }
 
+# secrets::migrate_env_var <env_file> <key> <old_value> <new_value>
+# Conditional rewrite: bumps KEY from <old_value> → <new_value> ONLY when
+# the current value matches <old_value> EXACTLY. Operator overrides (any
+# other value) are left alone.
+#
+# Use case: bumping a default that shipped in an older template (e.g.
+# SYNAPSE_JWT_ACCESS_TTL went from 15m → 24h in v1.7.0). Operators who
+# upgraded brought the old default forward in their .env; this helper
+# heals them on the next setup.sh run without touching anyone who
+# explicitly set a different value.
+#
+# Idempotent: re-runs after the migration completed are no-ops (current
+# value is now the new value, doesn't match old_value, returns 0).
+secrets::migrate_env_var() {
+    local file="$1" key="$2" old="$3" new="$4"
+    [[ -f "$file" ]] || return 0
+    local current
+    current="$(secrets::env_get "$file" "$key")"
+    if [[ "$current" == "$old" ]]; then
+        secrets::set_env_var "$file" "$key" "$new"
+    fi
+}
+
 # secrets::set_env_var <env_file> <key> <value>
 # Force-overwrite KEY=value. Same in-place semantics as ensure_env_var
 # but does NOT preserve an existing non-empty value — used for stamps
@@ -359,4 +382,17 @@ secrets::ensure_env() {
             secrets::ensure_env_var "$file" SYNAPSE_BACKEND_S3_BUCKET_PREFIX "convex"
         fi
     fi
+
+    # --- Default-bump migrations -------------------------------------
+    # When a default changes between Synapse versions, operators who
+    # upgraded brought the OLD value forward (ensure_env_var preserves
+    # any existing value, by design). These migrations rewrite only the
+    # exact prior-default value, so operator overrides (e.g. a stricter
+    # 30m JWT for compliance) are never silently mutated.
+    #
+    # v1.7.0: SYNAPSE_JWT_ACCESS_TTL default bumped 15m → 24h. The 15m
+    # default was post-compromise security ergonomics, not a sane
+    # dev-tool baseline — operators bounced to /login mid-task. The new
+    # 24h pairs with the dashboard's silent-refresh-on-401 retry.
+    secrets::migrate_env_var "$file" SYNAPSE_JWT_ACCESS_TTL 15m 24h
 }

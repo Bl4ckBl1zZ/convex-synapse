@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
@@ -194,7 +194,17 @@ function DeployKeysPanelExpanded({
           </div>
         )}
 
+        {/* `key={String(createOpen)}` is the React-idiomatic way to
+            reset all state inside CreateDeployKeyDialog every time the
+            operator reopens it — flipping the key forces a remount,
+            which throws away the previous `issued` value, error
+            message, copied flag, etc. without an in-component
+            useEffect that the react-hooks/set-state-in-effect lint
+            (rightly) discourages. The dialog itself returns null when
+            !open, so the wasted mount on the false→true→false toggles
+            is invisible. */}
         <CreateDeployKeyDialog
+          key={String(createOpen)}
           open={createOpen}
           onClose={() => setCreateOpen(false)}
           deploymentName={deploymentName}
@@ -216,24 +226,17 @@ function CreateDeployKeyDialog({
   deploymentName: string;
   onCreated: () => void;
 }) {
+  // State resets are handled by the caller giving us a fresh `key`
+  // on each (re)open — see DeployKeysPanelExpanded below. That's the
+  // React-idiomatic "remount to reset" pattern documented in the
+  // react-hooks/set-state-in-effect rule, so this component holds no
+  // reset-effect of its own.
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [issued, setIssued] = useState<CreateDeployKeyResponse | null>(null);
   const [format, setFormat] = useState<Format>("env");
   const [copied, setCopied] = useState(false);
-
-  // Reset state every time the dialog reopens.
-  useEffect(() => {
-    if (open) {
-      setName("");
-      setPending(false);
-      setFormError(null);
-      setIssued(null);
-      setFormat("env");
-      setCopied(false);
-    }
-  }, [open]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -298,7 +301,7 @@ function CreateDeployKeyDialog({
             />
             <p className="text-xs text-neutral-500">
               A short label so you can recognise which CI integration uses
-              this key (e.g. "vercel", "github-actions", "claudin").
+              this key (e.g. &ldquo;vercel&rdquo;, &ldquo;github-actions&rdquo;, &ldquo;claudin&rdquo;).
             </p>
           </div>
           {formError && <p className="text-xs text-red-400">{formError}</p>}

@@ -53,6 +53,38 @@ const CONVEX_DASHBOARD_ORIGIN = (() => {
   }
 })();
 
+// Returns true when `url` is a URL the operator's browser can actually
+// reach for the iframe handshake. False when the URL falls back to the
+// "<host>:<dynamic-port>" form that `cliDeploymentURL` produces for
+// deployments WITHOUT a custom domain or SYNAPSE_BASE_DOMAIN — Caddy
+// only TLS-fronts :443/:80/:6791 by default, so https://<host>:3213
+// hits a plain-HTTP listener and the TLS handshake fails entirely.
+//
+// Heuristic:
+//   - Standard port (empty, 443, 80, 6791) → reachable.
+//   - Loopback (localhost / 127.0.0.1) → reachable (local dev, browser
+//     opens its own loopback regardless of port).
+//   - Otherwise → not reachable from a normal browser.
+//
+// We deliberately keep this client-side rather than adding a field to
+// /v1/deployments/{name}/auth: the heuristic captures the same logic
+// `cliDeploymentURL` uses on the server, and skipping the API change
+// means operators don't have to wait for another backend rebuild to
+// see the warning.
+function isBrowserReachableURL(deploymentUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(deploymentUrl);
+  } catch {
+    return false;
+  }
+  const STANDARD_PORTS = new Set(["", "443", "80", "6791"]);
+  if (STANDARD_PORTS.has(parsed.port)) return true;
+  // Non-standard port — only safe when the operator's own browser is
+  // on the same host (local dev against docker compose).
+  return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+}
+
 type Params = { name: string };
 
 /**
@@ -294,16 +326,22 @@ export default function EmbedDashboardPage({
             INSTANCE_SECRET (no rotation, no recreate) and the
             authNonce bump forces both the /auth refetch and an iframe
             remount, so the postMessage handshake fires with the new
-            credentials. Cheap when not needed; lifesaving when it is. */}
-        <button
-          type="button"
-          onClick={handleRefreshCredentials}
-          disabled={refreshing}
-          className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:border-neutral-700 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
-          title="Re-mint this deployment's admin key from the current INSTANCE_SECRET. Use this if the dashboard reports 'admin key invalid' or you suspect the cached credential drifted."
-        >
-          {refreshing ? "Refreshing…" : "Refresh credentials"}
-        </button>
+            credentials. Cheap when not needed; lifesaving when it is.
+            v1.7.1+: hidden when the iframe is replaced by the
+            unreachable-URL banner — re-issuing the admin key doesn't
+            help when the underlying URL isn't browser-reachable, so
+            offering the button would only invite cargo-cult clicks. */}
+        {isBrowserReachableURL(auth.deploymentUrl) && (
+          <button
+            type="button"
+            onClick={handleRefreshCredentials}
+            disabled={refreshing}
+            className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:border-neutral-700 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Re-mint this deployment's admin key from the current INSTANCE_SECRET. Use this if the dashboard reports 'admin key invalid' or you suspect the cached credential drifted."
+          >
+            {refreshing ? "Refreshing…" : "Refresh credentials"}
+          </button>
+        )}
         {team && project && (
           <DeploymentPicker
             current={deployment}
@@ -313,32 +351,94 @@ export default function EmbedDashboardPage({
           />
         )}
       </header>
-      <iframe
-        // v1.6.13+: key={name} forces React to unmount + remount the
-        // iframe whenever the picker switches deployments. The src
-        // value is the same constant URL across deployments (the
-        // Convex Dashboard image at https://<host>:6791), so without
-        // a key React reconciles the iframe in place — same DOM
-        // node, same src, no reload. The postMessage handshake that
-        // injects adminKey + deploymentUrl only fires on iframe
-        // mount, so the Convex Dashboard kept using the previous
-        // deployment's creds from its own localStorage and surfaced
-        // "deployment URL or admin key is invalid" the moment the
-        // operator clicked a sibling in the picker.
-        //
-        // v1.7+: the key also folds in `authNonce` so "Refresh
-        // credentials" — which doesn't change `name` — still
-        // unmounts + remounts the iframe and replays the handshake
-        // with the freshly-minted admin key.
-        key={`${name}:${authNonce}`}
-        ref={iframeRef}
-        src={CONVEX_DASHBOARD_URL}
-        title={`${name} — Convex Dashboard`}
-        className="h-full w-full flex-1 border-0"
-        // The dashboard makes XHR calls to the deployment URL; allow
-        // same-origin (within the iframe) plus scripts (it's a SPA).
-        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
-      />
+      {isBrowserReachableURL(auth.deploymentUrl) ? (
+        <iframe
+          // v1.6.13+: key={name} forces React to unmount + remount the
+          // iframe whenever the picker switches deployments. The src
+          // value is the same constant URL across deployments (the
+          // Convex Dashboard image at https://<host>:6791), so without
+          // a key React reconciles the iframe in place — same DOM
+          // node, same src, no reload. The postMessage handshake that
+          // injects adminKey + deploymentUrl only fires on iframe
+          // mount, so the Convex Dashboard kept using the previous
+          // deployment's creds from its own localStorage and surfaced
+          // "deployment URL or admin key is invalid" the moment the
+          // operator clicked a sibling in the picker.
+          //
+          // v1.7+: the key also folds in `authNonce` so "Refresh
+          // credentials" — which doesn't change `name` — still
+          // unmounts + remounts the iframe and replays the handshake
+          // with the freshly-minted admin key.
+          key={`${name}:${authNonce}`}
+          ref={iframeRef}
+          src={CONVEX_DASHBOARD_URL}
+          title={`${name} — Convex Dashboard`}
+          className="h-full w-full flex-1 border-0"
+          // The dashboard makes XHR calls to the deployment URL; allow
+          // same-origin (within the iframe) plus scripts (it's a SPA).
+          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
+        />
+      ) : (
+        <UnreachableDeploymentBanner
+          deploymentName={name}
+          deploymentUrl={auth.deploymentUrl}
+        />
+      )}
+    </div>
+  );
+}
+
+// Replaces the Convex Dashboard iframe when the deployment URL falls
+// back to a host:port form the browser can't reach. We render a banner
+// instead of letting the iframe load + fail silently — operators
+// previously interpreted the "deployment URL or admin key is invalid"
+// error (rendered INSIDE the iframe) as an admin-key issue and clicked
+// "Refresh credentials" forever. The real cause is operational
+// (missing custom domain or wildcard); this banner names it directly.
+function UnreachableDeploymentBanner({
+  deploymentName,
+  deploymentUrl,
+}: {
+  deploymentName: string;
+  deploymentUrl: string;
+}) {
+  return (
+    <div className="flex flex-1 items-center justify-center p-8" role="alert">
+      <div className="max-w-2xl space-y-5 rounded-lg border border-amber-900/60 bg-amber-950/30 p-6 text-sm text-amber-100">
+        <div>
+          <p className="text-base font-semibold text-amber-200">
+            This deployment isn&apos;t browser-reachable yet
+          </p>
+          <p className="mt-2 text-amber-100/80">
+            Synapse returned <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">{deploymentUrl}</code>{" "}
+            as the deployment URL. Caddy only TLS-fronts the standard
+            ports (<code className="font-mono">:443</code>, <code className="font-mono">:6791</code>), so the embedded
+            Convex Dashboard iframe can&apos;t complete a TLS handshake
+            against this URL — it would fail silently with &ldquo;deployment URL
+            or admin key is invalid&rdquo; even though the credentials are fine.
+          </p>
+        </div>
+        <div>
+          <p className="font-semibold text-amber-200">Pick one of these fixes</p>
+          <ol className="mt-2 list-decimal space-y-2 pl-5 text-amber-100/85">
+            <li>
+              <strong>Wildcard subdomain (one-time setup, covers every deployment):</strong>{" "}
+              point a wildcard DNS A record (e.g. <code className="font-mono text-xs">*.app.example.com → &lt;your VPS IP&gt;</code>)
+              at this server, then set <code className="font-mono text-xs">SYNAPSE_BASE_DOMAIN=app.example.com</code> in
+              your <code className="font-mono text-xs">.env</code> and restart Synapse. Future deployments will be reachable at{" "}
+              <code className="font-mono text-xs">https://&lt;name&gt;.app.example.com</code>.
+            </li>
+            <li>
+              <strong>Custom domain per deployment</strong>: open this deployment&apos;s settings and add
+              a domain with role <code className="font-mono text-xs">api</code> (e.g.{" "}
+              <code className="font-mono text-xs">api.your-customer.com</code>). DNS verification is automatic.
+            </li>
+          </ol>
+        </div>
+        <p className="text-xs text-amber-200/60">
+          Deployment: <code className="font-mono">{deploymentName}</code>
+        </p>
+      </div>
     </div>
   );
 }

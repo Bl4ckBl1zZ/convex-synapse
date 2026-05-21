@@ -149,7 +149,10 @@ jobs:
           exit 1
 
       - name: Pre-pull convex-backend image (so first deployment is fast)
-        run: docker pull ghcr.io/get-convex/convex-backend:latest
+        # v1.7.1+: pinned upstream tag — must match the value in
+        # docker-compose.yml + installer/templates/env.tmpl so CI
+        # exercises the same image operators run.
+        run: docker pull ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a
 
       - name: Run Playwright tests
         working-directory: dashboard

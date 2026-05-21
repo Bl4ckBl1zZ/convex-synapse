@@ -528,8 +528,12 @@ lifecycle::_upgrade_phase_b() {
     local docker_cmd="${COMPOSE_CMD:-docker}"
     local backend_image dashboard_image
     backend_image="$(secrets::env_get "$env_file" SYNAPSE_BACKEND_IMAGE)"
-    backend_image="${backend_image:-ghcr.io/get-convex/convex-backend:latest}"
-    dashboard_image="ghcr.io/get-convex/convex-dashboard:latest"
+    # v1.7.1+: pinned upstream tags. Operators who set a custom
+    # SYNAPSE_BACKEND_IMAGE in .env keep their override; only the
+    # fallback default moves. Dashboard image has no env override
+    # surface (operators with one-off needs can patch the compose file).
+    backend_image="${backend_image:-ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a}"
+    dashboard_image="ghcr.io/get-convex/convex-dashboard:precompiled-2026-05-18-c3ac00a"
     "$docker_cmd" pull "$backend_image" >/dev/null 2>&1 || true
     "$docker_cmd" pull "$dashboard_image" >/dev/null 2>&1 || true
 

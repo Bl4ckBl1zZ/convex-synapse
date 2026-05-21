@@ -210,7 +210,12 @@ func Load() (*Config, error) {
 		JWTAccessTTL:          accessTTL,
 		JWTRefreshTTL:         refreshTTL,
 		DockerHost:            getEnvDefault("SYNAPSE_DOCKER_HOST", "unix:///var/run/docker.sock"),
-		BackendImage:          getEnvDefault("SYNAPSE_BACKEND_IMAGE", "ghcr.io/get-convex/convex-backend:latest"),
+		// v1.7.1+: pinned upstream tag. Bump in lock-step with the same
+		// value in docker-compose.yml, installer/templates/env.tmpl,
+		// installer/install/lifecycle.sh, setup.sh, ha_real_e2e_test.go,
+		// and .github/workflows/ci.yml — all six must move together or
+		// CI / upgrade / fresh-install paths drift.
+		BackendImage:          getEnvDefault("SYNAPSE_BACKEND_IMAGE", "ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a"),
 		DockerNetwork:         getEnvDefault("SYNAPSE_DOCKER_NETWORK", "synapse-network"),
 		PortRangeMin:          portMin,
 		PortRangeMax:          portMax,
