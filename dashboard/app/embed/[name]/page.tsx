@@ -403,7 +403,11 @@ function UnreachableDeploymentBanner({
   deploymentUrl: string;
 }) {
   return (
-    <div className="flex flex-1 items-center justify-center p-8" role="alert">
+    <div
+      className="flex flex-1 items-center justify-center p-8"
+      role="alert"
+      data-testid="unreachable-banner"
+    >
       <div className="max-w-2xl space-y-5 rounded-lg border border-amber-900/60 bg-amber-950/30 p-6 text-sm text-amber-100">
         <div>
           <p className="text-base font-semibold text-amber-200">

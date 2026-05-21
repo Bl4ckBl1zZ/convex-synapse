@@ -126,8 +126,9 @@ test("embed: shows unreachable-URL banner when /auth returns a host:port URL", a
 
   await page.goto("/embed/broken-otter-9999", { waitUntil: "load" });
 
-  // The banner must show with the diagnostic explanation.
-  const banner = page.getByRole("alert");
+  // Scope to the testid so other toasts / aria-live regions can't
+  // strict-mode-collide with the banner lookup.
+  const banner = page.getByTestId("unreachable-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toContainText(/isn'?t browser-reachable/i);
   await expect(banner).toContainText("https://synapsepanel.test:3299");
@@ -176,6 +177,6 @@ test("embed: localhost host:port URL is treated as reachable (local dev path)", 
   // No banner — iframe should render (even though we can't fully test
   // that the inner Convex Dashboard works, we assert the parent shell
   // didn't bail out).
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByTestId("unreachable-banner")).toHaveCount(0);
   await expect(page.locator("iframe")).toHaveCount(1);
 });
