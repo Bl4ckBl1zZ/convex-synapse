@@ -152,7 +152,7 @@ jobs:
         # v1.7.1+: pinned upstream tag — must match the value in
         # docker-compose.yml + installer/templates/env.tmpl so CI
         # exercises the same image operators run.
-        run: docker pull ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a
+        run: docker pull ghcr.io/get-convex/convex-backend@sha256:19481d5e9309db4a87a9a2e9d12a6930bd12569e1fc96276d9fa0aae53a106b6
 
       - name: Run Playwright tests
         working-directory: dashboard

@@ -76,7 +76,7 @@ func TestHA_RealBackend_Failover(t *testing.T) {
 	if backendImage == "" {
 		// v1.7.1+: pinned upstream tag. Bump in lock-step with the
 		// production default in synapse/internal/config/config.go.
-		backendImage = "ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a"
+		backendImage = "ghcr.io/get-convex/convex-backend@sha256:19481d5e9309db4a87a9a2e9d12a6930bd12569e1fc96276d9fa0aae53a106b6"
 	}
 	network := os.Getenv("SYNAPSE_DOCKER_NETWORK")
 	if network == "" {

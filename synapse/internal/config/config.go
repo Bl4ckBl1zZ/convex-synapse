@@ -215,7 +215,7 @@ func Load() (*Config, error) {
 		// installer/install/lifecycle.sh, setup.sh, ha_real_e2e_test.go,
 		// and .github/workflows/ci.yml — all six must move together or
 		// CI / upgrade / fresh-install paths drift.
-		BackendImage:          getEnvDefault("SYNAPSE_BACKEND_IMAGE", "ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a"),
+		BackendImage:          getEnvDefault("SYNAPSE_BACKEND_IMAGE", "ghcr.io/get-convex/convex-backend@sha256:19481d5e9309db4a87a9a2e9d12a6930bd12569e1fc96276d9fa0aae53a106b6"),
 		DockerNetwork:         getEnvDefault("SYNAPSE_DOCKER_NETWORK", "synapse-network"),
 		PortRangeMin:          portMin,
 		PortRangeMax:          portMax,

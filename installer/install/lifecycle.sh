@@ -535,7 +535,7 @@ lifecycle::_upgrade_phase_b() {
     # only publishes :latest, so a tag isn't enough — must use digest
     # for determinism). Bump both together; upstream builds them
     # in lock-step.
-    backend_image="${backend_image:-ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a}"
+    backend_image="${backend_image:-ghcr.io/get-convex/convex-backend@sha256:19481d5e9309db4a87a9a2e9d12a6930bd12569e1fc96276d9fa0aae53a106b6}"
     dashboard_image="ghcr.io/get-convex/convex-dashboard@sha256:f91bb4d45db6f1ab7caafbc97f86a1274e3e6907d8b003f38c5fddc97efb6709"
     "$docker_cmd" pull "$backend_image" >/dev/null 2>&1 || true
     "$docker_cmd" pull "$dashboard_image" >/dev/null 2>&1 || true

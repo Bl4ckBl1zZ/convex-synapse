@@ -854,7 +854,7 @@ phase_compose_up() {
     # and returns 500. Pulling here turns first-deployment latency into
     # known-and-visible install time (the image is ~150 MB).
     # v1.7.1+: pinned upstream tag (see docker-compose.yml).
-    local backend_image="${SYNAPSE_BACKEND_IMAGE:-ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a}"
+    local backend_image="${SYNAPSE_BACKEND_IMAGE:-ghcr.io/get-convex/convex-backend@sha256:19481d5e9309db4a87a9a2e9d12a6930bd12569e1fc96276d9fa0aae53a106b6}"
     ui::spin "Pre-pulling $backend_image (first run, ~150MB)" \
         docker pull "$backend_image"
 }
