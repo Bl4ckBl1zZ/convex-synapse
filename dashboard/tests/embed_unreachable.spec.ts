@@ -26,32 +26,37 @@ async function registerViaUI(page: Page) {
   await expect(page).toHaveURL(/\/teams\b/);
 }
 
-async function createTeamAndProject(page: Page): Promise<string> {
-  // Pattern mirrors dashboard_picker.spec.ts: open modal, scope all
-  // queries to the dialog, use `exact: true` on the action button so
-  // Playwright's strict mode is satisfied (other "Create" labels on
-  // the page would otherwise produce a strict-mode violation).
-  await page.getByRole("button", { name: "Create team" }).click();
-  let dialog = page.getByRole("dialog");
-  await dialog.locator("#team-name").fill("Embed Test Co");
-  await dialog.getByRole("button", { name: "Create", exact: true }).click();
-  await page.getByRole("link", { name: /embed test co/i }).click();
-
-  await page.getByRole("button", { name: "Create project" }).click();
-  dialog = page.getByRole("dialog");
-  await dialog.locator("#project-name").fill("embed-test-proj");
-  await dialog.getByRole("button", { name: "Create", exact: true }).click();
-
-  // Wait for the project page (URL includes the project slug/id).
-  await expect(page).toHaveURL(/\/teams\/[^/]+\/[^/]+\b/);
+// Bypass the UI flow for team+project creation — we're testing the
+// embed page's URL-reachability logic, not the create-team / create-
+// project funnel (which has its own specs). Seeding directly via SQL
+// is cheaper and immune to dialog-locator changes.
+async function seedTeamAndProject(): Promise<{ teamId: string; projectId: string }> {
   const c = new Client({ connectionString: DB_URL });
   await c.connect();
   try {
-    const r = await c.query<{ id: string }>(
-      `SELECT id FROM projects WHERE slug = 'embed-test-proj' LIMIT 1`,
+    const userRow = await c.query<{ id: string }>(
+      `SELECT id FROM users ORDER BY created_at DESC LIMIT 1`,
     );
-    if (!r.rows[0]) throw new Error("project row missing");
-    return r.rows[0].id;
+    if (!userRow.rows[0]) throw new Error("expected a registered user");
+    const userId = userRow.rows[0].id;
+    const teamRow = await c.query<{ id: string }>(
+      `INSERT INTO teams (name, slug, creator_user_id, default_region)
+       VALUES ($1, $2, $3, 'self-hosted')
+       RETURNING id`,
+      ["Embed Test Co", "embed-test-co", userId],
+    );
+    const teamId = teamRow.rows[0].id;
+    await c.query(
+      `INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`,
+      [teamId, userId],
+    );
+    const projRow = await c.query<{ id: string }>(
+      `INSERT INTO projects (team_id, name, slug)
+       VALUES ($1, 'embed-test-proj', 'embed-test-proj')
+       RETURNING id`,
+      [teamId],
+    );
+    return { teamId, projectId: projRow.rows[0].id };
   } finally {
     await c.end();
   }
@@ -97,7 +102,7 @@ test("embed: shows unreachable-URL banner when /auth returns a host:port URL", a
   page,
 }) => {
   await registerViaUI(page);
-  const projectId = await createTeamAndProject(page);
+  const { projectId } = await seedTeamAndProject();
   await seedDeployment(projectId, "broken-otter-9999", 3299);
 
   // Stub /auth to return the diagnostic-shaped URL the real backend
@@ -144,7 +149,7 @@ test("embed: localhost host:port URL is treated as reachable (local dev path)", 
   page,
 }) => {
   await registerViaUI(page);
-  const projectId = await createTeamAndProject(page);
+  const { projectId } = await seedTeamAndProject();
   await seedDeployment(projectId, "local-otter-9998", 3298);
 
   // In local dev, `cliDeploymentURL` emits http://localhost:3210 forms
