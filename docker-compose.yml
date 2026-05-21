@@ -212,10 +212,15 @@ services:
   # ----------------------------------------------------------------
 
   convex-dashboard:
-    # v1.7.1+: same pinned upstream tag as convex-backend above —
-    # upstream ships them from one monorepo and warns explicitly that
-    # mixing versions is not supported. Bump in lock-step.
-    image: ghcr.io/get-convex/convex-dashboard:precompiled-2026-05-18-c3ac00a
+    # v1.7.1+: convex-dashboard upstream publishes only `:latest` (no
+    # dated tags like convex-backend). Pin by SHA digest for the same
+    # determinism guarantee — `image@sha256:…` resolves a specific
+    # immutable layer, ignoring future `:latest` repulls. Bump the
+    # digest when bumping the backend tag above; the two move
+    # together because upstream builds them in lock-step.
+    #
+    # Current digest = ghcr.io :latest as of 2026-05-21.
+    image: ghcr.io/get-convex/convex-dashboard@sha256:f91bb4d45db6f1ab7caafbc97f86a1274e3e6907d8b003f38c5fddc97efb6709
     container_name: synapse-convex-dashboard
     restart: unless-stopped
     # NOTE: no `ports:` here — the upstream image emits anti-iframe

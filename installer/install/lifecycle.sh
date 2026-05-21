@@ -528,12 +528,15 @@ lifecycle::_upgrade_phase_b() {
     local docker_cmd="${COMPOSE_CMD:-docker}"
     local backend_image dashboard_image
     backend_image="$(secrets::env_get "$env_file" SYNAPSE_BACKEND_IMAGE)"
-    # v1.7.1+: pinned upstream tags. Operators who set a custom
+    # v1.7.1+: pinned upstream references. Operators who set a custom
     # SYNAPSE_BACKEND_IMAGE in .env keep their override; only the
-    # fallback default moves. Dashboard image has no env override
-    # surface (operators with one-off needs can patch the compose file).
+    # fallback default moves. Backend pins by tag (upstream publishes
+    # dated immutable tags); dashboard pins by SHA digest (upstream
+    # only publishes :latest, so a tag isn't enough — must use digest
+    # for determinism). Bump both together; upstream builds them
+    # in lock-step.
     backend_image="${backend_image:-ghcr.io/get-convex/convex-backend:precompiled-2026-05-18-c3ac00a}"
-    dashboard_image="ghcr.io/get-convex/convex-dashboard:precompiled-2026-05-18-c3ac00a"
+    dashboard_image="ghcr.io/get-convex/convex-dashboard@sha256:f91bb4d45db6f1ab7caafbc97f86a1274e3e6907d8b003f38c5fddc97efb6709"
     "$docker_cmd" pull "$backend_image" >/dev/null 2>&1 || true
     "$docker_cmd" pull "$dashboard_image" >/dev/null 2>&1 || true
 
