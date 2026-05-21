@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { truncateAll } from "./helpers/db";
+import { deleteDeploymentViaDialog } from "./helpers/delete-deployment";
 import {
   listSynapseContainerNames,
   pruneSynapseContainers,
@@ -147,18 +148,15 @@ test("provision three deployments, then delete them all", async ({ page }) => {
   }
 
   // Delete all three via the UI — the order doesn't matter; each click hits
-  // a per-row "delete deployment {name}" button. Auto-accept the native
-  // confirm() that the delete handler raises.
-  page.on("dialog", (d) => d.accept());
+  // a per-row "delete deployment {name}" button. v1.7.2+ replaced the
+  // native confirm() with <ConfirmDeleteDeploymentDialog>; the helper
+  // looks the deployment type up in the test DB and picks the right
+  // branch (dev → one click, prod → type the name).
   for (const name of names) {
-    await page
-      .getByRole("button", {
-        name: new RegExp(`delete deployment ${name}`, "i"),
-      })
-      .click();
+    await deleteDeploymentViaDialog(page, name);
     // Wait for the row to vanish before deleting the next — sequential
     // deletes mirror what a human operator would do and avoid stacking
-    // confirm() dialogs.
+    // open dialogs.
     await expect(page.getByText(name, { exact: true })).toBeHidden({
       timeout: 15_000,
     });

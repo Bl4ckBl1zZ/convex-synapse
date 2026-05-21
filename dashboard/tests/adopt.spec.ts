@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { truncateAll } from "./helpers/db";
+import { deleteDeploymentViaDialog } from "./helpers/delete-deployment";
 import {
   listSynapseContainerNames,
   pruneSynapseContainers,
@@ -144,10 +145,10 @@ test("adopt an existing Convex backend via the dashboard", async ({ page }) => {
   expect(listSynapseContainerNames()).toEqual([`convex-${provisionedName}`]);
 
   // Deleting the adopted row must NOT remove the container — it isn't ours.
-  page.on("dialog", (d) => d.accept());
-  await page
-    .getByRole("button", { name: /delete deployment imported-app/i })
-    .click();
+  // v1.7.2+: adopted deployments inherit deployment_type from the create
+  // call (defaults to 'dev' for `adopt_deployment` without type). Helper
+  // looks it up; for a 'dev' / 'custom' row the dialog needs only a click.
+  await deleteDeploymentViaDialog(page, "imported-app");
   await expect(
     page.getByText("imported-app", { exact: true }),
   ).toBeHidden({ timeout: 10_000 });

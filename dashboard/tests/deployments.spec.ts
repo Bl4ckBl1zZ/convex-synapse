@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { truncateAll } from "./helpers/db";
+import { deleteDeploymentViaDialog } from "./helpers/delete-deployment";
 import {
   listSynapseContainerNames,
   pruneSynapseContainers,
@@ -123,12 +124,9 @@ test("delete a deployment via the dashboard", async ({ page }) => {
   const deploymentName = (await nameLocator.textContent())?.trim() ?? "";
   expect(deploymentName).toMatch(/^[a-z]+-[a-z]+-\d{4}$/);
 
-  // Auto-accept the native confirm() that the delete handler raises.
-  page.on("dialog", (d) => d.accept());
-
-  await page
-    .getByRole("button", { name: new RegExp(`delete deployment ${deploymentName}`, "i") })
-    .click();
+  // v1.7.2+: delete is driven by the styled ConfirmDeleteDeploymentDialog.
+  // Helper picks the right branch (dev → single click, prod → typed name).
+  await deleteDeploymentViaDialog(page, deploymentName, "dev");
 
   // Row disappears from the list.
   await expect(nameLocator).toBeHidden({ timeout: 15_000 });

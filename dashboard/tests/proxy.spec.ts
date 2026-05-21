@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { truncateAll } from "./helpers/db";
+import { deleteDeploymentViaDialog } from "./helpers/delete-deployment";
 import { pruneSynapseContainers } from "./helpers/docker";
 
 // Proxy spec — exercises the reverse-proxy mounted at /d/{name}/* on the
@@ -145,12 +146,8 @@ test("proxy forwards /d/{name}/version and 404s missing/deleted deployments", as
 
   // Delete via the dashboard, then poll the proxy URL until it 404s. The
   // resolver caches name→address for ~30s, so allow up to 35s before failing.
-  page.on("dialog", (d) => d.accept());
-  await page
-    .getByRole("button", {
-      name: new RegExp(`delete deployment ${deploymentName}`, "i"),
-    })
-    .click();
+  // v1.7.2+: driven by ConfirmDeleteDeploymentDialog (no native confirm()).
+  await deleteDeploymentViaDialog(page, deploymentName);
 
   // The DB row flips to status='deleted' immediately; the proxy may still
   // resolve from cache until TTL. Polling avoids a flaky one-shot check.
