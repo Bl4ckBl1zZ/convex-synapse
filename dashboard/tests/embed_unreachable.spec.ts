@@ -27,17 +27,23 @@ async function registerViaUI(page: Page) {
 }
 
 async function createTeamAndProject(page: Page): Promise<string> {
-  // Create team
-  await page.getByRole("button", { name: /create.*team/i }).click();
-  await page.locator("#team-name").fill("Embed Test Co");
-  await page.getByRole("button", { name: /create/i }).click();
-  await expect(page).toHaveURL(/\/teams\/[^/]+\b/);
-  // Create project
-  await page.getByRole("button", { name: /new project/i }).click();
-  await page.locator("#project-name").fill("embed-test-proj");
-  await page.getByRole("button", { name: /^create$/i }).click();
+  // Pattern mirrors dashboard_picker.spec.ts: open modal, scope all
+  // queries to the dialog, use `exact: true` on the action button so
+  // Playwright's strict mode is satisfied (other "Create" labels on
+  // the page would otherwise produce a strict-mode violation).
+  await page.getByRole("button", { name: "Create team" }).click();
+  let dialog = page.getByRole("dialog");
+  await dialog.locator("#team-name").fill("Embed Test Co");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByRole("link", { name: /embed test co/i }).click();
+
+  await page.getByRole("button", { name: "Create project" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.locator("#project-name").fill("embed-test-proj");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+
+  // Wait for the project page (URL includes the project slug/id).
   await expect(page).toHaveURL(/\/teams\/[^/]+\/[^/]+\b/);
-  // Look up project id via DB (already routed there)
   const c = new Client({ connectionString: DB_URL });
   await c.connect();
   try {
