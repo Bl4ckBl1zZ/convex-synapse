@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
+import { IconTerminal } from "@/components/ui/icon";
 import { ApiError, api, type CliCredentials } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 
@@ -77,6 +78,7 @@ export function CliCredentialsPanel({ deploymentName }: Props) {
           disabled={loading}
           aria-label={`Show CLI credentials for ${deploymentName}`}
         >
+          <IconTerminal className="mr-1.5 inline-block opacity-70" />
           {loading ? "Loading…" : "Show CLI credentials"}
         </Button>
         {error && <span className="text-red-400">{error}</span>}

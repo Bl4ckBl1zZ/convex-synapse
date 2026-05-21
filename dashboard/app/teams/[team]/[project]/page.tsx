@@ -1,5 +1,6 @@
 "use client";
 
+import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useState } from "react";
@@ -32,6 +33,85 @@ function statusTone(status?: string): "green" | "yellow" | "red" | "neutral" {
   if (s.includes("fail") || s.includes("error") || s.includes("crash")) return "red";
   return "neutral";
 }
+
+// Environment-type tone. Distinct from statusTone — the two badges sit
+// next to each other on every deployment card, and v1.7.2+ paints them
+// with different palettes so DEV and PROD stop looking identical.
+//   dev     → cyan   (calm, exploratory)
+//   prod    → amber  (attention, destructive ops live here)
+//   preview → violet (rare, ephemeral CI deploys)
+//   *       → neutral fallback
+function envTone(type?: string): "amber" | "cyan" | "violet" | "neutral" {
+  switch (type) {
+    case "prod":
+      return "amber";
+    case "dev":
+      return "cyan";
+    case "preview":
+      return "violet";
+    default:
+      return "neutral";
+  }
+}
+
+// Categorises the URL Synapse emitted for a deployment so the row can
+// surface a tiny chip next to the URL — operators see at a glance
+// which "form" they're getting and why.
+//
+//   custom  → operator-added domain (api.client.com): TLS via Caddy
+//             catch-all, never breaks the browser.
+//   wildcard → SYNAPSE_BASE_DOMAIN subdomain (foo.app.example.com):
+//             TLS on-demand via Caddy, always reachable.
+//   path    → /d/<name>/* proxied through synapsepanel.com:443:
+//             works in the browser, but the Convex CLI host-anchors
+//             URLs and strips the /d/<name> prefix → not CLI-OK.
+//   host    → <host>:<dynamic-port>: the fallback Caddy doesn't
+//             TLS-front. Embed page replaces the iframe with the
+//             diagnostic banner (v1.7.1+).
+//   unknown → empty / unparseable.
+type UrlForm = "custom" | "wildcard" | "path" | "host" | "unknown";
+
+function urlForm(rawUrl: string | undefined, publicUrl: string | undefined): UrlForm {
+  if (!rawUrl) return "unknown";
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return "unknown";
+  }
+  if (u.pathname.startsWith("/d/")) return "path";
+  // Non-standard port that isn't loopback → the host:port fallback.
+  const STANDARD = new Set(["", "443", "80", "6791"]);
+  if (
+    !STANDARD.has(u.port) &&
+    u.hostname !== "localhost" &&
+    u.hostname !== "127.0.0.1"
+  ) {
+    return "host";
+  }
+  // Standard port, parse-able URL: either a custom domain (different
+  // root from PublicURL) or a wildcard subdomain (shares the suffix).
+  // Without PublicURL to compare against we can't differentiate the
+  // two, so default to "custom" — the chip still tells the operator
+  // it's a domain-shaped URL, which is the actionable bit.
+  if (!publicUrl) return "custom";
+  try {
+    const pu = new URL(publicUrl);
+    if (u.hostname === pu.hostname) return "custom"; // same host, e.g. synapsepanel.com
+    if (u.hostname.endsWith("." + pu.hostname)) return "wildcard";
+    return "custom";
+  } catch {
+    return "custom";
+  }
+}
+
+const URL_FORM_LABELS: Record<UrlForm, { label: string; tone: "green" | "neutral" | "yellow" | "red" }> = {
+  custom: { label: "custom domain", tone: "green" },
+  wildcard: { label: "wildcard", tone: "green" },
+  path: { label: "path proxy", tone: "neutral" },
+  host: { label: "no domain", tone: "red" },
+  unknown: { label: "unknown", tone: "neutral" },
+};
 
 export default function ProjectPage({ params }: { params: Promise<Params> }) {
   const { team: teamRef, project: projectId } = use(params);
@@ -272,13 +352,13 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
     }
   };
 
-  const deleteDeployment = async (name: string) => {
-    // Confirm via native dialog — the destructive action removes the
-    // container and its data volume. Synapse marks the row deleted, then
-    // we mutate the SWR cache to drop the row from the list.
-    if (!confirm(`Delete deployment "${name}"? Its data volume will be removed.`)) {
-      return;
-    }
+  // v1.7.2+: replaces the native confirm() — UI lives in the typed
+  // ConfirmDeleteDeploymentDialog below. PROD deployments require the
+  // operator to type the deployment name (GitHub-repo-delete pattern)
+  // because container removal + data-volume wipe is irreversible.
+  // DEV / PREVIEW / CUSTOM keep a single-click confirmation.
+  const [pendingDelete, setPendingDelete] = useState<Deployment | null>(null);
+  const confirmDelete = async (name: string) => {
     setActionError(null);
     setDeletingName(name);
     try {
@@ -288,6 +368,9 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
       setActionError(
         err instanceof ApiError ? err.message : "Could not delete deployment"
       );
+      // Re-throw so the dialog stays open on failure — operator can see
+      // the error in the page-level banner and retry without re-typing.
+      throw err;
     } finally {
       setDeletingName(null);
     }
@@ -408,19 +491,28 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
         <div className="space-y-3">
           {deployments.map((d) => {
             const dtype = d.deploymentType ?? d.type;
+            const isProd = dtype === "prod";
             return (
-              <Card key={d.name}>
+              <Card
+                key={d.name}
+                // v1.7.2+: prod cards get a subtle amber accent on the
+                // left edge + faint background tint so they're
+                // scannable as "the dangerous one" in a vertical list
+                // of deployments. Dev / preview cards stay neutral.
+                // The right side keeps the standard border so the
+                // shape doesn't feel lopsided.
+                className={clsx(
+                  isProd &&
+                    "border-l-[3px] border-l-amber-500/60 bg-amber-500/[0.025]",
+                )}
+              >
                 <CardBody className="flex items-center justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="truncate text-sm font-medium text-neutral-100">
                         {d.name}
                       </p>
-                      {dtype && (
-                        <Badge tone={dtype === "prod" ? "green" : "neutral"}>
-                          {dtype}
-                        </Badge>
-                      )}
+                      {dtype && <Badge tone={envTone(dtype)}>{dtype}</Badge>}
                       {d.status && (
                         <Badge tone={statusTone(d.status)}>{d.status}</Badge>
                       )}
@@ -437,6 +529,30 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
                         <p className="truncate text-xs text-neutral-500">
                           {d.deploymentUrl || d.url}
                         </p>
+                        {(() => {
+                          const form = urlForm(
+                            d.deploymentUrl || d.url,
+                            typeof window !== "undefined"
+                              ? window.location.origin
+                              : undefined,
+                          );
+                          const meta = URL_FORM_LABELS[form];
+                          return (
+                            <Badge
+                              tone={meta.tone}
+                              className="shrink-0 normal-case tracking-normal"
+                              title={
+                                form === "host"
+                                  ? "Caddy doesn't TLS-front dynamic ports — the iframe will replace itself with a diagnostic banner. Add a custom domain or set SYNAPSE_BASE_DOMAIN to fix."
+                                  : form === "path"
+                                    ? "Works in the browser but the Convex CLI strips paths from base URLs — not ideal for `npx convex` invocations."
+                                    : `URL form: ${meta.label}`
+                              }
+                            >
+                              {meta.label}
+                            </Badge>
+                          );
+                        })()}
                         <Button
                           variant="ghost"
                           size="sm"
@@ -467,7 +583,7 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
                     <Button
                       variant="danger"
                       size="sm"
-                      onClick={() => deleteDeployment(d.name)}
+                      onClick={() => setPendingDelete(d)}
                       disabled={deletingName === d.name}
                       aria-label={`Delete deployment ${d.name}`}
                     >
@@ -777,6 +893,155 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
           </div>
         </form>
       </Dialog>
+
+      <ConfirmDeleteDeploymentDialog
+        key={pendingDelete?.name ?? "closed"}
+        deployment={pendingDelete}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={async () => {
+          if (!pendingDelete) return;
+          await confirmDelete(pendingDelete.name);
+          setPendingDelete(null);
+        }}
+      />
     </div>
+  );
+}
+
+// v1.7.2+: replaces the browser-native confirm() for deployment deletion.
+//
+// - DEV / PREVIEW / CUSTOM: single confirmation button. Same one-click
+//   feel as before, but in our own styled dialog so the experience
+//   matches the rest of the dashboard (and so we can later add per-
+//   environment richer content without forking again).
+// - PROD: GitHub-style typed-name confirmation. The operator MUST type
+//   the deployment name verbatim — the action button stays disabled
+//   until the input matches. Container removal + data volume wipe
+//   is irreversible, so the extra second of friction is worth it.
+//
+// The dialog re-mounts (via `key` on the caller) every time
+// `pendingDelete` changes, so internal state (typed input, error
+// banner) resets between deployments without an in-component effect.
+function ConfirmDeleteDeploymentDialog({
+  deployment,
+  onClose,
+  onConfirm,
+}: {
+  deployment: Deployment | null;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [typed, setTyped] = useState("");
+  const [pending, setPending] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const open = deployment !== null;
+  const type = deployment?.deploymentType ?? deployment?.type;
+  const isProd = type === "prod";
+  const canSubmit = isProd
+    ? typed === (deployment?.name ?? "") && !pending
+    : !pending;
+
+  const submit = async () => {
+    setPending(true);
+    setErr(null);
+    try {
+      await onConfirm();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not delete deployment");
+      setPending(false);
+    }
+  };
+
+  if (!deployment) {
+    return (
+      <Dialog open={false} onClose={onClose}>
+        <></>
+      </Dialog>
+    );
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={pending ? () => {} : onClose}
+      title={isProd ? "Delete production deployment" : "Delete deployment"}
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-neutral-300">
+          {isProd ? (
+            <>
+              You&apos;re about to permanently delete{" "}
+              <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs text-amber-300">
+                {deployment.name}
+              </code>
+              . The container is removed, the data volume is wiped, and any
+              client pointing at this URL stops working.{" "}
+              <strong className="text-amber-300">This cannot be undone.</strong>
+            </>
+          ) : (
+            <>
+              Delete the{" "}
+              <Badge tone={envTone(type)} className="align-middle">
+                {type}
+              </Badge>{" "}
+              deployment{" "}
+              <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
+                {deployment.name}
+              </code>
+              ? The container and its data volume are removed.
+            </>
+          )}
+        </p>
+
+        {isProd && (
+          <div className="space-y-2">
+            <label
+              htmlFor="confirm-delete-name"
+              className="block text-xs text-neutral-400"
+            >
+              Type{" "}
+              <code className="font-mono text-amber-300">{deployment.name}</code>{" "}
+              to confirm
+            </label>
+            <Input
+              id="confirm-delete-name"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={deployment.name}
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              disabled={pending}
+              aria-invalid={
+                typed.length > 0 && typed !== deployment.name ? true : undefined
+              }
+            />
+          </div>
+        )}
+
+        {err && <p className="text-xs text-red-400">{err}</p>}
+
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={pending}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            disabled={!canSubmit}
+            onClick={submit}
+            data-testid="confirm-delete-deployment"
+          >
+            {pending ? "Deleting…" : isProd ? "Delete production" : "Delete"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }

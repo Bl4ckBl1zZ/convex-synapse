@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
+import { IconKey } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import {
   ApiError,
@@ -40,6 +41,7 @@ export function DeployKeysPanel({ deploymentName }: Props) {
         onClick={() => setOpen(true)}
         aria-label={`Manage deploy keys for ${deploymentName}`}
       >
+        <IconKey className="mr-1.5 inline-block opacity-70" />
         Manage deploy keys
       </Button>
     </div>

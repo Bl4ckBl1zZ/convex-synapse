@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
+import { IconGlobe } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import {
   ApiError,
@@ -86,6 +87,7 @@ export function CustomDomainsPanel({ deploymentName }: Props) {
         aria-label={`Manage custom domains for ${deploymentName}`}
         data-testid={`custom-domains-open-${deploymentName}`}
       >
+        <IconGlobe className="mr-1.5 inline-block opacity-70" />
         Manage custom domains
       </Button>
     </div>
