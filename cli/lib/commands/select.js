@@ -195,7 +195,11 @@ show up in the menu).`,
       }),
     );
     const creds = await api.cliCredentials(dev.name);
-    const envPath = writeProjectEnv(ctx.cwd, creds);
+    const envPath = writeProjectEnv(ctx.cwd, creds, {
+      team: { slug: team.slug, name: team.name },
+      project: { slug: project.slug, name: project.name },
+      target: "dev",
+    });
 
     ctx.out.result(
       {

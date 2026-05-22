@@ -200,6 +200,44 @@ const checkEnvLocalHasVars = {
   }),
 };
 
+// v1.8.2: separate check for the Cloud-compatible NEXT_PUBLIC_* vars.
+// Self-hosted auth (above) is REQUIRED. These public vars are
+// convenience for code that imports CONVEX_URL the way Cloud
+// tutorials do — missing them only warns, never blocks (the CLI
+// still works without them).
+const checkEnvLocalHasPublicVars = {
+  id: "env-local-has-public-convex-vars",
+  category: "project",
+  title: "NEXT_PUBLIC_CONVEX_URL + NEXT_PUBLIC_CONVEX_SITE_URL in .env.local",
+  autoFix: "never",
+  dependsOn: ["env-local-present"],
+  run: safeRun(async (ctx) => {
+    if (!ctx.projectConfig) {
+      return { status: "skipped", summary: "no linked project", data: {} };
+    }
+    const env = readProjectEnv(ctx.cwd);
+    const hasUrl = !!env.NEXT_PUBLIC_CONVEX_URL;
+    const hasSite = !!env.NEXT_PUBLIC_CONVEX_SITE_URL;
+    if (hasUrl && hasSite) {
+      return {
+        status: "ok",
+        summary: "both public vars present",
+        data: { hasUrl, hasSite },
+      };
+    }
+    const missing = [];
+    if (!hasUrl) missing.push("NEXT_PUBLIC_CONVEX_URL");
+    if (!hasSite) missing.push("NEXT_PUBLIC_CONVEX_SITE_URL");
+    return {
+      status: "warn",
+      summary: `missing: ${missing.join(", ")} (Cloud-style vars; CLI still works)`,
+      remediation:
+        "Run `synapse select` to regenerate .env.local with Cloud-compatible vars (CLI v1.8.2+).",
+      data: { hasUrl, hasSite, missing },
+    };
+  }),
+};
+
 const checkGitignoreProtectsEnv = {
   id: "gitignore-protects-env",
   category: "project",
@@ -609,6 +647,7 @@ const ALL_CHECKS = [
   checkAuthTokenValid,
   checkEnvLocalPresent,
   checkEnvLocalHasVars,
+  checkEnvLocalHasPublicVars,
   checkProjectStillExists,
 
   // Tier C (per deployment)
