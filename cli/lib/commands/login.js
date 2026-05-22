@@ -37,7 +37,20 @@ The saved session carries both the access token (1h TTL) and a refresh token (30
     });
     ctx.out.result(
       { baseUrl, user: session.user || null, configPath: file },
-      () => ctx.out.info(`Saved Synapse session to ${file}`),
+      () => {
+        ctx.out.info(`Saved Synapse session to ${file}`);
+        // v1.8.6 (A2): post-login next-step hint. Without this, the
+        // operator just sees "saved" and stares at the prompt — login
+        // is step 1 of a 3-step onboarding (login → select → dev),
+        // and the absence of step 2 was the most common first-run
+        // dead-end reported.
+        ctx.out.info(
+          `\nNext step: \`cd\` into your app directory and run \`synapse select\` to link it to a project + deployment.`,
+        );
+        ctx.out.info(
+          `Then run \`synapse doctor\` to confirm everything is healthy, or \`synapse open\` to browse the dashboard.`,
+        );
+      },
     );
   },
 };

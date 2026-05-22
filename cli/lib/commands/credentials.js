@@ -63,7 +63,28 @@ Formats:
     const { format, rest } = parseFormat(args);
     const deployment = rest[0];
     if (!deployment) {
-      throw new Error("Usage: synapse credentials <deployment> [--format env|shell|json]");
+      // v1.8.6 (A4): the operator already linked a project — we know
+      // which deployment names exist. Surfacing them turns a dead-end
+      // Usage line into an actionable hint without an extra API call.
+      // The plain Usage line stays as the fallback for unlinked
+      // directories.
+      const linked = ctx.projectConfig;
+      let hint = "";
+      if (linked && linked.deployments) {
+        const names = [];
+        if (linked.deployments.dev?.name) {
+          names.push(`dev=${linked.deployments.dev.name}`);
+        }
+        if (linked.deployments.prod?.name) {
+          names.push(`prod=${linked.deployments.prod.name}`);
+        }
+        if (names.length > 0) {
+          hint = `\n\nThis project has: ${names.join(", ")}. Try \`synapse credentials ${linked.deployments.dev?.name || linked.deployments.prod?.name}\`. Run \`synapse status\` to see them all.`;
+        }
+      }
+      throw new Error(
+        `Usage: synapse credentials <deployment> [--format env|shell|json]${hint}`,
+      );
     }
     if (!FORMATS.has(format)) {
       throw new Error("format must be one of: env, shell, json");

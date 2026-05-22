@@ -117,10 +117,27 @@ async function runConvexCommand(args, ctx) {
     ctx.out.info(
       `Using Synapse ${resolved.target} deployment ${resolved.deploymentName}.`,
     );
+    // v1.8.6 (A5): the upstream Convex CLI emits "Can't safely modify
+    // .env.local for NEXT_PUBLIC_CONVEX_SITE_URL, please edit manually."
+    // because our value is a self-hosted URL that doesn't match its
+    // `.convex.site` pattern. The warning is benign (the file IS
+    // correct — we wrote it), but it's confusing without context.
+    // Pre-announce so the operator knows it's expected.
+    ctx.out.info(
+      "(npx convex may warn it can't modify NEXT_PUBLIC_CONVEX_SITE_URL — benign; Synapse owns those values.)",
+    );
   } else {
     resolved = await resolveConvexInvocation(args, { projectDir: ctx.cwd });
   }
   const code = await runConvex(resolved.args, { credentials: resolved.credentials });
+  // v1.8.6 (A5): when npx convex exits non-zero, surface a hint about
+  // where the failure came from — operators see a `[X]` from convex
+  // and assume Synapse broke. Point them at the right `--help`.
+  if (code !== 0) {
+    ctx.out.info(
+      `\n(npx convex exited ${code}. If this looks like an unknown-command typo, run \`synapse convex --help\` for the upstream Convex help.)`,
+    );
+  }
   process.exitCode = code;
 }
 

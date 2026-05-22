@@ -23,6 +23,24 @@ const {
 } = require("../config");
 const { readProjectConfig } = require("../project");
 
+// v1.8.6 (A3): SessionExpiredError carries an operator-actionable
+// message when the refresh token itself is rejected (>30d old or
+// revoked at server side). bin/synapse.js prints err.message verbatim,
+// so a clear "your session expired, run `synapse login <url>`" lands
+// directly in front of the operator instead of a cryptic
+// "Synapse API returned 401" message.
+class SessionExpiredError extends Error {
+  constructor(baseUrl, cause) {
+    super(
+      `Your Synapse session expired. Run \`synapse login ${baseUrl}\` to sign in again.` +
+        (cause ? ` (refresh failed: ${cause})` : ""),
+    );
+    this.name = "SessionExpiredError";
+    this.baseUrl = baseUrl;
+    this.cause = cause;
+  }
+}
+
 // Wraps an API client so any 401 transparently retries against
 // /v1/auth/refresh once. Mirrors what bin/synapse.js had before the
 // refactor; lives here so every command shares it.
@@ -43,10 +61,30 @@ function makeRefreshableApi(cfg) {
           ) {
             throw err;
           }
-          const session = await new SynapseAPI({ baseUrl: cfg.baseUrl }).refresh(
-            cfg.refreshToken,
-          );
-          if (!session.accessToken) throw err;
+          // v1.8.6 (A3): catch refresh failures and surface a clear
+          // re-login instruction instead of the raw upstream 401.
+          // Refresh tokens expire (30d default) or get revoked
+          // server-side; either way the operator needs to log in
+          // again and the bare "Synapse API returned 401" gave them
+          // no path forward.
+          let session;
+          try {
+            session = await new SynapseAPI({ baseUrl: cfg.baseUrl }).refresh(
+              cfg.refreshToken,
+            );
+          } catch (refreshErr) {
+            const detail =
+              refreshErr instanceof SynapseAPIError
+                ? `${refreshErr.code} ${refreshErr.status}`
+                : String(refreshErr.message || refreshErr);
+            throw new SessionExpiredError(cfg.baseUrl, detail);
+          }
+          if (!session.accessToken) {
+            throw new SessionExpiredError(
+              cfg.baseUrl,
+              "no access token in refresh response",
+            );
+          }
           cfg.accessToken = session.accessToken;
           cfg.refreshToken = session.refreshToken || cfg.refreshToken;
           cfg.tokenType = session.tokenType || cfg.tokenType || "Bearer";
@@ -84,10 +122,19 @@ function createContext({ out, cwd = process.cwd(), env = process.env } = {}) {
 
     // Throws "Not logged in" with a helpful message when no session
     // exists. Commands that REQUIRE auth call this.
+    //
+    // v1.8.6 (A1): copy now points operators who don't know the URL
+    // at their admin instead of leaving them stuck. This message
+    // cascades through 7+ commands (whoami / status / select /
+    // credentials / dev / deploy / convex) because the error
+    // propagates verbatim through bin/synapse.js's top-level
+    // try/catch.
     get cfg() {
       const c = cfgLoad();
       if (!c || !c.baseUrl || !c.accessToken) {
-        throw new Error("Not logged in. Run `synapse login <url>` first.");
+        throw new Error(
+          "Not logged in. Run `synapse login <your-synapse-url>` (e.g. `synapse login https://synapsepanel.com`). If you don't know the URL, ask the admin who set up your Synapse host.",
+        );
       }
       _cfg = c;
       return c;
@@ -130,4 +177,9 @@ function createContext({ out, cwd = process.cwd(), env = process.env } = {}) {
   };
 }
 
-module.exports = { createContext, makeRefreshableApi, normalizeBaseUrl };
+module.exports = {
+  createContext,
+  makeRefreshableApi,
+  normalizeBaseUrl,
+  SessionExpiredError,
+};
