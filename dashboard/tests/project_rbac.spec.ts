@@ -89,6 +89,12 @@ async function createTeamAndProject(
   await dialog.locator("#project-name").fill(projectName);
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await page.getByRole("link", { name: new RegExp(projectName, "i") }).click();
+
+  // v1.9.3: members panel moved off the project home into its own
+  // settings sub-page. Drive through the Settings button + sidebar
+  // so the spec exercises the actual operator flow.
+  await page.getByTestId("project-settings-link").click();
+  await page.getByTestId("project-settings-nav-members").click();
 }
 
 test.beforeEach(async () => {

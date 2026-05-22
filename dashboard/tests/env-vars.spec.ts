@@ -22,6 +22,14 @@ async function setupProject(page: Page) {
   await page.getByRole("link", { name: /store/i }).click();
 
   await expect(page).toHaveURL(/\/teams\/amage\/[0-9a-f-]{36}\b/);
+
+  // v1.9.3: env vars panel was moved off the project home into its own
+  // settings sub-page. Drive through the Settings button so the spec
+  // exercises the actual operator flow + the new layout.
+  await page.getByTestId("project-settings-link").click();
+  await expect(page).toHaveURL(
+    /\/teams\/amage\/[0-9a-f-]{36}\/settings\/environment-variables\b/,
+  );
 }
 
 test.beforeEach(async () => {
@@ -40,6 +48,10 @@ test("project env vars: add, list, delete", async ({ page }) => {
   await page.getByRole("button", { name: "Add" }).click();
 
   await expect(page.getByText("API_KEY")).toBeVisible();
+  // v1.9.2: values mask by default — assert visible after toggling
+  // Reveal rather than expecting plaintext in the DOM.
+  await expect(page.getByText("supersecret")).toBeHidden();
+  await page.getByTestId("env-var-toggle-API_KEY").click();
   await expect(page.getByText("supersecret")).toBeVisible();
 
   // Add a second one to confirm the list grows.

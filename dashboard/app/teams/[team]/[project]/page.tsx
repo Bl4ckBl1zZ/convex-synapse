@@ -15,11 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BackendVersionPill } from "@/components/BackendVersionPill";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
-import { ProjectDnsCredentialsPanel } from "@/components/ProjectDnsCredentialsPanel";
 import { DeployKeysPanel } from "@/components/DeployKeysPanel";
-import { EnvVarsPanel } from "@/components/EnvVarsPanel";
-import { ProjectMembersPanel } from "@/components/ProjectMembersPanel";
-import { TokensPanel } from "@/components/TokensPanel";
 import { ApiError, api, type Deployment, type Project, type Team } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 
@@ -466,6 +462,22 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
             >
               Adopt existing
             </Button>
+            {/*
+              v1.9.3: link out to the new settings shell. Env vars, DNS
+              creds, members, and access tokens used to live below the
+              deployment list on this same page — they got pushed
+              below the fold and made the page hard to scan. The
+              Rename/Transfer/Delete actions stay here for now (Phase
+              2 will move them into /settings/general).
+            */}
+            <Link
+              href={`/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(projectId)}/settings/environment-variables`}
+              data-testid="project-settings-link"
+            >
+              <Button variant="secondary" aria-label="Project settings">
+                Settings
+              </Button>
+            </Link>
             <Button
               variant="secondary"
               onClick={() => {
@@ -685,39 +697,15 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
         </div>
       )}
 
-      <hr className="border-neutral-900" />
-      <EnvVarsPanel projectId={projectId} />
-
-      {/* Project-scoped DNS credentials (v1.6.4+). Cloudflare tokens
-          registered here live alongside the project — auto-configure
-          on custom domains picks these first before falling back to
-          instance-wide credentials in /admin. */}
-      <hr className="border-neutral-900" />
-      <ProjectDnsCredentialsPanel projectId={projectId} />
-
-      {/* Project-level RBAC: per-project admin/member/viewer overrides on
-          top of team_members. The panel auto-derives the caller's role
-          from the listing it fetches, so admin controls only appear for
-          actual project admins. */}
-      <hr className="border-neutral-900" />
-      <ProjectMembersPanel projectId={projectId} />
-
-      {/* Project-scoped + app-scoped tokens. Both are scope=project at the
-          access-token table level (well, scope=app for app tokens), but
-          they're rendered as separate sections so operators can label
-          long-lived service tokens vs short-lived preview deploy keys.
-          The TokensPanel component handles the API plumbing per scope. */}
-      <hr className="border-neutral-900" />
-      <Card>
-        <CardBody>
-          <TokensPanel scope="project" target={projectId} />
-        </CardBody>
-      </Card>
-      <Card>
-        <CardBody>
-          <TokensPanel scope="app" target={projectId} />
-        </CardBody>
-      </Card>
+      {/*
+        v1.9.3: env vars, DNS credentials, project members, and access
+        tokens used to live below the deployments list on this same
+        page — five stacked surfaces that pushed the operator's primary
+        view (their deployments) below the fold. They've been moved
+        into /teams/<team>/<project>/settings/* with a sidebar nav.
+        The Rename/Transfer/Delete project actions still live in the
+        header above; a follow-up will move them into /settings/general.
+      */}
 
 
       <Dialog open={open} onClose={() => setOpen(false)} title="Create deployment">
