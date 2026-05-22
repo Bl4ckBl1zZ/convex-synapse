@@ -583,44 +583,69 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
                       )}
                     </div>
                     {(d.deploymentUrl || d.url) && (
-                      <div className="mt-1 flex items-center gap-2">
-                        <p className="truncate text-xs text-neutral-500">
-                          {d.deploymentUrl || d.url}
+                      <div className="mt-1 space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          {/* v1.9.1: matches Convex Cloud's "Cloud URL"
+                              terminology. Without the label operators
+                              read the URL as "the dashboard URL", but
+                              that's /embed/<name> — visiting this URL in
+                              a browser actually shows the bare
+                              "This Convex deployment is running" page
+                              from the upstream backend. */}
+                          <span
+                            className="text-[10px] font-medium uppercase tracking-wider text-neutral-600"
+                            title="Equivalent to Convex Cloud's CONVEX_CLOUD_URL — your app's CONVEX_SELF_HOSTED_URL points here."
+                          >
+                            Cloud URL
+                          </span>
+                          <p className="truncate text-xs text-neutral-500">
+                            {d.deploymentUrl || d.url}
+                          </p>
+                          {(() => {
+                            const form = urlForm(
+                              d.deploymentUrl || d.url,
+                              typeof window !== "undefined"
+                                ? window.location.origin
+                                : undefined,
+                            );
+                            const meta = URL_FORM_LABELS[form];
+                            return (
+                              <Badge
+                                tone={meta.tone}
+                                className="shrink-0 normal-case tracking-normal"
+                                title={
+                                  form === "host"
+                                    ? "Caddy doesn't TLS-front dynamic ports — the iframe will replace itself with a diagnostic banner. Add a custom domain or set SYNAPSE_BASE_DOMAIN to fix."
+                                    : form === "path"
+                                      ? "Works in the browser but the Convex CLI strips paths from base URLs — not ideal for `npx convex` invocations."
+                                      : `URL form: ${meta.label}`
+                                }
+                              >
+                                {meta.label}
+                              </Badge>
+                            );
+                          })()}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              copyUrl(d.name, (d.deploymentUrl || d.url) as string)
+                            }
+                            aria-label="Copy Cloud URL"
+                          >
+                            {copiedName === d.name ? "Copied!" : "Copy"}
+                          </Button>
+                        </div>
+                        {/* Honesty note: in Convex Cloud the "HTTP
+                            Actions URL" is a separate domain
+                            (`<name>.convex.site`); in self-hosted the
+                            same container serves both surfaces, so they
+                            share the URL. Tiny hint avoids confusion
+                            when an operator coming from Cloud reads
+                            our deployment card. */}
+                        <p className="text-[10px] text-neutral-600">
+                          HTTP Actions URL: same as Cloud URL in self-hosted.
                         </p>
-                        {(() => {
-                          const form = urlForm(
-                            d.deploymentUrl || d.url,
-                            typeof window !== "undefined"
-                              ? window.location.origin
-                              : undefined,
-                          );
-                          const meta = URL_FORM_LABELS[form];
-                          return (
-                            <Badge
-                              tone={meta.tone}
-                              className="shrink-0 normal-case tracking-normal"
-                              title={
-                                form === "host"
-                                  ? "Caddy doesn't TLS-front dynamic ports — the iframe will replace itself with a diagnostic banner. Add a custom domain or set SYNAPSE_BASE_DOMAIN to fix."
-                                  : form === "path"
-                                    ? "Works in the browser but the Convex CLI strips paths from base URLs — not ideal for `npx convex` invocations."
-                                    : `URL form: ${meta.label}`
-                              }
-                            >
-                              {meta.label}
-                            </Badge>
-                          );
-                        })()}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            copyUrl(d.name, (d.deploymentUrl || d.url) as string)
-                          }
-                          aria-label="Copy deployment URL"
-                        >
-                          {copiedName === d.name ? "Copied!" : "Copy"}
-                        </Button>
                       </div>
                     )}
                     {d.status === "running" && (
