@@ -613,7 +613,7 @@ function makeDeploymentCheck(target) {
           status: "issue",
           summary: `${ref.name}: URL not browser-reachable (${auth.convexUrl})`,
           remediation:
-            "Set SYNAPSE_BASE_DOMAIN on the server (wildcard subdomain) OR add a custom domain to this deployment.",
+            "Enable wildcard subdomain via /admin/host-domain in the dashboard (instance admin) OR add a custom domain to this deployment.",
           data,
         };
       }

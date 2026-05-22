@@ -84,6 +84,7 @@ export function HostDomainPanel() {
   );
 
   const [formOpen, setFormOpen] = useState(false);
+  const [formInitialMode, setFormInitialMode] = useState<Mode | undefined>(undefined);
 
   return (
     <div className="space-y-6" data-testid="host-domain-panel">
@@ -114,6 +115,55 @@ export function HostDomainPanel() {
         </CardBody>
       </Card>
 
+      {/*
+        v1.9.0: prominent suggestion when the host is on plain `tls` mode.
+        Without this most operators don't realize the "Change..." panel
+        can ALSO enable wildcard subdomain — they only discover it after
+        a frustrating SSH session. Skipping when mode is already
+        `tls_with_wildcard` (no upgrade needed) or `plain` (different
+        problem entirely; suggesting wildcard would be confusing).
+      */}
+      {data && data.mode === "tls" && !formOpen && (
+        <Card
+          className="border-cyan-500/30 bg-cyan-500/5"
+          data-testid="host-domain-wildcard-suggestion"
+        >
+          <CardBody className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-cyan-200">
+                Enable wildcard subdomain
+              </p>
+              <p className="mt-1 max-w-xl text-xs text-neutral-300">
+                Without wildcard, deployment URLs fall back to{" "}
+                <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
+                  {data.domain || "your-host"}:&lt;dynamic-port&gt;
+                </code>{" "}
+                — broken in browsers, embedded dashboards refuse to load. Add a
+                wildcard like{" "}
+                <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
+                  *.app.{data.domain || "your-host"}
+                </code>{" "}
+                in your DNS, point it at this VPS, then enable below — every
+                deployment automatically becomes{" "}
+                <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
+                  &lt;name&gt;.app.{data.domain || "your-host"}
+                </code>{" "}
+                with on-demand TLS.
+              </p>
+            </div>
+            <Button
+              onClick={() => {
+                setFormInitialMode("tls_with_wildcard");
+                setFormOpen(true);
+              }}
+              data-testid="host-domain-wildcard-suggestion-open"
+            >
+              Configure wildcard…
+            </Button>
+          </CardBody>
+        </Card>
+      )}
+
       {data && !formOpen && (
         <Card>
           <CardBody className="flex items-center justify-between gap-3">
@@ -128,7 +178,10 @@ export function HostDomainPanel() {
               </p>
             </div>
             <Button
-              onClick={() => setFormOpen(true)}
+              onClick={() => {
+                setFormInitialMode(undefined);
+                setFormOpen(true);
+              }}
               data-testid="host-domain-change-open"
             >
               Change…
@@ -140,6 +193,7 @@ export function HostDomainPanel() {
       {data && formOpen && (
         <ChangeForm
           current={data}
+          initialMode={formInitialMode}
           onCancel={() => setFormOpen(false)}
           onApplied={async () => {
             setFormOpen(false);
@@ -298,14 +352,17 @@ function CopyButton({
 
 function ChangeForm({
   current,
+  initialMode,
   onCancel,
   onApplied,
 }: {
   current: HostDomainConfig;
+  initialMode?: Mode;
   onCancel: () => void;
   onApplied: () => Promise<void>;
 }) {
   const [mode, setMode] = useState<Mode>(() => {
+    if (initialMode) return initialMode;
     if (current.mode === "tls_with_wildcard") return "tls_with_wildcard";
     if (current.mode === "plain") return "plain";
     return "tls";
@@ -574,6 +631,19 @@ function ChangeForm({
                 pointing at the same IP. Caddy issues per-subdomain certs
                 on demand.
               </p>
+              {/* v1.9.0: live URL preview — concrete sample URL so the
+                  operator can visualise the shape before submitting. */}
+              {baseDomain.trim() && HOSTNAME_RE.test(baseDomain.trim().toLowerCase()) && (
+                <div
+                  className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[11px] text-neutral-300"
+                  data-testid="host-domain-wildcard-preview"
+                >
+                  <span className="text-neutral-500">Deployments will appear as: </span>
+                  <code className="font-mono text-cyan-200">
+                    https://&lt;name&gt;.{baseDomain.trim().toLowerCase()}
+                  </code>
+                </div>
+              )}
             </div>
           )}
 

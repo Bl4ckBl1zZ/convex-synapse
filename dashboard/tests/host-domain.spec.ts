@@ -271,3 +271,78 @@ test("cancelling the confirm modal returns to the form unchanged", async ({
 test.skip("apply flow polls status and redirects on success", () => {
   // intentionally skipped — see comment block above.
 });
+
+// ---- v1.9.0 — wildcard discoverability + URL preview ----
+
+test("admin on tls (no wildcard) sees the wildcard suggestion card", async ({ page }) => {
+  await registerAdmin(page);
+  await mockHostDomainGet(page, {
+    mode: "tls",
+    domain: "synapse.example.com",
+    publicUrl: "https://synapse.example.com",
+    publicIp: "1.2.3.4",
+    fallbackUrls: ["http://1.2.3.4"],
+  });
+  await page.goto("/admin/host-domain");
+  // Suggestion card mounts only when mode === "tls".
+  const suggestion = page.getByTestId("host-domain-wildcard-suggestion");
+  await expect(suggestion).toBeVisible();
+  await expect(suggestion).toContainText("Enable wildcard subdomain");
+  // The remedy CTA mentions the operator's actual host so the copy is
+  // concrete, not "your-host" placeholder.
+  await expect(suggestion).toContainText("synapse.example.com");
+});
+
+test("admin on tls_with_wildcard does NOT see the suggestion", async ({ page }) => {
+  await registerAdmin(page);
+  await mockHostDomainGet(page, {
+    mode: "tls_with_wildcard",
+    domain: "synapse.example.com",
+    baseDomain: "app.synapse.example.com",
+    publicUrl: "https://synapse.example.com",
+    publicIp: "1.2.3.4",
+    fallbackUrls: ["http://1.2.3.4"],
+  });
+  await page.goto("/admin/host-domain");
+  await expect(page.getByTestId("host-domain-panel")).toBeVisible();
+  await expect(page.getByTestId("host-domain-wildcard-suggestion")).toHaveCount(0);
+});
+
+test("clicking the suggestion opens the form in tls_with_wildcard mode", async ({ page }) => {
+  await registerAdmin(page);
+  await mockHostDomainGet(page, {
+    mode: "tls",
+    domain: "synapse.example.com",
+    publicUrl: "https://synapse.example.com",
+    publicIp: "1.2.3.4",
+    fallbackUrls: ["http://1.2.3.4"],
+  });
+  await page.goto("/admin/host-domain");
+  await page.getByTestId("host-domain-wildcard-suggestion-open").click();
+  // Form is open; wildcard radio is the active selection so the operator
+  // doesn't have to click it manually.
+  await expect(page.getByTestId("host-domain-change-form")).toBeVisible();
+  await expect(page.getByTestId("host-domain-base-input")).toBeVisible();
+});
+
+test("baseDomain input shows a live URL preview once it parses as a hostname", async ({ page }) => {
+  await registerAdmin(page);
+  await mockHostDomainGet(page, {
+    mode: "tls",
+    domain: "synapse.example.com",
+    publicUrl: "https://synapse.example.com",
+    publicIp: "1.2.3.4",
+    fallbackUrls: ["http://1.2.3.4"],
+  });
+  await page.goto("/admin/host-domain");
+  await page.getByTestId("host-domain-wildcard-suggestion-open").click();
+  const input = page.getByTestId("host-domain-base-input");
+  // No preview until the value is a parsable hostname.
+  await input.fill("not-a-hostname-yet");
+  await expect(page.getByTestId("host-domain-wildcard-preview")).toHaveCount(0);
+  // A valid hostname surfaces the preview.
+  await input.fill("app.example.com");
+  const preview = page.getByTestId("host-domain-wildcard-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("https://<name>.app.example.com");
+});
