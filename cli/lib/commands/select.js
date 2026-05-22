@@ -222,8 +222,11 @@ show up in the menu).`,
         if (prod) {
           ctx.out.info(`Selected prod deployment ${colors.bold(prod.name)}.`);
         } else {
+          // v1.8.5: surface the dashboard URL so the operator can click
+          // straight to "New deployment" instead of hunting for it.
+          const projectUrl = `${cfg.baseUrl}/teams/${encodeURIComponent(team.slug || team.id)}/${encodeURIComponent(project.id)}`;
           ctx.out.warn(
-            "no prod deployment found. `synapse deploy` (and `synapse convex deploy`) will fail with a clear error until you create a prod deployment and run `synapse select` again.",
+            `no prod deployment found. Create one at ${projectUrl} → "New deployment" → mark as PROD, then run \`synapse select\` again. \`synapse deploy\` fails until then.`,
           );
         }
         if (process.env.CONVEX_DEPLOYMENT) {
@@ -233,6 +236,9 @@ show up in the menu).`,
         }
         ctx.out.info(
           `\nNext step: run ${colors.bold("synapse dev")} (or ${colors.bold("npx convex dev")}) once in this directory to push your schema and watch for changes.`,
+        );
+        ctx.out.info(
+          `Or run ${colors.bold("synapse doctor")} first to confirm everything is healthy (add ${colors.bold("--fix")} to auto-clean .gitignore + file modes).`,
         );
       },
     );

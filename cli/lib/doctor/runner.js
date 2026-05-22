@@ -53,10 +53,21 @@ async function runChecks(checks, ctx) {
         continue;
       }
       const result = await check.run(ctx);
+      // `fixable` carries the autoFix kind into the result so the
+      // renderer (and --json consumers) can surface a "this is
+      // fixable, here's the right flag" hint without re-importing
+      // the check catalog. Skipped checks aren't marked fixable —
+      // the fix wouldn't have ctx to operate on anyway.
+      const fixable =
+        typeof check.fix === "function" &&
+        (check.autoFix === "auto" || check.autoFix === "prompt")
+          ? check.autoFix
+          : null;
       resultsById.set(id, {
         id,
         category: check.category,
         title: check.title,
+        fixable,
         ...result,
       });
       pending.delete(id);
@@ -83,13 +94,28 @@ async function runChecks(checks, ctx) {
 }
 
 function totalize(results) {
-  const t = { ok: 0, warn: 0, issue: 0, skipped: 0, fixed: 0 };
+  const t = {
+    ok: 0,
+    warn: 0,
+    issue: 0,
+    skipped: 0,
+    fixed: 0,
+    // v1.8.5: count of results still in warn/issue that have a
+    // registered fix. Splits auto vs prompt so the renderer can show
+    // the right CLI hint at the bottom.
+    fixableAuto: 0,
+    fixablePrompt: 0,
+  };
   for (const r of results) {
     if (r.fixedBy) t.fixed += 1;
     if (r.status === "ok") t.ok += 1;
     else if (r.status === "warn") t.warn += 1;
     else if (r.status === "issue") t.issue += 1;
     else if (r.status === "skipped") t.skipped += 1;
+    if ((r.status === "warn" || r.status === "issue") && !r.fixedBy) {
+      if (r.fixable === "auto") t.fixableAuto += 1;
+      else if (r.fixable === "prompt") t.fixablePrompt += 1;
+    }
   }
   return t;
 }

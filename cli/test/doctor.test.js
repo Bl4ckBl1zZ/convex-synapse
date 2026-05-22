@@ -46,7 +46,29 @@ test("totalize: counts by status + fixed", () => {
     { status: "skipped" },
   ];
   const t = totalize(r);
-  assert.deepEqual(t, { ok: 2, warn: 1, issue: 1, skipped: 1, fixed: 1 });
+  assert.deepEqual(t, {
+    ok: 2,
+    warn: 1,
+    issue: 1,
+    skipped: 1,
+    fixed: 1,
+    fixableAuto: 0,
+    fixablePrompt: 0,
+  });
+});
+
+test("totalize: counts fixableAuto + fixablePrompt for v1.8.5 tip footer", () => {
+  const r = [
+    { status: "warn", fixable: "auto" }, // auto-fixable → counted
+    { status: "issue", fixable: "auto" }, // auto-fixable → counted
+    { status: "issue", fixable: "prompt" }, // prompt-fixable → counted
+    { status: "warn", fixable: null }, // not fixable → not counted
+    { status: "warn", fixable: "auto", fixedBy: "applied" }, // already fixed → not counted
+    { status: "ok", fixable: "auto" }, // ok → not counted
+  ];
+  const t = totalize(r);
+  assert.equal(t.fixableAuto, 2);
+  assert.equal(t.fixablePrompt, 1);
 });
 
 test("exitCodeFor: 0/1/2 mapping", () => {

@@ -146,11 +146,26 @@ Run \`synapse doctor\` for a deeper health check.`,
           ],
         );
         const broken = rows.filter((r) => r.urlForm === "host").length;
+        const hasProd = rows.some((r) => r.type === "prod");
+        const hasDev = rows.some((r) => r.type === "dev");
+
         if (broken > 0) {
           stdout.write("\n");
           ctx.out.warn(
-            `${broken} deployment${broken > 1 ? "s" : ""} not browser-reachable — set SYNAPSE_BASE_DOMAIN on the server OR add a custom domain per deployment. Run \`synapse doctor\` for the full diagnosis.`,
+            `${broken} deployment${broken > 1 ? "s" : ""} not browser-reachable — instance admin can enable wildcard at ${baseUrl}/admin/host-domain, or add a custom domain per deployment.`,
           );
+        }
+        // v1.8.5 hints: when nothing's broken, surface the next-step
+        // bread-crumb so first-time operators know what to do next.
+        if (broken === 0 && rows.length > 0) {
+          stdout.write("\n");
+          if (!hasProd && hasDev) {
+            ctx.out.info(
+              `No prod deployment yet. Create one at ${baseUrl}/teams/<team>/${projectId} → "New deployment" → PROD, then \`synapse select\` again.`,
+            );
+          } else if (hasDev) {
+            ctx.out.info("Run `synapse dev` to start a Convex dev session in this directory.");
+          }
         }
       },
     );
