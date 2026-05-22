@@ -20,6 +20,7 @@ function renderRootHelp(registry, { stdout = process.stdout } = {}) {
     ["Teams", "team"],
     ["Env vars", "env"],
     ["Domains", "domain"],
+    ["Local HTTPS dev", "https"],
     ["Escape hatch", ["convex"]],
   ];
 
