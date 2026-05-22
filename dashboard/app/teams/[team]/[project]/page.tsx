@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BackendVersionPill } from "@/components/BackendVersionPill";
+import { TopologyPanel } from "@/components/TopologyPanel";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
 import { DeployKeysPanel } from "@/components/DeployKeysPanel";
@@ -576,8 +577,12 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
         into /teams/<team>/<project>/settings/* with a sidebar nav.
         The Rename/Transfer/Delete project actions still live in the
         header above; a follow-up will move them into /settings/general.
-      */}
 
+        v1.9.6: the Topology panel shows deployments grouped by host
+        (with IP-derived geo metadata) — fills the same space that
+        used to scroll forever with stacked settings panels.
+      */}
+      <TopologyPanel projectId={projectId} />
 
       <Dialog open={open} onClose={() => setOpen(false)} title="Create deployment">
         <form onSubmit={create} className="space-y-4">

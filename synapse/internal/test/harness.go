@@ -40,6 +40,7 @@ import (
 	"github.com/Iann29/synapse/internal/db"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
+	"github.com/Iann29/synapse/internal/geo"
 	"github.com/Iann29/synapse/internal/provisioner"
 )
 
@@ -157,6 +158,12 @@ type SetupOpts struct {
 	// (synapsedns.ExternalResolver). Tests use it to deterministically
 	// exercise the active / pending / failed flips.
 	DomainsResolver api.LookupIPResolver
+
+	// GeoResolver lets topology tests inject a fake IP-geolocation
+	// stub. nil = no resolver wired (handler returns empty country /
+	// region / provider fields). Production wiring goes through
+	// router.go and defaults to the cached ipinfo.io resolver.
+	GeoResolver geo.Resolver
 
 	// DNSEnvelope opts the test into the DNS-credentials path. Pass
 	// a real *crypto.SecretBox to exercise encrypt+decrypt; leave
@@ -276,6 +283,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		PublicIP:              opts.PublicIP,
 		HostDomainResolver:    opts.HostDomainResolver,
 		DomainsResolver:       opts.DomainsResolver,
+		GeoResolver:           opts.GeoResolver,
 		DNSEnvelope:           opts.DNSEnvelope,
 		CloudflareFactory:     opts.CloudflareFactory,
 		DNSProviderLookup:     opts.DNSProviderLookup,

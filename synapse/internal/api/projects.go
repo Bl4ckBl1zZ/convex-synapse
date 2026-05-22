@@ -29,6 +29,7 @@ type ProjectsHandler struct {
 	Deployments    *DeploymentsHandler
 	Tokens         *AccessTokensHandler
 	DNSCredentials *DNSCredentialsHandler
+	Topology       *TopologyHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -89,6 +90,13 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		// endpoint is the "make them apply to deployments that already
 		// existed when I changed the var" escape hatch.
 		r.Post("/sync_env_to_deployments", h.syncEnvToDeployments)
+		// v1.9.6+: topology snapshot for the dashboard's Regions panel.
+		// Groups deployments by host (today: one VPS; future: federated).
+		// Reuses loadProjectForRequest for auth via the shared Topology
+		// handler.
+		if h.Topology != nil {
+			r.Get("/topology", h.Topology.ServeHTTP)
+		}
 		// Project-level RBAC (v1.0+, migration 000008).
 		r.Get("/list_members", h.listProjectMembers)
 		r.Post("/add_member", h.addProjectMember)

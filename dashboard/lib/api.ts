@@ -226,6 +226,50 @@ export type CLIVersion = {
   error?: string;
 };
 
+// v1.9.6: deployments grouped by host, with IP-derived geo metadata.
+// Today every Synapse instance returns exactly one host; the shape is
+// forward-compatible with multi-VPS federation (v2.0+).
+export type TopologyDeployment = {
+  name: string;
+  type: "dev" | "prod" | "preview" | string;
+  status: string;
+  url?: string;
+  urlForm: "wildcard" | "custom" | "path" | "host" | "unknown" | string;
+  storage: string;
+  haEnabled: boolean;
+  replicaCount: number;
+  healthyCount: number;
+  version?: string;
+  customDomain?: string;
+  adopted: boolean;
+  runningSinceMs?: number;
+  isDefault: boolean;
+  reference?: string;
+  lastError?: string;
+  port?: number | null;
+};
+
+export type TopologyHost = {
+  id: string;
+  name: string;
+  ip?: string;
+  country?: string;
+  countryFlag?: string;
+  city?: string;
+  region?: string;
+  provider?: string;
+  synapseVersion?: string;
+  isPrimary: boolean;
+  runningCount: number;
+  provisioningCount: number;
+  failedCount: number;
+  deployments: TopologyDeployment[];
+};
+
+export type TopologyResponse = {
+  hosts: TopologyHost[];
+};
+
 // POST /v1/admin/upgrade kicks off the host-side daemon. The real action
 // is async — the response just confirms the daemon accepted the request;
 // poll /v1/admin/upgrade/status for the actual progress.
@@ -1099,6 +1143,13 @@ export const api = {
       return request(
         `/v1/projects/${encodeURIComponent(id)}/sync_env_to_deployments`,
         { method: "POST", body: {} }
+      );
+    },
+    // v1.9.6+: deployments grouped by host with IP-derived geo. Used
+    // by the project page's Topology panel.
+    topology(id: string): Promise<TopologyResponse> {
+      return request<TopologyResponse>(
+        `/v1/projects/${encodeURIComponent(id)}/topology`,
       );
     },
     // Project-scoped DNS credentials (v1.6.4+). Mirror of

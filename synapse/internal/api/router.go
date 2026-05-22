@@ -13,6 +13,7 @@ import (
 
 	"github.com/Iann29/synapse/internal/auth"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
+	"github.com/Iann29/synapse/internal/geo"
 	"github.com/Iann29/synapse/internal/middleware"
 )
 
@@ -131,6 +132,12 @@ type RouterDeps struct {
 	// probe against `convex-<name>:3210/version`. Tests inject a
 	// deterministic fake here so they don't depend on a live container.
 	BackendProbe BackendProbe
+
+	// GeoResolver feeds the /v1/projects/{id}/topology endpoint. nil
+	// in production → use the cached ipinfo.io resolver. Tests inject
+	// a deterministic stub so they don't burn outbound calls + so
+	// CI stays offline-friendly.
+	GeoResolver geo.Resolver
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -229,6 +236,24 @@ func NewRouter(d RouterDeps) http.Handler {
 	}
 	teamsH := &TeamsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH}
 	projectsH := &ProjectsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH, DNSCredentials: dnsCredsH}
+	// v1.9.6: topology endpoint shares the projects handler's auth path
+	// (loadProjectForRequest). The geo cache is constructed once at boot
+	// so a single Synapse instance burns at most one ipinfo call per IP
+	// per process lifetime. Tests inject d.GeoResolver to keep CI
+	// offline-friendly.
+	geoResolver := d.GeoResolver
+	if geoResolver == nil {
+		geoResolver = geo.NewCache(geo.DefaultResolver)
+	}
+	topologyH := &TopologyHandler{
+		DB:             d.DB,
+		PublicIP:       d.PublicIP,
+		PublicURL:      d.PublicURL,
+		SynapseVersion: d.Version,
+		Geo:            geoResolver,
+		Projects:       projectsH,
+	}
+	projectsH.Topology = topologyH
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
