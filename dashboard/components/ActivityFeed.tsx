@@ -38,6 +38,15 @@ export function ActivityFeed({ projectId }: Props) {
     },
   );
 
+  // CRITICAL: every hook MUST be called on every render (rules of
+  // hooks). v1.10.0 shipped with the useMemo below the early-return
+  // branches → React error #310 the moment data finally arrived.
+  // Always call hooks unconditionally; gate rendering AFTER.
+  const groups = useMemo(
+    () => (data ? groupActivity(data.events) : []),
+    [data],
+  );
+
   if (isLoading && !data) return null;
   // Permissions failure (e.g. project moved): hide rather than show
   // an alarming error in the timeline area. Project page's top-level
@@ -45,10 +54,6 @@ export function ActivityFeed({ projectId }: Props) {
   if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
     return null;
   }
-  const groups = useMemo(
-    () => (data ? groupActivity(data.events) : []),
-    [data],
-  );
   if (!data || data.events.length === 0) return null;
 
   return (
