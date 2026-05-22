@@ -5,10 +5,8 @@ import { useRouter } from "next/navigation";
 
 type Params = { team: string; project: string };
 
-// Bare /settings entry — bounce to the first sub-page so the operator
-// never sees an empty shell. Environment Variables is the most-used
-// project surface, hence chosen as the landing target. Mirrors how
-// /teams/<ref>/settings bounces to /general.
+// Bare /settings entry — bounce to /general (v1.9.4+, matches the
+// team-settings IA which also lands on /general by default).
 export default function ProjectSettingsIndex({
   params,
 }: {
@@ -18,7 +16,7 @@ export default function ProjectSettingsIndex({
   const router = useRouter();
   useEffect(() => {
     router.replace(
-      `/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(projectId)}/settings/environment-variables`,
+      `/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(projectId)}/settings/general`,
     );
   }, [router, teamRef, projectId]);
   return null;

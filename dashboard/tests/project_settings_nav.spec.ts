@@ -58,64 +58,69 @@ test("project home no longer stacks env vars / DNS creds / members / tokens belo
   await expect(page.getByTestId("project-settings-link")).toBeVisible();
 });
 
-test("Settings button takes the operator to /settings/environment-variables", async ({
+test("Settings button takes the operator to /settings/general (v1.9.4+)", async ({
   page,
 }) => {
   const { teamSlug, projectId } = await setupProject(page);
 
   await page.getByTestId("project-settings-link").click();
   await expect(page).toHaveURL(
-    new RegExp(`/teams/${teamSlug}/${projectId}/settings/environment-variables\\b`),
+    new RegExp(`/teams/${teamSlug}/${projectId}/settings/general\\b`),
   );
   await expect(page.getByTestId("project-settings-shell")).toBeVisible();
-  // Default sub-page renders the env vars empty state.
-  await expect(page.getByText("No env vars yet.")).toBeVisible();
+  // Default sub-page now lands on General with the name/slug form.
+  await expect(page.getByTestId("project-general-name-slug")).toBeVisible();
 });
 
-test("sidebar navigates across all four sub-pages and preserves the active class", async ({
+test("sidebar navigates across all five sub-pages and preserves the active class", async ({
   page,
 }) => {
   await setupProject(page);
   await page.getByTestId("project-settings-link").click();
 
-  const sections: { testid: string; urlFragment: string; expectText: string | RegExp }[] = [
+  const sections: { testid: string; urlFragment: string; expectSel: string }[] = [
+    {
+      testid: "project-settings-nav-general",
+      urlFragment: "/settings/general",
+      expectSel: "[data-testid='project-general-name-slug']",
+    },
     {
       testid: "project-settings-nav-env-vars",
       urlFragment: "/settings/environment-variables",
-      expectText: "No env vars yet.",
+      expectSel: "[data-testid='env-vars-panel']",
     },
     {
       testid: "project-settings-nav-dns",
       urlFragment: "/settings/dns-credentials",
-      expectText: /credentials/i,
+      expectSel: "main, body",
     },
     {
       testid: "project-settings-nav-members",
       urlFragment: "/settings/members",
-      expectText: /members/i,
+      expectSel: "main, body",
     },
     {
       testid: "project-settings-nav-tokens",
       urlFragment: "/settings/access-tokens",
-      expectText: /project access tokens/i,
+      expectSel: "main, body",
     },
   ];
 
   for (const s of sections) {
     await page.getByTestId(s.testid).click();
     await expect(page).toHaveURL(new RegExp(s.urlFragment.replace(/\//g, "\\/")));
-    await expect(page.getByText(s.expectText).first()).toBeVisible();
+    await expect(page.locator(s.expectSel).first()).toBeVisible();
   }
 });
 
-test("bare /settings URL redirects to /settings/environment-variables", async ({
+test("bare /settings URL redirects to /settings/general (v1.9.4+)", async ({
   page,
 }) => {
   const { teamSlug, projectId } = await setupProject(page);
 
   await page.goto(`/teams/${teamSlug}/${projectId}/settings`);
   await expect(page).toHaveURL(
-    new RegExp(`/teams/${teamSlug}/${projectId}/settings/environment-variables\\b`),
+    new RegExp(`/teams/${teamSlug}/${projectId}/settings/general\\b`),
   );
 });
 

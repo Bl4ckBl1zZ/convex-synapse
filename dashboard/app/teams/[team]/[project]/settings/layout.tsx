@@ -73,6 +73,7 @@ export default function ProjectSettingsLayout({
   }
 
   const items: { href: string; label: string; testid: string }[] = [
+    { href: `${base}/general`, label: "General", testid: "project-settings-nav-general" },
     { href: `${base}/environment-variables`, label: "Environment Variables", testid: "project-settings-nav-env-vars" },
     { href: `${base}/dns-credentials`, label: "DNS Credentials", testid: "project-settings-nav-dns" },
     { href: `${base}/members`, label: "Members", testid: "project-settings-nav-members" },

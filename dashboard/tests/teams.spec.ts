@@ -99,13 +99,17 @@ test("rename project from its detail page", async ({ page }) => {
   // Header has the old name.
   await expect(page.getByRole("heading", { name: "Old Name" })).toBeVisible();
 
-  // Open rename, enter new name, save.
-  await page.getByRole("button", { name: "Rename project" }).click();
-  const renameDialog = page.getByRole("dialog");
-  await renameDialog.locator("#rename-project").fill("New Name");
-  await renameDialog.getByRole("button", { name: "Save" }).click();
+  // v1.9.4: rename moved off the project home into /settings/general
+  // as an inline form (not a modal dialog).
+  await page.getByTestId("project-settings-link").click();
+  await page.getByTestId("project-settings-nav-general").click();
+  const nameInput = page.getByTestId("project-name-input");
+  await nameInput.fill("New Name");
+  await page.getByTestId("project-general-save").click();
+  await expect(page.getByTestId("project-general-name-slug-success")).toBeVisible();
 
-  // Header reflects the new name; dialog is closed.
+  // Back to the project home — header reflects the new name.
+  await page.goBack();
   await expect(page.getByRole("heading", { name: "New Name" })).toBeVisible();
 });
 
@@ -124,12 +128,16 @@ test("delete project from its detail page", async ({ page }) => {
   await dialog.locator("#project-name").fill("Trash Me");
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
 
-  // Enter the project, click Delete project, accept confirm.
+  // v1.9.4: delete moved off the project home into
+  // /settings/general → "Danger zone" with a typed-name confirmation
+  // (no more native confirm() dialog).
   await page.getByRole("link", { name: /trash me/i }).click();
   await expect(page).toHaveURL(/\/teams\/amage\/[0-9a-f-]{36}\b/);
-
-  page.on("dialog", (d) => d.accept());
-  await page.getByRole("button", { name: "Delete project" }).click();
+  await page.getByTestId("project-settings-link").click();
+  await page.getByTestId("project-settings-nav-general").click();
+  await page.getByTestId("project-delete-open").click();
+  await page.getByTestId("project-delete-confirm-input").fill("Trash Me");
+  await page.getByTestId("project-delete-confirm").click();
 
   // Bounced back to the team page; the project no longer appears.
   await expect(page).toHaveURL(/\/teams\/amage\b/);

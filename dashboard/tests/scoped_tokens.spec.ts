@@ -110,11 +110,15 @@ test("project transfer moves the project to another team", async ({ page }) => {
   await d.getByRole("button", { name: "Create", exact: true }).click();
   await page.getByRole("link", { name: /movable/i }).click();
 
-  // Open transfer dialog, pick dest team, submit.
-  await page.getByTestId("project-transfer-open").click();
-  const dlg = page.getByRole("dialog");
-  // selectOption accepts a substring label — match the option text directly.
-  await dlg.locator("#transfer-dest").selectOption({ label: "Dest Co (dest-co)" });
+  // v1.9.4: transfer moved off the project home into
+  // /settings/general as an inline select (no modal dialog).
+  await page.getByTestId("project-settings-link").click();
+  await page.getByTestId("project-settings-nav-general").click();
+  // Click triggers the lazy fetch of /teams; the select still populates
+  // before submit because SWR resolves before the user picks.
+  await page
+    .getByTestId("project-transfer-dest")
+    .selectOption({ label: "Dest Co (dest-co)" });
   await page.getByTestId("project-transfer-submit").click();
 
   // URL now points at /teams/dest-co/<projectId>.
