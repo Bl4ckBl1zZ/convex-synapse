@@ -7,6 +7,7 @@ import useSWR from "swr";
 import clsx from "clsx";
 import { Avatar } from "@/components/ui/avatar";
 import { SynapseLogo } from "@/components/ui/logo";
+import { CliVersionChip } from "@/components/CliVersionChip";
 import { VersionStatusChip } from "@/components/VersionStatusChip";
 import { replayTour } from "@/components/WelcomeTour";
 import { api, type Team } from "@/lib/api";
@@ -101,6 +102,10 @@ export function TopBar() {
               Always-visible for admins so the cache TTL is never a
               mystery — kills the "did my upgrade publish?" anxiety. */}
           {user && <VersionStatusChip />}
+          {/* v1.9.4: CLI install + latest-version chip. Public (no
+              admin gate) — every operator who can log in is a CLI
+              consumer. */}
+          {user && <CliVersionChip />}
           <a
             href="https://github.com/get-convex/convex-backend"
             target="_blank"

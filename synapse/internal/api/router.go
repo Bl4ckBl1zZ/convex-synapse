@@ -240,6 +240,16 @@ func NewRouter(d RouterDeps) http.Handler {
 		// install_status is also public — the dashboard hits it pre-auth
 		// to decide whether to redirect /login → /setup (first-run wizard).
 		r.Method(http.MethodGet, "/install_status", &InstallStatusHandler{DB: d.DB, Version: d.Version})
+		// CLI latest version probe (v1.9.4+). Public for the same reason
+		// install_status is public: every operator who can log into the
+		// dashboard is a potential CLI user; gating it behind admin would
+		// just buy a confusing UX with no security upside. Cached
+		// server-side so npm sees one fetch per 15min across all
+		// connected clients. cliVersionH is shared with the /refresh
+		// route below so cache state stays single-source.
+		cliVersionH := &CLIVersionHandler{}
+		r.Method(http.MethodGet, "/cli_latest_version", cliVersionH)
+		r.Method(http.MethodPost, "/cli_latest_version/refresh", http.HandlerFunc(cliVersionH.RefreshHandler))
 		// TLS-ask for Caddy on-demand TLS (v1.0+). Public, no auth —
 		// Caddy hits it from inside the docker network without a JWT.
 		// The handler rejects any host outside `<sub>.<BaseDomain>`,

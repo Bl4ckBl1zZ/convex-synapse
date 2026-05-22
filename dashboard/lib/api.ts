@@ -212,6 +212,20 @@ export type VersionCheck = {
   error?: string;
 };
 
+// v1.9.4: latest published version of the @iann29/synapse CLI on npm.
+// Fetched server-side from registry.npmjs.org with the same 15-min cache
+// + lastKnown-fallback pattern the host version_check uses. Public
+// endpoint — every dashboard user is a potential CLI user.
+export type CLIVersion = {
+  packageName: string;
+  latest?: string;
+  installCommand?: string;
+  fetchedAt?: string;
+  cacheExpiresAt?: string;
+  fromCache?: boolean;
+  error?: string;
+};
+
 // POST /v1/admin/upgrade kicks off the host-side daemon. The real action
 // is async — the response just confirms the daemon accepted the request;
 // poll /v1/admin/upgrade/status for the actual progress.
@@ -1319,6 +1333,17 @@ export const api = {
   admin: {
     versionCheck(): Promise<VersionCheck> {
       return request<VersionCheck>("/v1/admin/version_check");
+    },
+    cliLatestVersion(): Promise<CLIVersion> {
+      // Public route (not gated behind /admin); we expose it under
+      // api.admin for symmetry with the other "check what's the latest
+      // out there" calls, but the endpoint itself doesn't require auth.
+      return request<CLIVersion>("/v1/cli_latest_version");
+    },
+    cliLatestVersionRefresh(): Promise<CLIVersion> {
+      return request<CLIVersion>("/v1/cli_latest_version/refresh", {
+        method: "POST",
+      });
     },
     // Force-bust the GitHub release cache. Synapse normally caches the
     // /releases/latest fetch for 15 minutes (GitHub's unauthenticated
