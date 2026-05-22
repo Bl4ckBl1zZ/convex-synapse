@@ -130,8 +130,18 @@ func (h *TopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Wire deployments into the host. Adopted deployments don't live on
 	// the Synapse VPS, so they'd go under a separate "Adopted" pseudo-
 	// host if the project has any — kept inline below for clarity.
+	//
+	// Why we rewrite DeploymentURL before mapping: the DB stores the
+	// internal loopback form ("http://127.0.0.1:<port>") so the host
+	// healthcheck worker can reach the container. The topology card
+	// must show the PUBLIC form (wildcard / custom-domain / etc) so
+	// it's consistent with the deployments list above. Same rewrite
+	// list_deployments does — we just borrow the helper.
 	var adopted []topologyDeployment
 	for _, d := range deployments {
+		if h.Projects != nil && h.Projects.Deployments != nil {
+			d.DeploymentURL = h.Projects.Deployments.publicDeploymentURL(r.Context(), &d)
+		}
 		td := mapDeployment(d, domainsByDep, replicaCounts, h.PublicURL)
 		if d.Adopted {
 			adopted = append(adopted, td)

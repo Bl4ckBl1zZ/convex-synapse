@@ -4,7 +4,7 @@ import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useState } from "react";
-import useSWR from "swr";
+import useSWR, { mutate as globalMutate } from "swr";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
@@ -179,7 +179,12 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
       });
       setOpen(false);
       setHAMode(false);
-      await mutate();
+      // v1.9.7: the topology panel below uses its own SWR key, so the
+      // deployments-list mutate() above doesn't invalidate it. Force a
+      // refetch by signalling the global cache — the panel re-renders
+      // with the new deployment instantly instead of waiting for its
+      // next poll tick.
+      await Promise.all([mutate(), globalMutate(["/topology", projectId])]);
     } catch (err) {
       setFormError(
         err instanceof ApiError ? err.message : "Could not create deployment"
@@ -205,7 +210,7 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
       setAdoptAdminKey("");
       setAdoptName("");
       setAdoptType("prod");
-      await mutate();
+      await Promise.all([mutate(), globalMutate(["/topology", projectId])]);
     } catch (err) {
       setAdoptError(
         err instanceof ApiError ? err.message : "Could not adopt deployment"
@@ -268,7 +273,7 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
     setDeletingName(name);
     try {
       await api.deployments.delete(name);
-      await mutate();
+      await Promise.all([mutate(), globalMutate(["/topology", projectId])]);
     } catch (err) {
       setActionError(
         err instanceof ApiError ? err.message : "Could not delete deployment"

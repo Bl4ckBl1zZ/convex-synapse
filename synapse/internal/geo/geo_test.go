@@ -41,6 +41,11 @@ func TestProviderFromOrg(t *testing.T) {
 		"AS31898 Oracle Corporation":        "Oracle Cloud",
 		"AS13335 Cloudflare, Inc.":          "Cloudflare",
 		"AS54113 Fastly":                    "Fastly",
+		"AS47583 Hostinger International Limited": "Hostinger",
+		"AS12876 Scaleway S.A.S.":           "Scaleway",
+		"AS51167 Contabo GmbH":              "Contabo",
+		"AS60781 Leaseweb Netherlands B.V.": "Leaseweb",
+		"AS8560 IONOS SE":                   "IONOS",
 		// Unknown providers fall through with the ASN stripped.
 		"AS99999 Tiny Cloud Co.":            "Tiny Cloud Co.",
 		// Empty org returns empty string.

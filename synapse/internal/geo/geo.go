@@ -217,6 +217,16 @@ func providerFromOrg(org string) string {
 		return "Cloudflare"
 	case strings.Contains(low, "fastly"):
 		return "Fastly"
+	case strings.Contains(low, "hostinger"):
+		return "Hostinger"
+	case strings.Contains(low, "scaleway"):
+		return "Scaleway"
+	case strings.Contains(low, "contabo"):
+		return "Contabo"
+	case strings.Contains(low, "leaseweb"):
+		return "Leaseweb"
+	case strings.Contains(low, "ionos"):
+		return "IONOS"
 	}
 	return o
 }
