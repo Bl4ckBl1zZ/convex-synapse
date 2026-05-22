@@ -292,7 +292,10 @@ test("planner: DNS resolves to loopback → skip hosts step", () => {
   assert.match(step.reason, /via public DNS/);
 });
 
-test("planner: hosts entry present → skip hosts step", () => {
+test("planner: hosts entry present AND resolution works → skip hosts step", () => {
+  // v1.8.10: the planner now requires BOTH conditions to skip — if
+  // hosts file has the entry but resolution still fails (Windows DNS
+  // cache bug), we treat it as a fixable issue, not a skip.
   const steps = plannerMod.plan(
     syntheticDetection({
       hosts: {
@@ -303,6 +306,7 @@ test("planner: hosts entry present → skip hosts step", () => {
         matches: [{ line: "127.0.0.1 dev.foo.com", address: "127.0.0.1", hostnames: ["dev.foo.com"] }],
         allLines: [],
       },
+      resolution: { resolvesToLoopback: true, source: "hosts", got: ["127.0.0.1"] },
     }),
   );
   assert.equal(steps.find((s) => s.id === "hosts").kind, "skip");

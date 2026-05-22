@@ -182,6 +182,16 @@ function plan(detection, {
   }
 
   // ---- Step: hosts file ----------------------------------------------
+  // Decision tree:
+  //   1. --skip-hosts                            → skip
+  //   2. Resolves via public DNS                  → skip (any machine works)
+  //   3. Hosts has entry + resolution works       → skip (idempotent)
+  //   4. Hosts has entry + resolution still fails → exec ("DNS cache
+  //      stale" fix — re-writing triggers ipconfig /flushdns on Windows).
+  //      This is the v1.8.10 fix for the bug Matheus hit: hosts file
+  //      had the entry but Windows DNS Client kept returning ENOTFOUND.
+  //   5. No entry                                 → exec (write + flush)
+  const hostsHasEntry = detection.hosts.matches.some((m) => m.address === "127.0.0.1");
   if (skipHosts) {
     steps.push({
       id: "hosts",
@@ -202,13 +212,26 @@ function plan(detection, {
       skipReason:
         "no hosts edit needed — DNS A record points at loopback (any machine on any OS resolves correctly)",
     });
-  } else if (detection.hosts.matches.some((m) => m.address === "127.0.0.1")) {
+  } else if (hostsHasEntry && detection.resolution.resolvesToLoopback) {
     steps.push({
       id: "hosts",
       title: "Hosts file entry",
       kind: "skip",
-      reason: `${detection.hosts.path} already maps ${detection.domain} to 127.0.0.1`,
-      skipReason: "entry present",
+      reason: `${detection.hosts.path} already maps ${detection.domain} to 127.0.0.1 and resolution works`,
+      skipReason: "entry present + DNS cache fresh",
+    });
+  } else if (hostsHasEntry && !detection.resolution.resolvesToLoopback) {
+    steps.push({
+      id: "hosts",
+      title: `Refresh DNS cache for ${detection.domain}`,
+      kind: "exec",
+      reason:
+        detection.platform.id === "windows"
+          ? `${detection.hosts.path} has the entry but Windows DNS cache is stale — re-writing to trigger \`ipconfig /flushdns\``
+          : `${detection.hosts.path} has the entry but resolution still fails — re-writing to force a refresh`,
+      async run() {
+        return hostsMod.addEntry(detection.hosts.path, detection.domain);
+      },
     });
   } else {
     const needsElevation = !detection.hosts.writable;

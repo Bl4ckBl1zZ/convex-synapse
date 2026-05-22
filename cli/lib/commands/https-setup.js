@@ -240,6 +240,34 @@ Examples:
       process.exitCode = 1;
       return;
     }
+
+    // v1.8.10: post-execute verification. Even after every step
+    // reports ✓ the actual end-state can be wrong — most commonly on
+    // Windows where the DNS Client cache holds a negative response
+    // even after the hosts file is updated. Re-scan and verify the
+    // domain ACTUALLY resolves to 127.0.0.1 (when we wrote hosts).
+    // If it doesn't, surface a yellow warning with a concrete
+    // remediation instead of pretending the setup is healthy.
+    const wroteHosts = results.some(
+      (r) => r.id === "hosts" && r.kind === "ok",
+    );
+    const verifyOk = after.resolution.resolvesToLoopback;
+    if (wroteHosts && !verifyOk && !skipHosts) {
+      summary.verifyResolution = false;
+      summary.verifyHint =
+        detection.platform.id === "windows"
+          ? "Windows DNS Client cache is still serving stale NXDOMAIN for this domain. Run `ipconfig /flushdns` from an Administrator PowerShell, then retry `npm run dev:https`. If it still fails, restart your machine."
+          : "Hosts file was written but the OS resolver still doesn't return 127.0.0.1. Try restarting nscd / systemd-resolved if you use one, or open a new shell.";
+      if (!ctx.out.json) {
+        ctx.out.stdout.write("\n");
+        ctx.out.warn(
+          `${domain} doesn't resolve to 127.0.0.1 yet — ${summary.verifyHint}`,
+        );
+      }
+    } else if (wroteHosts && verifyOk) {
+      summary.verifyResolution = true;
+    }
+
     ctx.out.stdout.write(
       `${colors.green("✓")} ${colors.bold(`HTTPS ready for ${domain}`)}\n`,
     );

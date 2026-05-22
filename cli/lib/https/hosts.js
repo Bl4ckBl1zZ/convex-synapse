@@ -178,6 +178,26 @@ function readHosts(hostsPath) {
   }
 }
 
+// Best-effort DNS cache flush. On Windows the DNS Client (Dnscache)
+// service caches lookups separately from the hosts file — editing
+// /etc/hosts on Windows does NOT invalidate the cache, so `next dev`
+// and Node's dns.lookup() can both return ENOTFOUND despite the
+// entry being written correctly. This bit Matheus's Windows machine
+// in real-world testing (v1.8.10 bug report).
+//
+// `ipconfig /flushdns` is safe to call without admin elevation on
+// every Windows version since at least Windows 7, but we never let a
+// failure here block the wider flow — it's a hint, not a guarantee.
+function flushDnsCacheIfWindows({ execImpl = execFileSync, platform = process.platform } = {}) {
+  if (platform !== "win32") return { ran: false, reason: "non-windows platform" };
+  try {
+    execImpl("ipconfig", ["/flushdns"], { stdio: "ignore", timeout: 5000 });
+    return { ran: true };
+  } catch (err) {
+    return { ran: false, reason: err.message };
+  }
+}
+
 // Writes content to the hosts file. Three strategies are tried in
 // order based on the platform + the `elevation` knob:
 //
@@ -191,6 +211,13 @@ function readHosts(hostsPath) {
 //   - "never": only try direct write; error if it fails
 //   - "always": skip the direct write attempt
 //
+// On Windows we additionally:
+//   - Normalise line endings to CRLF (the Windows hosts file
+//     traditionally uses CRLF; some Windows components are tolerant
+//     of LF but defensive normalisation costs nothing)
+//   - Run `ipconfig /flushdns` after a successful write so the
+//     DNS Client cache picks up the new entry immediately
+//
 // `writeImpl` is injected for tests.
 function writeHosts(hostsPath, content, {
   elevation = "auto",
@@ -198,11 +225,15 @@ function writeHosts(hostsPath, content, {
   execImpl = execFileSync,
   platform = process.platform,
 } = {}) {
+  const onDiskContent =
+    platform === "win32" ? content.replace(/\r?\n/g, "\r\n") : content;
+
   // Try direct write first (fast path).
+  let result;
   if (elevation !== "always") {
     try {
-      writeImpl(hostsPath, content);
-      return { method: "direct", elevated: false };
+      writeImpl(hostsPath, onDiskContent);
+      result = { method: "direct", elevated: false };
     } catch (err) {
       if (elevation === "never") {
         throw new HostsError(
@@ -214,10 +245,25 @@ function writeHosts(hostsPath, content, {
     }
   }
 
-  if (platform === "win32") {
-    return writeHostsViaRunAs(hostsPath, content, { execImpl });
+  if (!result) {
+    if (platform === "win32") {
+      result = writeHostsViaRunAs(hostsPath, onDiskContent, { execImpl });
+    } else {
+      result = writeHostsViaSudo(hostsPath, onDiskContent, { execImpl });
+    }
   }
-  return writeHostsViaSudo(hostsPath, content, { execImpl });
+
+  // Post-write DNS cache flush (best-effort, Windows only). The
+  // elevated runas path ALREADY flushes inside its PowerShell script
+  // — see writeHostsViaRunAs. Calling here covers the direct-write
+  // case (operator already in an elevated shell). Doubling up is
+  // harmless: a second flush is a no-op.
+  if (platform === "win32") {
+    const flush = flushDnsCacheIfWindows({ execImpl, platform });
+    result.dnsFlushed = flush.ran;
+    if (!flush.ran) result.dnsFlushReason = flush.reason;
+  }
+  return result;
 }
 
 // Linux/macOS elevated write. We pipe the new content into `sudo
@@ -269,12 +315,18 @@ function writeHostsViaRunAs(hostsPath, content, { execImpl = execFileSync } = {}
   const tmpFile = path.join(os.tmpdir(), `synapse-hosts-${Date.now()}.txt`);
   fs.writeFileSync(tmpFile, content);
   const backupPath = `${hostsPath}.synapse-bak.${Date.now()}`;
-  // PowerShell script (single-line, double-quote-friendly):
-  //   Copy-Item <hosts> <backup>; Move-Item -Force <tmp> <hosts>
+  // PowerShell script — runs ELEVATED via Start-Process RunAs below.
+  //   1. Copy current hosts to backup
+  //   2. Move new content over hosts
+  //   3. ipconfig /flushdns (v1.8.10): WITHOUT this the Windows DNS
+  //      Client cache keeps returning NXDOMAIN for the freshly-added
+  //      entry, breaking `next dev --hostname dev.foo.com` with
+  //      ENOTFOUND despite the hosts file being correct.
   const script = [
     `try {`,
     `  Copy-Item -LiteralPath '${hostsPath}' -Destination '${backupPath}' -ErrorAction Stop;`,
     `  Move-Item -LiteralPath '${tmpFile}' -Destination '${hostsPath}' -Force -ErrorAction Stop;`,
+    `  & ipconfig /flushdns | Out-Null;`,
     `  exit 0`,
     `} catch {`,
     `  Write-Error $_.Exception.Message;`,
@@ -345,6 +397,7 @@ module.exports = {
   MANAGED_BLOCK_START,
   MANAGED_BLOCK_END,
   hostsPathForOS,
+  flushDnsCacheIfWindows,
   planAddEntry,
   planRemoveEntry,
   readHosts,
