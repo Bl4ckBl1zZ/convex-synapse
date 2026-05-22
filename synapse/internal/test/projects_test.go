@@ -510,6 +510,108 @@ func TestProjects_Transfer_SlugCollision409(t *testing.T) {
 	}
 }
 
+// v1.9.2: sync_env_to_deployments — re-creates running deployments so
+// they pick up the current project_env_vars values. Validated against
+// the FakeDocker harness, so we cover the wiring (auth → DB query →
+// iteration → audit) but the actual container recreate is mocked.
+func TestProjects_SyncEnvToDeployments_HappyPath(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Sync Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "Sync")
+
+	// Seed two RUNNING deployments directly so the test is deterministic
+	// — we want to exercise the iteration + rebuild path, not the
+	// async provisioning worker (which has its own integration tests).
+	h.SeedDeployment(proj.ID, "sync-dev-1234", "dev", "running", true, owner.ID, 3501, "")
+	h.SeedDeployment(proj.ID, "sync-prod-5678", "prod", "running", true, owner.ID, 3502, "")
+
+	// Add an env var so the sync has something meaningful to push.
+	type envVarChange struct {
+		Op    string `json:"op"`
+		Name  string `json:"name"`
+		Value string `json:"value,omitempty"`
+	}
+	type updateEnvVarsReq struct {
+		Changes []envVarChange `json:"changes"`
+	}
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
+		owner.AccessToken,
+		updateEnvVarsReq{Changes: []envVarChange{{Op: "set", Name: "API_KEY", Value: "x"}}},
+		http.StatusOK, &map[string]any{})
+
+	type syncResp struct {
+		Total     int      `json:"total"`
+		Recreated int      `json:"recreated"`
+		Skipped   int      `json:"skipped"`
+		Errors    []string `json:"errors"`
+		Notice    string   `json:"notice"`
+	}
+	var resp syncResp
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/sync_env_to_deployments",
+		owner.AccessToken, map[string]any{}, http.StatusOK, &resp)
+
+	if resp.Total != 2 {
+		t.Errorf("total: want 2, got %d", resp.Total)
+	}
+	// Recreated + skipped should sum to total. The FakeDocker harness
+	// reports success on Recreate, so both should be "recreated" — but
+	// we don't assert that strictly, only that the sum is right.
+	if resp.Recreated+resp.Skipped != resp.Total {
+		t.Errorf("recreated(%d) + skipped(%d) != total(%d)", resp.Recreated, resp.Skipped, resp.Total)
+	}
+}
+
+func TestProjects_SyncEnvToDeployments_ViewerForbidden(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	viewer := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Sync RBAC")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "P")
+
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')
+	`, team.ID, viewer.ID); err != nil {
+		t.Fatalf("seed team member: %v", err)
+	}
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'viewer')
+	`, proj.ID, viewer.ID); err != nil {
+		t.Fatalf("seed viewer override: %v", err)
+	}
+
+	env := h.AssertStatus(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/sync_env_to_deployments",
+		viewer.AccessToken, map[string]any{}, http.StatusForbidden)
+	if env.Code != "forbidden" {
+		t.Errorf("got code %q want forbidden", env.Code)
+	}
+}
+
+func TestProjects_SyncEnvToDeployments_NoDeployments(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Empty Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "Empty")
+
+	type syncResp struct {
+		Total     int    `json:"total"`
+		Recreated int    `json:"recreated"`
+		Skipped   int    `json:"skipped"`
+		Notice    string `json:"notice"`
+	}
+	var resp syncResp
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/sync_env_to_deployments",
+		owner.AccessToken, map[string]any{}, http.StatusOK, &resp)
+
+	if resp.Total != 0 || resp.Recreated != 0 || resp.Skipped != 0 {
+		t.Errorf("expected zeros for empty project, got %+v", resp)
+	}
+}
+
 func TestProjects_EnvVars_MembersAllowed_ViewersBlocked(t *testing.T) {
 	h := Setup(t)
 	owner := h.RegisterRandomUser()

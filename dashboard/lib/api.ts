@@ -1077,6 +1077,16 @@ export const api = {
         { method: "POST", body: { changes } }
       );
     },
+    // v1.9.2+: re-creates running deployments so they pick up current
+    // project_env_vars values. ~15s downtime per non-HA deployment.
+    syncEnvToDeployments(
+      id: string,
+    ): Promise<{ total: number; recreated: number; skipped: number; errors?: string[]; notice?: string }> {
+      return request(
+        `/v1/projects/${encodeURIComponent(id)}/sync_env_to_deployments`,
+        { method: "POST", body: {} }
+      );
+    },
     // Project-scoped DNS credentials (v1.6.4+). Mirror of
     // api.admin.dnsCredentials but scoped to a single project — each
     // client of the agency keeps its Cloudflare token alongside its

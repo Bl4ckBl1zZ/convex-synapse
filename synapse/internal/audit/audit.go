@@ -57,6 +57,12 @@ const (
 	ActionUpdateProject   = "updateProject"
 	ActionTransferProject = "transferProject"
 	ActionUpdateEnvVars   = "updateProjectEnvVars"
+	// v1.9.2+: explicit operator action that recreates every running
+	// deployment of a project so they pick up the current
+	// project_env_vars values. Distinct from updateProjectEnvVars
+	// (which only writes the table); used by the "Apply to existing
+	// deployments" button in the dashboard.
+	ActionSyncEnvToDeployments = "syncEnvToDeployments"
 
 	// Deployments.
 	ActionCreateDeployment = "createDeployment"

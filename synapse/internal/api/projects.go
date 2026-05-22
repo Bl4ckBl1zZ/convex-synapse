@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -82,6 +83,12 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		r.Get("/list_deployments", h.listDeployments)
 		r.Get("/list_default_environment_variables", h.listEnvVars)
 		r.Post("/update_default_environment_variables", h.updateEnvVars)
+		// v1.9.2+: re-provisions running deployments so they pick up the
+		// current project_env_vars values (~15s downtime per non-HA
+		// deployment). Default env vars are seeded at create-time; this
+		// endpoint is the "make them apply to deployments that already
+		// existed when I changed the var" escape hatch.
+		r.Post("/sync_env_to_deployments", h.syncEnvToDeployments)
 		// Project-level RBAC (v1.0+, migration 000008).
 		r.Get("/list_members", h.listProjectMembers)
 		r.Post("/add_member", h.addProjectMember)
@@ -820,6 +827,104 @@ func (h *ProjectsHandler) updateEnvVars(w http.ResponseWriter, r *http.Request) 
 		Metadata:   map[string]any{"applied": len(req.Changes), "names": names},
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"applied": len(req.Changes)})
+}
+
+// ---------- POST /v1/projects/{id}/sync_env_to_deployments ----------
+//
+// Re-creates every Synapse-managed, currently-running deployment of
+// this project so they pick up the active project_env_vars values.
+// Default env vars are seeded at create-time only; this endpoint is
+// the "I changed a var AFTER the deployment existed" escape hatch.
+//
+// Trade-off honesty:
+//   - non-HA deployments take ~15s of downtime each (container recreate).
+//     We iterate sequentially to keep blast radius bounded (one bad
+//     compose interaction shouldn't pin every deployment in the
+//     "starting" state at once).
+//   - HA deployments roll one replica at a time inside rebuildCORSAndRestart,
+//     preserving service.
+//   - adopted + non-running + missing-host-port deployments are
+//     skipped — never touched. Returned in `skipped` for honesty.
+//
+// Gated by canEditProject (admin/member). Viewers get 403.
+type syncEnvResp struct {
+	Total     int      `json:"total"`
+	Recreated int      `json:"recreated"`
+	Skipped   int      `json:"skipped"`
+	Errors    []string `json:"errors,omitempty"`
+	Notice    string   `json:"notice,omitempty"`
+}
+
+func (h *ProjectsHandler) syncEnvToDeployments(w http.ResponseWriter, r *http.Request) {
+	p, t, role, ok := h.loadProjectForRequest(w, r)
+	if !ok {
+		return
+	}
+	if !canEditProject(role) {
+		writeError(w, http.StatusForbidden, "forbidden",
+			"Viewers cannot sync env vars; ask a project admin or member")
+		return
+	}
+
+	// Pull all non-deleted deployments for this project. We rebuild
+	// each one in turn so the operator sees a single coherent "all
+	// done" rather than firing a fleet of async jobs.
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT id, name FROM deployments
+		 WHERE project_id = $1 AND status <> 'deleted'
+		 ORDER BY created_at ASC
+	`, p.ID)
+	if err != nil {
+		logErr("sync env: list deployments", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to list deployments")
+		return
+	}
+	type dep struct{ ID, Name string }
+	var deps []dep
+	for rows.Next() {
+		var d dep
+		if err := rows.Scan(&d.ID, &d.Name); err != nil {
+			rows.Close()
+			logErr("sync env: scan deployment", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to read deployment row")
+			return
+		}
+		deps = append(deps, d)
+	}
+	rows.Close()
+
+	resp := syncEnvResp{Total: len(deps)}
+	if h.Deployments == nil {
+		// Defensive — handlers wired through router.go always set this,
+		// but a misconfigured test harness would otherwise panic.
+		writeError(w, http.StatusServiceUnavailable, "not_configured",
+			"DeploymentsHandler not wired; cannot recreate")
+		return
+	}
+	logger := slog.Default()
+	for _, d := range deps {
+		recreated := h.Deployments.rebuildCORSAndRestart(r.Context(), d.ID, d.Name, logger)
+		if recreated {
+			resp.Recreated++
+		} else {
+			resp.Skipped++
+		}
+	}
+	if resp.Skipped > 0 {
+		resp.Notice = "Some deployments were skipped (adopted, not-running, or missing host port). They will pick up env vars on their next provision."
+	}
+
+	uid, _ := auth.UserID(r.Context())
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		TeamID:     t.ID,
+		ActorID:    uid,
+		Action:     audit.ActionSyncEnvToDeployments,
+		TargetType: audit.TargetProject,
+		TargetID:   p.ID,
+		Metadata:   map[string]any{"total": resp.Total, "recreated": resp.Recreated, "skipped": resp.Skipped},
+	})
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ---------- GET /v1/projects/{id}/list_members ----------
