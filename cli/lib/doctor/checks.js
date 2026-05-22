@@ -634,6 +634,238 @@ function makeDeploymentCheck(target) {
   };
 }
 
+// ============================================================
+// v1.8.9: Local HTTPS dev category. Checks the `synapse https setup`
+// surface — mkcert presence, CA trust, cert file presence + expiry,
+// hostname resolution.
+//
+// These checks are CONTEXT-GATED: they only emit a meaningful result
+// when the operator is in a project that uses dev:https OR has
+// generated certs under ~/.config/dev-certs/. When neither is true,
+// every check returns `silentlySkip: true` in its data, and the
+// renderer hides the whole category — operators in a "no HTTPS
+// here" project don't see a section of dim "skipped" lines.
+//
+// We require the https detect helpers; importing them here is a
+// pure dependency (no side effects at require time).
+// ============================================================
+
+const httpsDetect = require("../https/detect");
+
+// Read the cwd's package.json dev:https script (if any) and extract
+// the --hostname / --experimental-https-cert / --experimental-https-key
+// values. Returns null when there's no script, malformed JSON, or
+// the script isn't recognisable.
+function parseDevHttpsScript(cwd) {
+  const info = httpsDetect.detectPackageJson(cwd);
+  if (!info.present || !info.existingDevHttps) return null;
+  const cmd = info.existingDevHttps;
+  const hostMatch = cmd.match(/--hostname[\s=]+(\S+)/);
+  const certMatch = cmd.match(/--experimental-https-cert[\s=]+(\S+)/);
+  const keyMatch = cmd.match(/--experimental-https-key[\s=]+(\S+)/);
+  if (!hostMatch || !certMatch || !keyMatch) return null;
+  return {
+    domain: hostMatch[1],
+    cert: certMatch[1],
+    key: keyMatch[1],
+    raw: cmd,
+  };
+}
+
+// "Does this operator's machine HAVE any local-HTTPS context?"
+// True when either:
+//   - cwd has a dev:https script, OR
+//   - ~/.config/dev-certs/ has at least one cert pair (any shape)
+//
+// Used as the gate for every check in this category — when it's
+// false, the checks silently skip and the category is hidden.
+function hasLocalHttpsContext(cwd) {
+  const dev = parseDevHttpsScript(cwd);
+  if (dev) return true;
+  // Check the cert store.
+  try {
+    const fs = require("node:fs");
+    const root = httpsDetect.certsRoot();
+    if (!fs.existsSync(root)) return false;
+    const entries = fs.readdirSync(root, { withFileTypes: true });
+    // Either a subdir (canonical) or a .pem pair (flat) means context.
+    if (entries.some((e) => e.isDirectory())) return true;
+    const flat = httpsDetect.detectFlatCertsInStore();
+    return flat.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+const checkHttpsMkcert = {
+  id: "https-mkcert",
+  category: "local-https-dev",
+  title: "mkcert installed",
+  autoFix: "never",
+  dependsOn: [],
+  run: safeRun(async (ctx) => {
+    if (!hasLocalHttpsContext(ctx.cwd)) {
+      return { status: "skipped", summary: "no local HTTPS context", data: { silentlySkip: true } };
+    }
+    const m = httpsDetect.detectMkcert();
+    if (m.present) {
+      return { status: "ok", summary: m.version || "(version unknown)", data: { version: m.version, caroot: m.caroot } };
+    }
+    return {
+      status: "issue",
+      summary: "mkcert not found in PATH",
+      remediation: "Install mkcert (apt/pacman/dnf/brew/choco/scoop/winget), then run `synapse https setup <domain>`.",
+      data: { present: false },
+    };
+  }),
+};
+
+const checkHttpsCaTrusted = {
+  id: "https-ca-trusted",
+  category: "local-https-dev",
+  title: "local CA trusted (rootCA.pem present)",
+  autoFix: "never",
+  dependsOn: ["https-mkcert"],
+  run: safeRun(async (ctx) => {
+    if (!hasLocalHttpsContext(ctx.cwd)) {
+      return { status: "skipped", summary: "no local HTTPS context", data: { silentlySkip: true } };
+    }
+    const m = httpsDetect.detectMkcert();
+    if (!m.present) {
+      return { status: "skipped", summary: "mkcert missing", data: {} };
+    }
+    if (httpsDetect.detectCaTrusted(m)) {
+      return { status: "ok", summary: `rootCA in ${m.caroot}`, data: { caroot: m.caroot } };
+    }
+    return {
+      status: "issue",
+      summary: "rootCA.pem not found in mkcert's CAROOT",
+      remediation: "Run `mkcert -install` once (or just `synapse https setup <domain>`).",
+      data: { caroot: m.caroot },
+    };
+  }),
+};
+
+const checkHttpsCertFiles = {
+  id: "https-cert-files",
+  category: "local-https-dev",
+  title: "dev:https cert + key files exist",
+  autoFix: "never",
+  dependsOn: ["https-mkcert"],
+  run: safeRun(async (ctx) => {
+    const dev = parseDevHttpsScript(ctx.cwd);
+    if (!dev) {
+      return { status: "skipped", summary: "no dev:https script in cwd", data: { silentlySkip: true } };
+    }
+    const fs = require("node:fs");
+    const certExists = fs.existsSync(dev.cert);
+    const keyExists = fs.existsSync(dev.key);
+    if (certExists && keyExists) {
+      return {
+        status: "ok",
+        summary: `${dev.domain} ✓ both files present`,
+        data: { domain: dev.domain, cert: dev.cert, key: dev.key },
+      };
+    }
+    const missing = [];
+    if (!certExists) missing.push("cert");
+    if (!keyExists) missing.push("key");
+    return {
+      status: "issue",
+      summary: `${dev.domain}: missing ${missing.join(" + ")}`,
+      remediation: `Run \`synapse https setup ${dev.domain}\` to regenerate.`,
+      data: { domain: dev.domain, cert: dev.cert, key: dev.key, certExists, keyExists },
+    };
+  }),
+};
+
+const checkHttpsDomainResolves = {
+  id: "https-domain-resolves",
+  category: "local-https-dev",
+  title: "dev:https domain resolves to 127.0.0.1",
+  autoFix: "never",
+  dependsOn: [],
+  run: safeRun(async (ctx) => {
+    const dev = parseDevHttpsScript(ctx.cwd);
+    if (!dev) {
+      return { status: "skipped", summary: "no dev:https script in cwd", data: { silentlySkip: true } };
+    }
+    const resolution = await httpsDetect.detectDomainResolution(dev.domain);
+    if (resolution.resolvesToLoopback) {
+      return {
+        status: "ok",
+        summary: `${dev.domain} → 127.0.0.1 (via ${resolution.source})`,
+        data: { domain: dev.domain, source: resolution.source },
+      };
+    }
+    return {
+      status: "issue",
+      summary: `${dev.domain} doesn't resolve to 127.0.0.1 (got: ${resolution.got.join(", ") || "nothing"})`,
+      remediation: `Run \`synapse https setup ${dev.domain}\` to add the hosts entry, OR add a DNS A record pointing the domain at 127.0.0.1.`,
+      data: { domain: dev.domain, got: resolution.got },
+    };
+  }),
+};
+
+const checkHttpsCertExpiry = {
+  id: "https-cert-expiry",
+  category: "local-https-dev",
+  title: "cert not expiring soon (>30 days)",
+  autoFix: "never",
+  dependsOn: ["https-cert-files"],
+  run: safeRun(async (ctx) => {
+    const dev = parseDevHttpsScript(ctx.cwd);
+    if (!dev) {
+      return { status: "skipped", summary: "no dev:https script in cwd", data: { silentlySkip: true } };
+    }
+    const fs = require("node:fs");
+    if (!fs.existsSync(dev.cert)) {
+      return { status: "skipped", summary: "cert file missing", data: {} };
+    }
+    if (!httpsDetect.commandExists("openssl")) {
+      return { status: "skipped", summary: "openssl not available — can't check expiry", data: {} };
+    }
+    const { execFileSync } = require("node:child_process");
+    let expiry;
+    try {
+      const out = execFileSync(
+        "openssl",
+        ["x509", "-in", dev.cert, "-noout", "-enddate"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const m = out.match(/notAfter=(.+)/);
+      if (m) expiry = new Date(m[1]);
+    } catch (err) {
+      return { status: "skipped", summary: `openssl read failed: ${err.message}`, data: {} };
+    }
+    if (!expiry || Number.isNaN(expiry.getTime())) {
+      return { status: "skipped", summary: "could not parse cert expiry", data: {} };
+    }
+    const daysLeft = Math.floor((expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    if (daysLeft < 0) {
+      return {
+        status: "issue",
+        summary: `${dev.domain}: cert EXPIRED ${-daysLeft} days ago (${expiry.toISOString().slice(0, 10)})`,
+        remediation: `Regenerate: \`synapse https setup ${dev.domain} --force\`.`,
+        data: { domain: dev.domain, expiry: expiry.toISOString(), daysLeft },
+      };
+    }
+    if (daysLeft < 30) {
+      return {
+        status: "warn",
+        summary: `${dev.domain}: cert expires in ${daysLeft} days (${expiry.toISOString().slice(0, 10)})`,
+        remediation: `Regenerate soon: \`synapse https setup ${dev.domain} --force\`.`,
+        data: { domain: dev.domain, expiry: expiry.toISOString(), daysLeft },
+      };
+    }
+    return {
+      status: "ok",
+      summary: `${dev.domain}: ${daysLeft} days left (expires ${expiry.toISOString().slice(0, 10)})`,
+      data: { domain: dev.domain, expiry: expiry.toISOString(), daysLeft },
+    };
+  }),
+};
+
 const ALL_CHECKS = [
   // Tier A
   checkNodeVersion,
@@ -653,6 +885,22 @@ const ALL_CHECKS = [
   // Tier C (per deployment)
   makeDeploymentCheck("dev"),
   makeDeploymentCheck("prod"),
+
+  // Tier D — local HTTPS dev (v1.8.9). Context-gated: if the cwd
+  // doesn't have a dev:https script AND no certs are configured, the
+  // whole category is hidden from the report.
+  checkHttpsMkcert,
+  checkHttpsCaTrusted,
+  checkHttpsCertFiles,
+  checkHttpsDomainResolves,
+  checkHttpsCertExpiry,
 ];
 
-module.exports = { ALL_CHECKS, isBrowserReachable, cmpVer };
+module.exports = {
+  ALL_CHECKS,
+  isBrowserReachable,
+  cmpVer,
+  // exports for tests
+  parseDevHttpsScript,
+  hasLocalHttpsContext,
+};

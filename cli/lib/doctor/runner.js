@@ -39,13 +39,22 @@ async function runChecks(checks, ctx) {
         return r.status === "issue" || r.status === "skipped";
       });
       if (failedDeps.length > 0) {
+        // v1.8.9: propagate `silentlySkip` from any silent-skipped
+        // prereq so the cascade-skipped child stays hidden too.
+        // Without this, https-cert-expiry would re-surface as a
+        // visible "·" every time its parent (https-cert-files) was
+        // silently skipped for "no dev:https script in cwd".
+        const silentParent = failedDeps.some((d) => {
+          const parent = resultsById.get(d);
+          return parent && parent.data && parent.data.silentlySkip;
+        });
         resultsById.set(id, {
           id,
           category: check.category,
           title: check.title,
           status: "skipped",
           summary: `skipped (prereq failed: ${failedDeps.join(", ")})`,
-          data: { skippedBecause: failedDeps },
+          data: { skippedBecause: failedDeps, silentlySkip: silentParent },
           durationMs: 0,
         });
         pending.delete(id);

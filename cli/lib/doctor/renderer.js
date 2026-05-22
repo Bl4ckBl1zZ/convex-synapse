@@ -21,10 +21,19 @@ const CATEGORY_TITLE = {
   project: "Project",
   backend: "Backend",
   deployments: "Deployments",
+  "local-https-dev": "Local HTTPS dev",
   upstream: "Upstream",
   workspace: "Workspace",
 };
-const CATEGORY_ORDER = ["local-env", "project", "backend", "deployments", "upstream", "workspace"];
+const CATEGORY_ORDER = [
+  "local-env",
+  "project",
+  "backend",
+  "deployments",
+  "local-https-dev",
+  "upstream",
+  "workspace",
+];
 
 function renderHeader(report, write) {
   const parts = ["Synapse doctor"];
@@ -74,8 +83,16 @@ function renderReport(report, { stdout, verbose = false } = {}) {
   for (const cat of CATEGORY_ORDER) {
     const rows = byCategory.get(cat);
     if (!rows || rows.length === 0) continue;
+    // v1.8.9: filter out individual results marked `silentlySkip`
+    // (checks that decided their context is missing — e.g. `dev:https`
+    // checks in a project without that script). Then hide the
+    // category if NOTHING is left.
+    const visibleRows = rows.filter(
+      (r) => !(r.status === "skipped" && r.data && r.data.silentlySkip),
+    );
+    if (visibleRows.length === 0) continue;
     write(`  ${colors.bold(CATEGORY_TITLE[cat] ?? cat)}\n`);
-    for (const r of rows) renderCheck(r, { verbose }, write);
+    for (const r of visibleRows) renderCheck(r, { verbose }, write);
     write("\n");
   }
 
