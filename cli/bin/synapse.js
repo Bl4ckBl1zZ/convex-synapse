@@ -30,7 +30,24 @@ async function main(argv) {
 
   const { cmd, rest } = resolve(REGISTRY, cleanArgv);
   if (!cmd) {
-    process.stderr.write(`Unknown command: ${cleanArgv.join(" ")}\n\nRun \`synapse help\` for the full list.\n`);
+    // v1.8.7: if the operator typed `synapse <prefix>` where one or
+    // more two-word commands exist under that prefix, suggest them.
+    // Turns "Unknown command: deployment" → an actionable list of
+    // verbs the operator can pick from.
+    const prefix = cleanArgv[0] + " ";
+    const verbs = [];
+    for (const name of REGISTRY.keys()) {
+      if (name.startsWith(prefix)) verbs.push(name);
+    }
+    process.stderr.write(`Unknown command: ${cleanArgv.join(" ")}\n`);
+    if (verbs.length > 0) {
+      verbs.sort();
+      process.stderr.write(`\nDid you mean one of:\n`);
+      for (const v of verbs) process.stderr.write(`  synapse ${v}\n`);
+      process.stderr.write(`\nRun \`synapse ${cleanArgv[0]} <verb> --help\` for usage.\n`);
+    } else {
+      process.stderr.write(`\nRun \`synapse help\` for the full list.\n`);
+    }
     process.exitCode = 1;
     return;
   }

@@ -187,6 +187,55 @@ async function choose(label, choices, {
   }
 }
 
+// typedConfirm prompts the user to literally re-type a string (typically
+// the name of a resource about to be destroyed) before proceeding. Match
+// is case-sensitive and exact — `--yes` does NOT bypass this prompt,
+// only an explicit pre-supplied `typed` answer does (for non-interactive
+// CI where the operator already scripted the confirmation).
+//
+// Why we need this in addition to `confirm`: y/n prompts get muscle-
+// memory-yes'd. Typing the literal name of a prod deployment makes the
+// operator look at what they're deleting one more time. Mirrors the
+// dashboard's `delete-deployment` flow shipped in v1.7.2.
+async function typedConfirm(label, expected, {
+  input = process.stdin,
+  output = process.stderr,
+  typed = null,
+  maxAttempts = 3,
+} = {}) {
+  if (typeof expected !== "string" || expected === "") {
+    throw new Error("typedConfirm requires a non-empty `expected` string");
+  }
+  // Non-interactive shortcut: caller pre-supplied the typed string via
+  // a flag (`--confirm=<name>`). We still require exact match; passing
+  // the wrong value should NOT proceed even if the caller meant well.
+  if (typed !== null) {
+    return typed === expected;
+  }
+  if (!input.isTTY) {
+    throw new Error(
+      `Refusing to ${label} without a TTY. Re-run with --confirm=${expected} to confirm non-interactively.`,
+    );
+  }
+  const rl = readline.createInterface({ input, output });
+  try {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const raw = await new Promise((resolve) =>
+        rl.question(`Type ${expected} to confirm ${label}: `, resolve),
+      );
+      const answer = raw.trim();
+      if (answer === expected) return true;
+      if (answer === "" || answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
+        return false;
+      }
+      output.write(`Doesn't match. Type the exact name "${expected}" or press Enter to cancel.\n`);
+    }
+    return false;
+  } finally {
+    rl.close();
+  }
+}
+
 module.exports = {
   BACK,
   ask,
@@ -195,4 +244,5 @@ module.exports = {
   choose,
   confirm,
   parseCredentialsInput,
+  typedConfirm,
 };

@@ -14,7 +14,7 @@ function renderRootHelp(registry, { stdout = process.stdout } = {}) {
     ["Session", ["login", "logout", "whoami"]],
     ["Project linking", ["select", "credentials"]],
     ["Day-to-day", ["dev", "deploy"]],
-    ["Visibility", ["version", "status", "doctor", "open", "logs"]],
+    ["Visibility", ["version", "status", "doctor", "open", "list", "logs"]],
     ["Deployments", "deployment"],
     ["Projects", "project"],
     ["Teams", "team"],

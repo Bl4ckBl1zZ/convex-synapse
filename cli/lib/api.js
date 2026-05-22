@@ -131,6 +131,60 @@ class SynapseAPI {
   cliCredentials(deploymentName) {
     return this.request("GET", `/v1/deployments/${encodeURIComponent(deploymentName)}/cli_credentials`);
   }
+
+  // ---- v1.8.7 control-plane methods ------------------------------
+
+  // GET /v1/deployments/{name}/ — single-deployment snapshot for the
+  // status command (faster than filtering listDeployments client-side
+  // when the operator already knows the name).
+  getDeployment(name) {
+    return this.request("GET", `/v1/deployments/${encodeURIComponent(name)}/`);
+  }
+
+  // GET /v1/deployments/{name}/backend_version — version of the running
+  // Convex backend inside the container. Cheap and useful in `status`.
+  // Falls back to {} if the deployment isn't ready (status: provisioning).
+  getDeploymentBackendVersion(name) {
+    return this.request("GET", `/v1/deployments/${encodeURIComponent(name)}/backend_version`);
+  }
+
+  // POST /v1/projects/{id}/create_deployment — body: { type, ha?, reference?, isDefault? }.
+  // Backend generates the deployment name; we surface it in the response.
+  createDeployment(projectId, body) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/create_deployment`, body);
+  }
+
+  // POST /v1/deployments/{name}/delete — irreversible; container + volume
+  // gone. Returns 200 with no body on success. The caller is responsible
+  // for typed-confirmation in the UI layer.
+  deleteDeployment(name) {
+    return this.request("POST", `/v1/deployments/${encodeURIComponent(name)}/delete`, {});
+  }
+
+  // POST /v1/deployments/{name}/reissue_admin_key — re-mints the admin
+  // key from the current instance_secret WITHOUT touching the secret.
+  // Use when stored credentials drift from the live container.
+  // Response: { deploymentName, adminKey, prefix }.
+  reissueAdminKey(name) {
+    return this.request("POST", `/v1/deployments/${encodeURIComponent(name)}/reissue_admin_key`, {});
+  }
+
+  // GET /v1/projects/{id}/list_default_environment_variables — returns
+  // { configs: [{ name, value, deploymentTypes[] }] }. We hand the raw
+  // shape back; the command formats it.
+  listProjectEnvVars(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/list_default_environment_variables`);
+  }
+
+  // POST /v1/projects/{id}/update_default_environment_variables — body:
+  // { changes: [{ op: "set"|"delete", name, value?, deploymentTypes? }] }.
+  // Cloud-spec shape; the backend applies the batch in a transaction so
+  // partial-failure is impossible.
+  updateProjectEnvVars(projectId, changes) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/update_default_environment_variables`, {
+      changes,
+    });
+  }
 }
 
 // Known envelope keys, in priority order. We try these explicitly before
