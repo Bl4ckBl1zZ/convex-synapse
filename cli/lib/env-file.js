@@ -1,12 +1,13 @@
 // Writes / reads `.env.local` for Synapse-linked projects.
 //
-// As of v1.8.2 the file is drop-in compatible with Convex Cloud
-// tutorials:
+// As of v1.8.4 the file is drop-in compatible with Convex Cloud
+// tutorials (cloud-style NEXT_PUBLIC_* vars) while keeping CONVEX_DEPLOYMENT
+// commented so the Convex CLI's mode picker doesn't see both modes active:
 //
 //   # Convex (Synapse self-hosted — drop-in compatible with Cloud tutorials)
 //   NEXT_PUBLIC_CONVEX_URL="https://<name>.app.synapsepanel.com"
 //   NEXT_PUBLIC_CONVEX_SITE_URL="https://<name>.app.synapsepanel.com"
-//   CONVEX_DEPLOYMENT=dev:<name> # team: <team>, project: <project>
+//   # CONVEX_DEPLOYMENT=dev:<name> # team: <team>, project: <project>
 //
 //   # Self-hosted auth (Synapse cannot use Cloud account session)
 //   CONVEX_SELF_HOSTED_URL="https://<name>.app.synapsepanel.com"
@@ -17,10 +18,16 @@
 // origins. In self-hosted both point at the same URL; the backend
 // container routes API calls and HTTP actions on the same host.
 //
-// CONVEX_DEPLOYMENT is kept uncommented for cosmetic familiarity —
-// the synapse wrapper around `npx convex` (`runConvex` in
-// lib/convex.js) deletes it from the child env when self-hosted
-// vars are present, so it never accidentally triggers Cloud auth.
+// CONVEX_DEPLOYMENT stays commented in self-hosted mode. The Convex
+// CLI errors with "CONVEX_DEPLOYMENT must not be set when
+// CONVEX_SELF_HOSTED_URL and CONVEX_SELF_HOSTED_ADMIN_KEY are set" if
+// both are present at runtime. Our wrapper deletes CONVEX_DEPLOYMENT
+// from process.env before spawning npx convex, but the convex CLI
+// invokes dotenv.config() on its own and re-reads .env.local, which
+// would resurrect the var. Keeping the line commented preserves the
+// human-readable context (team/project, deployment kind) without
+// triggering the conflict. v1.8.2-v1.8.3 wrote it active — that
+// regression broke `synapse dev` and is fixed in v1.8.4.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -115,10 +122,18 @@ function readProjectEnv(projectDir) {
   return parseEnvContent(fs.readFileSync(file, "utf8"));
 }
 
-// Build the authoritative CONVEX_DEPLOYMENT line. Returns null when we
-// don't have enough info to write one (e.g. legacy caller with no
-// deploymentName) — caller should skip writing instead of writing a
-// half-formed line.
+// Build the (commented) CONVEX_DEPLOYMENT line. Returns null when we
+// don't have enough info (legacy caller with no deploymentName).
+//
+// REGRESSION FIX v1.8.4: this line MUST be commented. Convex CLI rejects
+// the combination of CONVEX_DEPLOYMENT + CONVEX_SELF_HOSTED_URL/ADMIN_KEY
+// — the two modes are mutually exclusive. v1.8.2 wrote it ACTIVE, which
+// broke `npx convex` (and therefore `synapse dev`) because Convex's
+// internal dotenv re-loads .env.local after our wrapper deletes the
+// var from the child env. Keeping it commented preserves the human
+// context (team/project label) while never showing up in the parsed
+// env. See https://github.com/Iann29/convex-synapse/issues for the
+// real-world report from the user's session.
 function buildDeploymentLine({ deploymentName, target, teamName, projectName, teamSlug, projectSlug }) {
   if (!deploymentName) return null;
   const safeTarget = target === "prod" ? "prod" : "dev";
@@ -128,7 +143,7 @@ function buildDeploymentLine({ deploymentName, target, teamName, projectName, te
   if (teamLabel) parts.push(`team: ${teamLabel}`);
   if (projectLabel) parts.push(`project: ${projectLabel}`);
   const comment = parts.length > 0 ? ` # ${parts.join(", ")}` : "";
-  return `${CONVEX_DEPLOYMENT}=${safeTarget}:${deploymentName}${comment}`;
+  return `# ${CONVEX_DEPLOYMENT}=${safeTarget}:${deploymentName}${comment}`;
 }
 
 function updateEnvContent(content, opts) {

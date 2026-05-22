@@ -38,7 +38,12 @@ test("buildDeploymentLine returns null without deploymentName", () => {
   assert.equal(buildDeploymentLine({ target: "dev" }), null);
 });
 
-test("buildDeploymentLine: dev/prod targets + team/project comment", () => {
+test("buildDeploymentLine: dev/prod targets emit a COMMENTED line (v1.8.4 regression fix)", () => {
+  // v1.8.4: the line MUST be commented because Convex CLI errors when
+  // CONVEX_DEPLOYMENT + CONVEX_SELF_HOSTED_URL/ADMIN_KEY are both set.
+  // v1.8.2-v1.8.3 wrote it active; that broke `synapse dev` because
+  // npx convex re-reads .env.local via dotenv after we delete the var
+  // from the spawn env.
   assert.equal(
     buildDeploymentLine({
       deploymentName: "brave-dolphin-1060",
@@ -46,7 +51,7 @@ test("buildDeploymentLine: dev/prod targets + team/project comment", () => {
       teamName: "amage.ia",
       projectName: "amagejumpy",
     }),
-    "CONVEX_DEPLOYMENT=dev:brave-dolphin-1060 # team: amage.ia, project: amagejumpy",
+    "# CONVEX_DEPLOYMENT=dev:brave-dolphin-1060 # team: amage.ia, project: amagejumpy",
   );
   assert.equal(
     buildDeploymentLine({
@@ -55,7 +60,7 @@ test("buildDeploymentLine: dev/prod targets + team/project comment", () => {
       teamName: "ACME",
       projectName: "store",
     }),
-    "CONVEX_DEPLOYMENT=prod:wise-otter-42 # team: ACME, project: store",
+    "# CONVEX_DEPLOYMENT=prod:wise-otter-42 # team: ACME, project: store",
   );
 });
 
@@ -67,18 +72,18 @@ test("buildDeploymentLine: falls back to slugs when names are missing", () => {
       teamSlug: "team-a",
       projectSlug: "proj-a",
     }),
-    "CONVEX_DEPLOYMENT=dev:x-1 # team: team-a, project: proj-a",
+    "# CONVEX_DEPLOYMENT=dev:x-1 # team: team-a, project: proj-a",
   );
 });
 
 test("buildDeploymentLine: invalid target defaults to dev (defensive)", () => {
   assert.equal(
     buildDeploymentLine({ deploymentName: "x", target: "WHATEVER" }),
-    "CONVEX_DEPLOYMENT=dev:x",
+    "# CONVEX_DEPLOYMENT=dev:x",
   );
 });
 
-test("first-time write: emits headers + grouped sections + all 5 keys", () => {
+test("first-time write: emits headers + grouped sections + CONVEX_DEPLOYMENT commented (v1.8.4)", () => {
   const next = updateEnvContent("", {
     convexUrl: "https://brave-dolphin-1060.app.synapsepanel.com",
     adminKey: "brave-dolphin-1060|abc123",
@@ -87,18 +92,21 @@ test("first-time write: emits headers + grouped sections + all 5 keys", () => {
     teamName: "amage.ia",
     projectName: "amagejumpy",
   });
-  // Section headers present.
   assert.match(next, /^# Convex \(Synapse self-hosted/m);
   assert.match(next, /^# Self-hosted auth/m);
-  // All 5 keys in correct order under the right headers.
+  // Public block: NEXT_PUBLIC_* active, CONVEX_DEPLOYMENT commented out.
   assert.match(
     next,
-    /# Convex.*\nNEXT_PUBLIC_CONVEX_URL="[^"]+"\nNEXT_PUBLIC_CONVEX_SITE_URL="[^"]+"\nCONVEX_DEPLOYMENT=dev:brave-dolphin-1060 # team: amage\.ia, project: amagejumpy\n/s,
+    /# Convex.*\nNEXT_PUBLIC_CONVEX_URL="[^"]+"\nNEXT_PUBLIC_CONVEX_SITE_URL="[^"]+"\n# CONVEX_DEPLOYMENT=dev:brave-dolphin-1060 # team: amage\.ia, project: amagejumpy\n/s,
   );
+  // Self-hosted block: both keys active.
   assert.match(
     next,
     /# Self-hosted auth.*\nCONVEX_SELF_HOSTED_URL="[^"]+"\nCONVEX_SELF_HOSTED_ADMIN_KEY="[^"]+"\n/s,
   );
+  // Regression assertion: there must be NO uncommented CONVEX_DEPLOYMENT
+  // line anywhere — that's the Convex CLI error trigger.
+  assert.doesNotMatch(next, /^CONVEX_DEPLOYMENT=/m);
 });
 
 test("idempotency: identical args twice produce identical output (canonical form)", () => {
@@ -135,7 +143,7 @@ test("re-run with NEW credentials replaces values in place, keeps headers", () =
   // Only the new URL/key/name should appear.
   assert.equal((updated.match(/old/g) || []).length, 0);
   assert.match(updated, /NEXT_PUBLIC_CONVEX_URL="https:\/\/new\.app\.synapsepanel\.com"/);
-  assert.match(updated, /CONVEX_DEPLOYMENT=dev:new # team: T, project: P/);
+  assert.match(updated, /^# CONVEX_DEPLOYMENT=dev:new # team: T, project: P$/m);
   assert.match(updated, /CONVEX_SELF_HOSTED_ADMIN_KEY="new\|key"/);
   // Section headers preserved (not duplicated).
   assert.equal((updated.match(/# Convex \(Synapse self-hosted/g) || []).length, 1);
@@ -164,7 +172,7 @@ test("preserves unrelated user vars (NEXT_PUBLIC_SITE_URL, WAHA_API_URL, etc)", 
   assert.match(next, /# Convex \(Synapse self-hosted/);
 });
 
-test("legacy-commented CONVEX_DEPLOYMENT (v1.7-) is replaced with new uncommented form", () => {
+test("legacy-commented CONVEX_DEPLOYMENT (v1.7-) is replaced with our commented form", () => {
   const existing = [
     "FOO=bar",
     "# CONVEX_DEPLOYMENT=dev:old-wolf-123 # disabled by synapse CLI for self-hosted Convex",
@@ -179,9 +187,13 @@ test("legacy-commented CONVEX_DEPLOYMENT (v1.7-) is replaced with new uncommente
     teamName: "T",
     projectName: "P",
   });
+  // Legacy "disabled by" trailer is gone (we rewrote the line cleanly).
   assert.doesNotMatch(next, /disabled by synapse CLI/);
   assert.doesNotMatch(next, /old-wolf-123/);
-  assert.match(next, /^CONVEX_DEPLOYMENT=dev:happy-cat-1 # team: T, project: P$/m);
+  // New form is also commented, with our team/project trailer.
+  assert.match(next, /^# CONVEX_DEPLOYMENT=dev:happy-cat-1 # team: T, project: P$/m);
+  // Regression guard: NO uncommented CONVEX_DEPLOYMENT in the output.
+  assert.doesNotMatch(next, /^CONVEX_DEPLOYMENT=/m);
   assert.match(next, /^FOO=bar$/m);
 });
 
@@ -202,7 +214,7 @@ test("legacy API (no deploymentName) leaves existing CONVEX_DEPLOYMENT lines unt
   assert.match(next, /^CONVEX_SELF_HOSTED_URL="http:\/\/new"$/m);
 });
 
-test("multiple CONVEX_DEPLOYMENT lines collapse to single authoritative line", () => {
+test("multiple CONVEX_DEPLOYMENT lines collapse to single commented line", () => {
   const existing = [
     "CONVEX_DEPLOYMENT=dev:a",
     "CONVEX_DEPLOYMENT=dev:b",
@@ -214,8 +226,11 @@ test("multiple CONVEX_DEPLOYMENT lines collapse to single authoritative line", (
     deploymentName: "winner",
     target: "dev",
   });
-  assert.equal((next.match(/^CONVEX_DEPLOYMENT=/gm) || []).length, 1);
-  assert.match(next, /^CONVEX_DEPLOYMENT=dev:winner$/m);
+  // Exactly one CONVEX_DEPLOYMENT-mentioning line, and it's commented.
+  assert.equal((next.match(/CONVEX_DEPLOYMENT=/g) || []).length, 1);
+  assert.match(next, /^# CONVEX_DEPLOYMENT=dev:winner$/m);
+  // Regression guard.
+  assert.doesNotMatch(next, /^CONVEX_DEPLOYMENT=/m);
 });
 
 test("does not duplicate managed value keys", () => {
@@ -256,6 +271,33 @@ test("missing convexUrl or adminKey throws (caller error, not a silent broken fi
   assert.throws(() => updateEnvContent("", { adminKey: "y" }), /convexUrl \+ adminKey/);
 });
 
+// v1.8.4 regression: the generated .env.local must NEVER contain both
+// an uncommented CONVEX_DEPLOYMENT AND CONVEX_SELF_HOSTED_* — Convex CLI
+// errors with "CONVEX_DEPLOYMENT must not be set when
+// CONVEX_SELF_HOSTED_URL and CONVEX_SELF_HOSTED_ADMIN_KEY are set".
+// This test would have caught the v1.8.2-v1.8.3 regression before ship.
+test("REGRESSION: .env.local never has both active CONVEX_DEPLOYMENT and CONVEX_SELF_HOSTED_* (v1.8.4)", () => {
+  const next = updateEnvContent("", {
+    convexUrl: "https://x.app.example.com",
+    adminKey: "x|abc",
+    deploymentName: "x",
+    target: "dev",
+    teamName: "T",
+    projectName: "P",
+  });
+  // Parse the file the way Convex CLI's dotenv would.
+  const parsed = parseEnvContent(next);
+  // Both self-hosted vars are present.
+  assert.ok(parsed.CONVEX_SELF_HOSTED_URL, "self-hosted URL must be set");
+  assert.ok(parsed.CONVEX_SELF_HOSTED_ADMIN_KEY, "self-hosted ADMIN_KEY must be set");
+  // CONVEX_DEPLOYMENT must NOT be set as far as dotenv is concerned.
+  assert.equal(
+    parsed.CONVEX_DEPLOYMENT,
+    undefined,
+    "CONVEX_DEPLOYMENT must be commented out — Convex CLI errors otherwise",
+  );
+});
+
 test("preserves file mode permissions on disk write (smoke via fs)", () => {
   const fs = require("node:fs");
   const path = require("node:path");
@@ -275,7 +317,7 @@ test("preserves file mode permissions on disk write (smoke via fs)", () => {
       assert.equal(mode, 0o600, `expected mode 0600, got 0${mode.toString(8)}`);
     }
     const content = fs.readFileSync(file, "utf8");
-    assert.match(content, /^CONVEX_DEPLOYMENT=dev:x # team: T, project: P$/m);
+    assert.match(content, /^# CONVEX_DEPLOYMENT=dev:x # team: T, project: P$/m);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
