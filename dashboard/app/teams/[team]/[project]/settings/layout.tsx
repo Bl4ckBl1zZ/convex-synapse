@@ -78,6 +78,7 @@ export default function ProjectSettingsLayout({
     { href: `${base}/dns-credentials`, label: "DNS Credentials", testid: "project-settings-nav-dns" },
     { href: `${base}/members`, label: "Members", testid: "project-settings-nav-members" },
     { href: `${base}/access-tokens`, label: "Access Tokens", testid: "project-settings-nav-tokens" },
+    { href: `${base}/audit`, label: "Audit", testid: "project-settings-nav-audit" },
   ];
 
   return (

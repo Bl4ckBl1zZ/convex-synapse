@@ -30,6 +30,7 @@ type ProjectsHandler struct {
 	Tokens         *AccessTokensHandler
 	DNSCredentials *DNSCredentialsHandler
 	Topology       *TopologyHandler
+	Activity       *ActivityHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -96,6 +97,13 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		// handler.
 		if h.Topology != nil {
 			r.Get("/topology", h.Topology.ServeHTTP)
+		}
+		// v1.10.0+: activity feed — project-scoped audit_events for
+		// the dashboard's ActivityFeed component. Member-visible
+		// (not admin-only) so viewers can see the pulse of their
+		// project.
+		if h.Activity != nil {
+			r.Get("/activity", h.Activity.ServeHTTP)
 		}
 		// Project-level RBAC (v1.0+, migration 000008).
 		r.Get("/list_members", h.listProjectMembers)

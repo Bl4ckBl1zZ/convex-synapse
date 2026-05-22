@@ -254,6 +254,9 @@ func NewRouter(d RouterDeps) http.Handler {
 		Projects:       projectsH,
 	}
 	projectsH.Topology = topologyH
+	// v1.10.0: activity feed handler shares the project auth path.
+	activityH := &ActivityHandler{DB: d.DB, Projects: projectsH}
+	projectsH.Activity = activityH
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {

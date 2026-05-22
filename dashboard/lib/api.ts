@@ -226,6 +226,32 @@ export type CLIVersion = {
   error?: string;
 };
 
+// v1.10.0: per-project activity feed. Same backend table as the team
+// audit_log (audit_events) but scoped to events that touch ONE project:
+// direct project actions, deployment actions for deployments in this
+// project, and domain actions for those deployments. Visible to any
+// project member (admin/member/viewer) — distinct from team audit
+// which is admin-only for compliance reasons.
+export type ActivityEvent = {
+  id: string;
+  createTime: string;
+  action: string;
+  actorId?: string;
+  actorEmail?: string;
+  actorName?: string;
+  targetType?: string;
+  targetId?: string;
+  // Backend resolves the target's display name via JOIN so the
+  // client doesn't need to fetch the target row separately.
+  targetName?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type ActivityResponse = {
+  events: ActivityEvent[];
+  nextCursor?: string;
+};
+
 // v1.9.6: deployments grouped by host, with IP-derived geo metadata.
 // Today every Synapse instance returns exactly one host; the shape is
 // forward-compatible with multi-VPS federation (v2.0+).
@@ -1150,6 +1176,17 @@ export const api = {
     topology(id: string): Promise<TopologyResponse> {
       return request<TopologyResponse>(
         `/v1/projects/${encodeURIComponent(id)}/topology`,
+      );
+    },
+    // v1.10.0+: project-scoped activity feed (audit_events filtered to
+    // this project's surface). Member-visible, paginated by cursor.
+    activity(id: string, opts: { limit?: number; cursor?: string } = {}): Promise<ActivityResponse> {
+      const qs = new URLSearchParams();
+      if (opts.limit != null) qs.set("limit", String(opts.limit));
+      if (opts.cursor) qs.set("cursor", opts.cursor);
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      return request<ActivityResponse>(
+        `/v1/projects/${encodeURIComponent(id)}/activity${suffix}`,
       );
     },
     // Project-scoped DNS credentials (v1.6.4+). Mirror of

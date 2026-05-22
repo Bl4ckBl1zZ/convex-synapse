@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BackendVersionPill } from "@/components/BackendVersionPill";
 import { TopologyPanel } from "@/components/TopologyPanel";
+import { ActivityFeed } from "@/components/ActivityFeed";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
 import { DeployKeysPanel } from "@/components/DeployKeysPanel";
@@ -184,7 +185,14 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
       // refetch by signalling the global cache — the panel re-renders
       // with the new deployment instantly instead of waiting for its
       // next poll tick.
-      await Promise.all([mutate(), globalMutate(["/topology", projectId])]);
+      // v1.10.0: invalidate topology + activity feed alongside the
+// deployments-list mutate so all three panels reflect the new
+// state in the same paint frame.
+await Promise.all([
+  mutate(),
+  globalMutate(["/topology", projectId]),
+  globalMutate(["/activity", projectId]),
+]);
     } catch (err) {
       setFormError(
         err instanceof ApiError ? err.message : "Could not create deployment"
@@ -210,7 +218,14 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
       setAdoptAdminKey("");
       setAdoptName("");
       setAdoptType("prod");
-      await Promise.all([mutate(), globalMutate(["/topology", projectId])]);
+      // v1.10.0: invalidate topology + activity feed alongside the
+// deployments-list mutate so all three panels reflect the new
+// state in the same paint frame.
+await Promise.all([
+  mutate(),
+  globalMutate(["/topology", projectId]),
+  globalMutate(["/activity", projectId]),
+]);
     } catch (err) {
       setAdoptError(
         err instanceof ApiError ? err.message : "Could not adopt deployment"
@@ -273,7 +288,14 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
     setDeletingName(name);
     try {
       await api.deployments.delete(name);
-      await Promise.all([mutate(), globalMutate(["/topology", projectId])]);
+      // v1.10.0: invalidate topology + activity feed alongside the
+// deployments-list mutate so all three panels reflect the new
+// state in the same paint frame.
+await Promise.all([
+  mutate(),
+  globalMutate(["/topology", projectId]),
+  globalMutate(["/activity", projectId]),
+]);
     } catch (err) {
       setActionError(
         err instanceof ApiError ? err.message : "Could not delete deployment"
@@ -588,6 +610,14 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
         used to scroll forever with stacked settings panels.
       */}
       <TopologyPanel projectId={projectId} />
+
+      {/*
+        v1.10.0: project-scoped activity feed. Renders below Topology
+        with a timeline view of recent audit_events touching this
+        project. Hides itself when there are no events (avoids
+        flashing an empty section on fresh projects).
+      */}
+      <ActivityFeed projectId={projectId} />
 
       <Dialog open={open} onClose={() => setOpen(false)} title="Create deployment">
         <form onSubmit={create} className="space-y-4">
