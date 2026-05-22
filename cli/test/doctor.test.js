@@ -135,6 +135,181 @@ test("generateReport: schemaVersion + totals + exitCode all populated on a minim
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+// ---- v1.8.1 Bug 3: --fix --yes remediates stale project.json -----
+
+const { writeProjectConfig, readProjectConfig } = require("../lib/project");
+
+function seedStaleProject(tmp, { teamSlug = "team-a", projectId = "OLD", projectSlug = "demo" } = {}) {
+  writeProjectConfig(tmp, {
+    synapseUrl: "https://x",
+    team: { slug: teamSlug, name: "Team A", id: "team-a-id" },
+    project: { id: projectId, slug: projectSlug, name: "Demo" },
+    deployments: {},
+  });
+}
+
+function stubApi({ teamsList, projectsByTeam }) {
+  return {
+    async teams() {
+      return teamsList;
+    },
+    async projects(teamRef) {
+      return projectsByTeam[teamRef] || [];
+    },
+    async me() {
+      return { email: "ian@example.com" };
+    },
+  };
+}
+
+// Backend-reachable + a deployment check both use globalThis.fetch
+// directly (not through ctx.api). Stub the global so we don't time out
+// trying to reach the made-up baseUrl. Restore in afterEach.
+function installFetchStub() {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = typeof url === "string" ? url : url.toString();
+    if (u.includes("/v1/install_status")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ version: "1.8.1", firstRun: false }),
+      };
+    }
+    if (u.endsWith("/version")) {
+      return { ok: true, status: 200, text: async () => "1.8.1" };
+    }
+    return { ok: false, status: 404, json: async () => ({ code: "unknown" }) };
+  };
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
+test("Bug 3 — heuristic B: --fix --yes re-links when slug is unambiguously in one other team", async () => {
+  const tmp = mkTmp();
+  const restore = installFetchStub();
+  seedStaleProject(tmp, { teamSlug: "a", projectId: "OLD", projectSlug: "demo" });
+  const teamsList = [
+    { id: "a-id", slug: "a", name: "Team A" },
+    { id: "b-id", slug: "b", name: "Team B" },
+  ];
+  const projectsByTeam = {
+    a: [], // project was transferred away from A
+    b: [{ id: "NEW", slug: "demo", name: "Demo" }],
+  };
+  const ctx = {
+    cwd: tmp,
+    env: {},
+    cfg: { baseUrl: "https://x", accessToken: "t" },
+    api: stubApi({ teamsList, projectsByTeam }),
+    projectConfig: readProjectConfig(tmp),
+    cfgPath: path.join(tmp, "config.json"),
+    homedir: os.homedir(),
+  };
+  const report = await generateReport(ctx, { fix: true, allowPrompt: true });
+  restore();
+  const written = readProjectConfig(tmp);
+  assert.equal(written.team.slug, "b");
+  assert.equal(written.project.id, "NEW");
+  const r = report.results.find((x) => x.id === "project-still-exists");
+  assert.ok(r.fixedBy, "fixedBy populated");
+  assert.match(r.fixedBy, /re-linked/);
+  assert.ok(report.totals.fixed >= 1);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("Bug 3 — fallback C: ambiguous match → marks project.json stale, preserves previous", async () => {
+  const tmp = mkTmp();
+  const restore = installFetchStub();
+  seedStaleProject(tmp, { teamSlug: "a", projectId: "OLD", projectSlug: "demo" });
+  // Two teams own a `demo` project; can't disambiguate → must fall back.
+  const teamsList = [
+    { id: "a-id", slug: "a", name: "Team A" },
+    { id: "b-id", slug: "b", name: "Team B" },
+    { id: "c-id", slug: "c", name: "Team C" },
+  ];
+  const projectsByTeam = {
+    a: [],
+    b: [{ id: "NEW1", slug: "demo", name: "Demo" }],
+    c: [{ id: "NEW2", slug: "demo", name: "Demo" }],
+  };
+  const ctx = {
+    cwd: tmp,
+    env: {},
+    cfg: { baseUrl: "https://x", accessToken: "t" },
+    api: stubApi({ teamsList, projectsByTeam }),
+    projectConfig: readProjectConfig(tmp),
+    cfgPath: path.join(tmp, "config.json"),
+    homedir: os.homedir(),
+  };
+  const report = await generateReport(ctx, { fix: true, allowPrompt: true });
+  restore();
+  const written = readProjectConfig(tmp);
+  assert.equal(written.staleReason, "project-not-found");
+  assert.ok(written.staleAt);
+  assert.equal(written.previous.project.id, "OLD");
+  assert.equal(written.project, undefined, "project block stripped");
+  const r = report.results.find((x) => x.id === "project-still-exists");
+  assert.match(r.fixedBy, /marked stale/);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("Bug 3 — --fix without --yes is a no-op (prompt class respects allowPrompt)", async () => {
+  const tmp = mkTmp();
+  const restore = installFetchStub();
+  seedStaleProject(tmp, { teamSlug: "a", projectId: "OLD", projectSlug: "demo" });
+  const teamsList = [{ id: "a-id", slug: "a", name: "Team A" }];
+  const projectsByTeam = { a: [] };
+  const ctx = {
+    cwd: tmp,
+    env: {},
+    cfg: { baseUrl: "https://x", accessToken: "t" },
+    api: stubApi({ teamsList, projectsByTeam }),
+    projectConfig: readProjectConfig(tmp),
+    cfgPath: path.join(tmp, "config.json"),
+    homedir: os.homedir(),
+  };
+  const report = await generateReport(ctx, { fix: true, allowPrompt: false });
+  restore();
+  const written = readProjectConfig(tmp);
+  // File should be untouched.
+  assert.equal(written.project.id, "OLD");
+  assert.equal(written.staleReason, undefined);
+  const r = report.results.find((x) => x.id === "project-still-exists");
+  assert.equal(r.fixedBy, undefined);
+  assert.equal(r.status, "issue");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("Bug 3 — stale marker is recognized by checkInProjectDir on subsequent runs", async () => {
+  const tmp = mkTmp();
+  // Write a marker directly (simulating "post-fix state").
+  writeProjectConfig(tmp, {
+    synapseUrl: "https://x",
+    staleReason: "project-not-found",
+    staleAt: "2026-05-22T12:00:00.000Z",
+    previous: { team: { slug: "a" }, project: { id: "OLD", slug: "demo" } },
+  });
+  const ctx = {
+    cwd: tmp,
+    env: {},
+    cfg: null,
+    api: null,
+    projectConfig: readProjectConfig(tmp),
+    cfgPath: path.join(tmp, "config.json"),
+    homedir: os.homedir(),
+  };
+  const report = await generateReport(ctx);
+  const r = report.results.find((x) => x.id === "in-project-dir");
+  assert.equal(r.status, "warn");
+  assert.match(r.summary, /staleReason: project-not-found/);
+  // project-still-exists should skip (no project.id).
+  const pse = report.results.find((x) => x.id === "project-still-exists");
+  assert.equal(pse.status, "skipped");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test("generateReport --fix: gitignore auto-fix appends missing entries", async () => {
   const tmp = mkTmp();
   // Pre-create an empty gitignore so the check fires its WARN path.

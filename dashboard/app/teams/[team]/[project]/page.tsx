@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BackendVersionPill } from "@/components/BackendVersionPill";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
@@ -117,7 +118,12 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
   const { team: teamRef, project: projectId } = use(params);
   const router = useRouter();
 
-  const { data: project, mutate: mutateProject } = useSWR<Project>(
+  const {
+    data: project,
+    error: projectError,
+    isLoading: projectLoading,
+    mutate: mutateProject,
+  } = useSWR<Project>(
     ["/project", projectId],
     () => api.projects.get(projectId),
   );
@@ -375,6 +381,58 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
       setDeletingName(null);
     }
   };
+
+  // Top-of-component gate: when the project itself can't be loaded
+  // because it doesn't exist (404) or the operator lost access (403),
+  // render a single EmptyState INSTEAD of the full chrome + panels.
+  // Without this every child panel would fire its own fetch and cascade
+  // 5+ "Failed to load X: Project not found" red banners — see
+  // docs/V1_8_1_STALE_LINK_FIXES.md Bug 2. Loading state needs to
+  // differentiate "first paint" from "have stale data, revalidating",
+  // hence the `&& !project` guard on isLoading.
+  if (projectLoading && !project) {
+    return (
+      <div className="space-y-6">
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-64" />
+          <Skeleton className="h-6 w-80" />
+        </div>
+        {[0, 1, 2].map((i) => (
+          <Card key={i}>
+            <CardBody className="flex items-center justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="mt-2 h-3 w-2/3" />
+              </div>
+            </CardBody>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+  if (
+    projectError instanceof ApiError &&
+    (projectError.status === 404 || projectError.status === 403)
+  ) {
+    // Single copy for 404 + 403. Backend returns 403 to non-members or
+    // 404 for info-hiding; either way the operator's next step is the
+    // same: go back to projects.
+    return (
+      <EmptyState
+        title="Project unavailable"
+        description="This project doesn't exist or you don't have access."
+        testId="project-unavailable"
+        action={
+          <Link
+            href={`/teams/${encodeURIComponent(teamRef)}`}
+            className="text-sm text-cyan-400 hover:text-cyan-300"
+          >
+            ← Back to projects
+          </Link>
+        }
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

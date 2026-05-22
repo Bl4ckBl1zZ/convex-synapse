@@ -11,6 +11,7 @@ const path = require("node:path");
 const os = require("node:os");
 const { SynapseAPI, SynapseAPIError } = require("../api");
 const { readProjectEnv } = require("../env-file");
+const { writeProjectConfig } = require("../project");
 
 const REQUIRED_NODE = "18.17.0";
 
@@ -110,16 +111,40 @@ const checkInProjectDir = {
   dependsOn: [],
   run: safeRun(async (ctx) => {
     const exists = ctx.projectConfig !== null && ctx.projectConfig !== undefined;
+    if (!exists) {
+      return {
+        status: "warn",
+        summary: "no project metadata in this directory",
+        remediation: "Run `synapse select` to link this directory.",
+        data: { cwd: ctx.cwd, linked: false, project: null },
+      };
+    }
+    // v1.8.1: `doctor --fix --yes` may have written a stale marker into
+    // project.json. Detect it explicitly so the next doctor run says
+    // "linked-but-stale" instead of confidently claiming a healthy link.
+    if (ctx.projectConfig.staleReason === "project-not-found") {
+      const date = ctx.projectConfig.staleAt
+        ? ctx.projectConfig.staleAt.slice(0, 10)
+        : "previously";
+      return {
+        status: "warn",
+        summary: `directory was unlinked by doctor — staleReason: project-not-found (${date})`,
+        remediation: "Run `synapse select` to re-link.",
+        data: {
+          cwd: ctx.cwd,
+          linked: false,
+          stale: true,
+          previous: ctx.projectConfig.previous ?? null,
+        },
+      };
+    }
     return {
-      status: exists ? "ok" : "warn",
-      summary: exists
-        ? `linked to ${ctx.projectConfig.project?.name || "?"}`
-        : "no project metadata in this directory",
-      remediation: exists ? null : "Run `synapse select` to link this directory.",
+      status: "ok",
+      summary: `linked to ${ctx.projectConfig.project?.name || "?"}`,
       data: {
         cwd: ctx.cwd,
-        linked: exists,
-        project: exists ? ctx.projectConfig.project?.id : null,
+        linked: true,
+        project: ctx.projectConfig.project?.id,
       },
     };
   }),
@@ -323,11 +348,20 @@ const checkProjectStillExists = {
   id: "project-still-exists",
   category: "backend",
   title: "linked project exists on backend",
-  autoFix: "never",
+  // v1.8.1: was "never" — promoted to "prompt" so `doctor --fix --yes`
+  // can auto-remediate stale .synapse/project.json. See Bug 3 in
+  // docs/V1_8_1_STALE_LINK_FIXES.md for the design (B-then-C hybrid).
+  autoFix: "prompt",
   dependsOn: ["auth-token-valid", "in-project-dir"],
   run: safeRun(async (ctx) => {
     if (!ctx.projectConfig || !ctx.api) {
       return { status: "skipped", summary: "no linked project or no session", data: {} };
+    }
+    // The marker case (stale link written by a prior --fix) has no
+    // project.id to look up — checkInProjectDir already warned about
+    // it. Skip the network call.
+    if (!ctx.projectConfig.project?.id) {
+      return { status: "skipped", summary: "no project id (stale marker?)", data: {} };
     }
     const teamRef = ctx.projectConfig.team?.slug || ctx.projectConfig.team?.id;
     if (!teamRef) {
@@ -346,8 +380,13 @@ const checkProjectStillExists = {
       return {
         status: "issue",
         summary: "project not found in team — deleted or transferred?",
-        remediation: "Run `synapse select` to re-link.",
-        data: { teamRef, projectId: ctx.projectConfig.project?.id },
+        remediation: "Run `synapse select` to re-link, or `synapse doctor --fix --yes`.",
+        data: {
+          teamRef,
+          projectId: ctx.projectConfig.project?.id,
+          teamSlug: ctx.projectConfig.team?.slug,
+          projectSlug: ctx.projectConfig.project?.slug,
+        },
       };
     } catch (err) {
       return {
@@ -358,6 +397,102 @@ const checkProjectStillExists = {
       };
     }
   }),
+  // Two-phase fix (Bug 3 design):
+  //   B) If exactly one other team owns a project with the same slug,
+  //      auto-relink (project was transferred). Deployments are reset
+  //      because the old refs are stale — operator runs `synapse
+  //      select` once if they want specific dev/prod refs.
+  //   C) Otherwise (no match, ambiguous match, or any API error):
+  //      mark project.json as stale and keep the operator's previous
+  //      block for forensics. Append an idempotent comment marker to
+  //      .env.local so the bogus admin key isn't silently trusted.
+  // Both paths are reachable only under `--fix --yes` (autoFix=prompt
+  // + allowPrompt=true at runner.js applyAutoFixes).
+  fix: async (ctx) => {
+    if (!ctx.projectConfig || !ctx.api) {
+      return { kind: "failed", message: "no project config or no API session" };
+    }
+    const savedProjectId = ctx.projectConfig.project?.id;
+    const savedProjectSlug = ctx.projectConfig.project?.slug;
+    const previous = {
+      team: ctx.projectConfig.team,
+      project: ctx.projectConfig.project,
+    };
+    // Fresh listing — never trust the upstream check's stale data.
+    let teams;
+    try {
+      teams = await ctx.api.teams();
+    } catch (err) {
+      return { kind: "failed", message: `could not list teams: ${err.message}` };
+    }
+    const candidates = [];
+    if (savedProjectSlug) {
+      for (const team of teams) {
+        let projects;
+        try {
+          projects = await ctx.api.projects(team.slug || team.id);
+        } catch {
+          continue; // one team's lookup failed; try the rest
+        }
+        for (const p of projects) {
+          if (p.slug === savedProjectSlug && p.id !== savedProjectId) {
+            candidates.push({ team, project: p });
+          }
+        }
+      }
+    }
+    if (candidates.length === 1) {
+      // Heuristic B: unambiguous re-link (most likely a transfer).
+      const { team, project } = candidates[0];
+      const newConfig = {
+        synapseUrl: ctx.projectConfig.synapseUrl,
+        team,
+        project,
+        deployments: {},
+      };
+      writeProjectConfig(ctx.cwd, newConfig);
+      // Sync in-memory ctx so the runner's recheck sees the new state.
+      // Without this, `Object.assign(r, fresh, {fixedBy})` overwrites
+      // with another "issue" because run() still reads the old project.id.
+      ctx.projectConfig = newConfig;
+      return {
+        kind: "applied",
+        message: `re-linked to ${team.slug || team.name}/${project.slug || project.name} (project was transferred)`,
+      };
+    }
+    // Fallback C: write a stale marker. Keep synapseUrl + the previous
+    // block so the operator can audit what was there.
+    const staleAt = new Date().toISOString();
+    const staleConfig = {
+      synapseUrl: ctx.projectConfig.synapseUrl,
+      staleReason: "project-not-found",
+      staleAt,
+      previous,
+    };
+    writeProjectConfig(ctx.cwd, staleConfig);
+    ctx.projectConfig = staleConfig;
+    // Idempotent comment marker on .env.local. The admin key inside is
+    // still bogus, but deletion would lose info the operator may want
+    // to grep, so just annotate. Marker string is stable so re-running
+    // fix doesn't keep appending.
+    try {
+      const envPath = path.join(ctx.cwd, ".env.local");
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, "utf8");
+        const marker = "# stale — admin key invalid";
+        if (!content.includes(marker)) {
+          const banner = `${marker} since ${staleAt.slice(0, 10)}, run \`synapse select\`\n`;
+          fs.writeFileSync(envPath, banner + content);
+        }
+      }
+    } catch {
+      // Best-effort; project.json marker is the source of truth.
+    }
+    return {
+      kind: "applied",
+      message: "marked stale — run `synapse select` to re-link",
+    };
+  },
 };
 
 // -------- deployments ----------------------------------------------

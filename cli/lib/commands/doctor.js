@@ -39,7 +39,11 @@ module.exports = {
 Flags:
   --fix       apply safe fixes automatically (chmod, gitignore appends, etc).
               Checks marked 'prompt' require --yes too.
-  --yes       upgrade 'prompt' fixes to auto.
+  --yes       upgrade 'prompt' fixes to auto. Combined with --fix, also
+              cleans up a stale .synapse/project.json — re-links if the
+              project was transferred to another of your teams,
+              otherwise marks the entry stale so \`synapse select\` can
+              start fresh.
   --verbose   show detailed data per check.
   --json      stable schema (current: v${SCHEMA_VERSION}); CI-friendly.
 

@@ -117,6 +117,13 @@ class SynapseAPI {
     return this.listAll(`/v1/teams/${encodeURIComponent(teamRef)}/list_projects`);
   }
 
+  // Single-project lookup by ID. Cheaper than listing a team's projects
+  // (no pagination) and FK cascade team→projects means this also detects
+  // a deleted team — backend returns 404 in both cases.
+  getProject(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/`);
+  }
+
   deployments(projectId) {
     return this.listAll(`/v1/projects/${encodeURIComponent(projectId)}/list_deployments`);
   }

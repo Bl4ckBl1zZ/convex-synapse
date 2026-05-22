@@ -9,10 +9,15 @@
 //   deployment <n>   /embed/<name> — the dashboard with Convex Dashboard iframe
 //   url              just the synapse base URL (for "open the dashboard root")
 //
-// No backend call; everything is built client-side from the saved cfg
-// + projectConfig.
+// For `dashboard` (the default), we do a single cheap GET probe against
+// the linked project before spawning the browser, so an operator with a
+// stale .synapse/project.json gets a warning on stderr instead of
+// landing on a page that cascades "Failed to load X" errors. We never
+// BLOCK the launch — operator may want to see the broken state.
+// `docs` / `deployment <name>` / `url` skip the probe.
 
 const { spawn } = require("node:child_process");
+const { SynapseAPIError } = require("../api");
 
 function buildUrl(target, restArgs, { cfg, projectConfig }) {
   const base = cfg?.baseUrl ?? "";
@@ -50,6 +55,29 @@ function launcher(platform = process.platform) {
   return { cmd: "xdg-open", shell: false };
 }
 
+// Cheap pre-flight probe: confirm the linked project still exists before
+// launching the browser. Returns one of:
+//   "ok"          — project resolved on the backend
+//   "not_found"   — backend returned 404 (project deleted or transferred)
+//   "unverified"  — couldn't reach backend / non-404 error / no session /
+//                   no linked project
+// Only `dashboard` target calls this — `docs` is external, `deployment
+// <name>` and `url` are operator-supplied + assumed intentional.
+async function checkProjectStatus(ctx, projectConfig) {
+  if (!projectConfig?.project?.id) return "unverified";
+  if (!ctx?.cfgOrNull?.accessToken) return "unverified";
+  if (!ctx.api) return "unverified";
+  try {
+    await ctx.api.getProject(projectConfig.project.id);
+    return "ok";
+  } catch (err) {
+    if (err instanceof SynapseAPIError && err.status === 404) {
+      return "not_found";
+    }
+    return "unverified";
+  }
+}
+
 module.exports = {
   name: "open",
   summary: "Open a Synapse-related URL in your default browser.",
@@ -65,6 +93,7 @@ Targets:
   // Exports for tests.
   buildUrl,
   launcher,
+  checkProjectStatus,
 
   async run(args, ctx) {
     const target = args[0];
@@ -73,9 +102,27 @@ Targets:
       projectConfig: ctx.projectConfig,
     });
 
+    // Pre-flight only for dashboard (default + explicit). Other targets
+    // either point externally or are intentionally URL-direct.
+    const shouldProbe = target === undefined || target === "dashboard";
+    let projectStatus = "unverified";
+    if (shouldProbe && ctx.projectConfig?.project?.id) {
+      projectStatus = await checkProjectStatus(ctx, ctx.projectConfig);
+    }
+
     if (ctx.out.json) {
-      ctx.out.result({ url, target: target ?? "dashboard" }, () => {});
+      ctx.out.result({ url, target: target ?? "dashboard", projectStatus }, () => {});
       return;
+    }
+
+    if (projectStatus === "not_found") {
+      const projName = ctx.projectConfig?.project?.name || ctx.projectConfig?.project?.id;
+      const base = ctx.cfgOrNull?.baseUrl ?? "";
+      ctx.out.warn(
+        `Linked project ${projName} was not found on ${base}. It may have been deleted. Run \`synapse select\` to relink.`,
+      );
+    } else if (shouldProbe && projectStatus === "unverified" && ctx.projectConfig?.project?.id && ctx.cfgOrNull?.accessToken) {
+      ctx.out.info("Could not verify project state (offline?), opening anyway.");
     }
 
     const { cmd, shell } = launcher();

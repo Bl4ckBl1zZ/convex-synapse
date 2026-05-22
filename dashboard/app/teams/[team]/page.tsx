@@ -11,6 +11,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ApiError, api, type Deployment, type Project, type Team } from "@/lib/api";
 import { InvitesPanel } from "@/components/InvitesPanel";
 
@@ -25,9 +26,37 @@ export default function TeamHomePage({ params }: { params: Promise<Params> }) {
 
   const [tab, setTab] = useState<"projects" | "deployments">("projects");
 
-  const { data: team } = useSWR<Team>(["/team", teamRef], () =>
-    api.teams.get(teamRef),
-  );
+  const {
+    data: team,
+    error: teamError,
+    isLoading: teamLoading,
+  } = useSWR<Team>(["/team", teamRef], () => api.teams.get(teamRef));
+
+  // Same gate pattern as the project page (Bug 2 fix): a dead/forbidden
+  // team should not render the chrome and trigger cascading "Failed to
+  // load X" banners in ProjectsView + DeploymentsView + InvitesPanel.
+  if (teamLoading && !team) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-6 w-64" />
+        <Skeleton className="h-4 w-80" />
+      </div>
+    );
+  }
+  if (teamError instanceof ApiError && (teamError.status === 404 || teamError.status === 403)) {
+    return (
+      <EmptyState
+        title="Team unavailable"
+        description="This team doesn't exist or you don't have access."
+        testId="team-unavailable"
+        action={
+          <Link href="/teams" className="text-sm text-cyan-400 hover:text-cyan-300">
+            ← Back to teams
+          </Link>
+        }
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

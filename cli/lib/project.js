@@ -50,12 +50,20 @@ function sanitizeProjectConfig(input) {
   if (input.deployments?.prod) {
     deployments.prod = deploymentRef(input.deployments.prod);
   }
+  // v1.8.1: `doctor --fix --yes` can mark a project.json stale when the
+  // linked project was deleted/transferred (see Bug 3). The marker
+  // fields (staleReason / staleAt / previous) need to round-trip
+  // through writeProjectConfig — without these allowlist entries
+  // sanitizeProjectConfig would strip them on every write.
   return compactObject({
     version: 1,
     synapseUrl: input.synapseUrl,
     team: entityRef(input.team),
     project: entityRef(input.project),
     deployments,
+    staleReason: input.staleReason,
+    staleAt: input.staleAt,
+    previous: input.previous,
   });
 }
 

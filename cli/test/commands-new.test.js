@@ -172,3 +172,84 @@ test("open: launcher picks correct binary per platform", () => {
   assert.equal(openCmd.launcher("win32").cmd, "start");
   assert.equal(openCmd.launcher("freebsd").cmd, "xdg-open");
 });
+
+// ---- open: checkProjectStatus (v1.8.1 stale-link pre-check) --------
+
+const { SynapseAPIError } = require("../lib/api");
+
+function ctxFor({ projectId = "abc-123", token = "fake-jwt", apiImpl } = {}) {
+  return {
+    cfgOrNull: token ? { baseUrl: "https://x", accessToken: token } : null,
+    projectConfig: projectId ? { project: { id: projectId, name: "Demo" }, team: { slug: "t" } } : null,
+    api: apiImpl ?? null,
+  };
+}
+
+test("checkProjectStatus: returns 'ok' when getProject resolves", async () => {
+  const ctx = ctxFor({ apiImpl: { getProject: async () => ({ id: "abc-123" }) } });
+  assert.equal(await openCmd.checkProjectStatus(ctx, ctx.projectConfig), "ok");
+});
+
+test("checkProjectStatus: returns 'not_found' on SynapseAPIError 404", async () => {
+  const ctx = ctxFor({
+    apiImpl: {
+      getProject: async () => {
+        throw new SynapseAPIError(404, "project_not_found", "Project not found");
+      },
+    },
+  });
+  assert.equal(await openCmd.checkProjectStatus(ctx, ctx.projectConfig), "not_found");
+});
+
+test("checkProjectStatus: returns 'unverified' on network error", async () => {
+  const ctx = ctxFor({
+    apiImpl: {
+      getProject: async () => {
+        throw new SynapseAPIError(0, "network_error", "Could not reach Synapse");
+      },
+    },
+  });
+  assert.equal(await openCmd.checkProjectStatus(ctx, ctx.projectConfig), "unverified");
+});
+
+test("checkProjectStatus: returns 'unverified' on 5xx", async () => {
+  const ctx = ctxFor({
+    apiImpl: {
+      getProject: async () => {
+        throw new SynapseAPIError(503, "service_unavailable", "down");
+      },
+    },
+  });
+  assert.equal(await openCmd.checkProjectStatus(ctx, ctx.projectConfig), "unverified");
+});
+
+test("checkProjectStatus: returns 'unverified' when not logged in", async () => {
+  const ctx = ctxFor({ token: null, apiImpl: { getProject: async () => { throw new Error("nope"); } } });
+  assert.equal(await openCmd.checkProjectStatus(ctx, ctx.projectConfig), "unverified");
+});
+
+test("checkProjectStatus: returns 'unverified' when no projectConfig.project.id", async () => {
+  const ctx = ctxFor({ projectId: null });
+  assert.equal(await openCmd.checkProjectStatus(ctx, null), "unverified");
+});
+
+test("open --json includes projectStatus key (stable schema)", async () => {
+  const { cap, out } = mockOut(true);
+  const ctx = {
+    out,
+    cfgOrNull: { baseUrl: "https://x", accessToken: "t" },
+    projectConfig: { project: { id: "abc-123", name: "Demo" }, team: { slug: "t" } },
+    api: {
+      getProject: async () => {
+        throw new SynapseAPIError(404, "project_not_found", "x");
+      },
+    },
+  };
+  await openCmd.run([], ctx);
+  const parsed = JSON.parse(cap.text().stdout);
+  assert.equal(parsed.projectStatus, "not_found");
+  assert.equal(parsed.target, "dashboard");
+  assert.ok(parsed.url);
+  // JSON mode must stay parse-clean — no warning leaks to stderr.
+  assert.equal(cap.text().stderr, "");
+});
