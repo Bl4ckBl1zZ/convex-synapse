@@ -140,6 +140,12 @@ test("delete project from its detail page", async ({ page }) => {
   await page.getByTestId("project-delete-confirm").click();
 
   // Bounced back to the team page; the project no longer appears.
-  await expect(page).toHaveURL(/\/teams\/amage\b/);
+  // The old loose regex `/\/teams\/amage\b/` also matched the settings
+  // URL we were just on (`/teams/amage/<uuid>/settings/general`), so the
+  // toBeHidden after it would race the SPA navigation and find the
+  // breadcrumb's "Trash Me" link still rendered. Wait for the URL to
+  // settle on the team page proper before asserting.
+  await page.waitForURL(/\/teams\/amage(?:[?#]|$)/, { timeout: 10_000 });
+  await expect(page).toHaveURL(/\/teams\/amage(?:[?#]|$)/);
   await expect(page.getByRole("link", { name: /trash me/i })).toBeHidden();
 });
