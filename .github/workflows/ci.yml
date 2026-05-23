@@ -30,7 +30,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.22"
+          # Pull the exact version from go.mod's `go 1.26.x` directive
+          # so a `go mod tidy` bump doesn't leave CI behind. setup-go@v6
+          # defaults to GOTOOLCHAIN=local, so the version we install
+          # here is the version `go build` will actually use.
+          go-version-file: synapse/go.mod
           cache-dependency-path: synapse/go.sum
       - run: go build ./...
       - run: go vet ./...
