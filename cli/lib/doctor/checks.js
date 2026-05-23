@@ -238,6 +238,66 @@ const checkEnvLocalHasPublicVars = {
   }),
 };
 
+// v1.9.0: nudges the operator to set up AI agent skills once a project
+// is linked. Soft warn — most folks aren't using Claude Code yet and
+// we don't want to be noisy. The .claude/ or AGENTS.md marker hint
+// keeps the check silent for projects that aren't using any AI harness.
+const checkAISkillsInstalled = {
+  id: "ai-skills-installed",
+  category: "project",
+  title: "AI agent skills (.synapse/skills/) installed",
+  autoFix: "prompt",
+  dependsOn: ["in-project-dir"],
+  run: safeRun(async (ctx) => {
+    if (!ctx.projectConfig) {
+      return { status: "skipped", summary: "no linked project", data: {} };
+    }
+    const skillsRoot = path.join(ctx.cwd, ".synapse", "skills");
+    const installed = fs.existsSync(skillsRoot);
+    // Silent skip when no AI harness present in cwd — no point nagging
+    // operators who don't use Claude Code or the Agent SDK.
+    const hasClaudeMarker =
+      fs.existsSync(path.join(ctx.cwd, ".claude")) ||
+      fs.existsSync(path.join(ctx.cwd, "CLAUDE.md"));
+    const hasAgentsMarker =
+      fs.existsSync(path.join(ctx.cwd, ".agents")) ||
+      fs.existsSync(path.join(ctx.cwd, "AGENTS.md"));
+    const hasHarness = hasClaudeMarker || hasAgentsMarker;
+    if (!installed && !hasHarness) {
+      return {
+        status: "skipped",
+        summary: "no AI harness detected (.claude/, .agents/, etc)",
+        data: { silentlySkip: true, installed, hasHarness },
+      };
+    }
+    if (installed) {
+      return {
+        status: "ok",
+        summary: ".synapse/skills/ present — bundled skills available to your AI agent",
+        data: { installed: true, root: skillsRoot },
+      };
+    }
+    return {
+      status: "warn",
+      summary: "AI harness detected but no skills installed",
+      remediation: "Run `synapse skills install` to drop bundled Synapse skills into .synapse/skills/ + symlink to .claude/skills/.",
+      data: { installed: false, hasHarness: true },
+    };
+  }),
+  fix: async (ctx) => {
+    try {
+      const { installSkills } = require("../skills/installer");
+      const r = installSkills(ctx.cwd);
+      if (r.ok === false || (r.errors && r.errors.length > 0)) {
+        return { kind: "failed", message: (r.errors && r.errors[0] && r.errors[0].error) || "install errored" };
+      }
+      return { kind: "applied", message: `installed ${r.written.length} skill${r.written.length === 1 ? "" : "s"}` };
+    } catch (err) {
+      return { kind: "failed", message: err.message };
+    }
+  },
+};
+
 const checkGitignoreProtectsEnv = {
   id: "gitignore-protects-env",
   category: "project",
@@ -881,6 +941,7 @@ const ALL_CHECKS = [
   checkEnvLocalHasVars,
   checkEnvLocalHasPublicVars,
   checkProjectStillExists,
+  checkAISkillsInstalled,
 
   // Tier C (per deployment)
   makeDeploymentCheck("dev"),

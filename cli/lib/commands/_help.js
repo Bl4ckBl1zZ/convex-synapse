@@ -21,6 +21,7 @@ function renderRootHelp(registry, { stdout = process.stdout } = {}) {
     ["Env vars", "env"],
     ["Domains", "domain"],
     ["Local HTTPS dev", "https"],
+    ["AI agent skills", "skills"],
     ["Escape hatch", ["convex"]],
   ];
 
