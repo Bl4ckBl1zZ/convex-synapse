@@ -15,14 +15,15 @@ autoTrigger:
 # Synapse CLI command catalogue
 
 All commands respect `--json` for machine-parseable output (printed to
-stdout, with human messages routed to stderr so JSON pipes stay clean).
-All commands accept `--help` for the verbose version.
+stdout; human messages routed to stderr so JSON pipes stay clean) and
+`--help` for the verbose version. `--project=<id>` is accepted on
+resource commands when you don't want to use the linked project.
 
 ## Session
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
-| `synapse login <url>` | Authenticate against a Synapse instance, save session in `~/.synapse/config.json` (mode 0600). Refresh token TTL 30d. | Prompts for email + password. Non-TTY: piped `email\npassword` works. |
+| `synapse login <url>` | Authenticate against a Synapse instance, save session in `~/.synapse/config.json` (mode 0600). | Prompts for email + password. Non-TTY: piped `email\npassword` works. |
 | `synapse logout` | Clear the saved session. | none |
 | `synapse whoami` | Print the saved email + URL. | none |
 
@@ -30,7 +31,7 @@ All commands accept `--help` for the verbose version.
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
-| `synapse select` | Interactive picker: team → project → dev → prod. Writes `.synapse/project.json` + `.env.local`. Auto-selects when only one option exists at a level. | none |
+| `synapse select` | Interactive picker: team → project → DEV → PROD. Writes `.synapse/project.json` + `.env.local`. Auto-selects when only one option exists at a level. `b` to step back, `DEBUG_SYNAPSE=1` to dump menu state. | none |
 | `synapse credentials <name>` | Print `CONVEX_SELF_HOSTED_URL` + `CONVEX_SELF_HOSTED_ADMIN_KEY` for a deployment. | `--format=env\|shell\|json` (default: env) |
 
 ## Day-to-day
@@ -38,59 +39,73 @@ All commands accept `--help` for the verbose version.
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `synapse dev` | `convex dev` against the linked DEV deployment. Watch + push. | `--once` for one-shot. Other flags forwarded to `convex dev`. |
-| `synapse deploy` | `convex deploy` against the linked PROD with confirmation. | `--yes` to bypass confirm (CI). |
-| `synapse convex <subcommand>` | Escape hatch: run ANY `convex` subcommand with Synapse creds injected. | passthrough |
+| `synapse deploy` | `convex deploy` against the linked PROD with a `y/N` confirmation prompt. Refuses to run in non-TTY contexts unless `--yes` is passed. | `--yes` / `-y` to bypass confirm (CI). |
+| `synapse convex <args>` | Escape hatch: run ANY `convex` subcommand with Synapse creds injected + `CONVEX_DEPLOYMENT` stripped. | `--target dev\|prod` to pick which linked deployment supplies the creds. |
 
 ## Visibility
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `synapse version` | Show CLI / backend / Node / OS versions. | `--json` |
-| `synapse status` | List deployments in the linked project — name, type, status, URL form. | `--json` |
-| `synapse doctor` | Health-check panorama: ~12 checks across local env / project / backend / deployments. Exits 0 / 1 / 2 by severity. | `--fix` (auto-safe), `--fix --yes` (also prompt-class), `--verbose`, `--json` |
-| `synapse open [target]` | Open URL in browser. Default: dashboard for linked project. | targets: `dashboard` (default) / `docs` / `deployment <name>` / `url` |
-| `synapse list <kind>` | List teams / projects / deployments. Works without `synapse select`. | kind ∈ `teams`, `projects`, `deployments`. `--project=<id>` to scope deployments. `--json`. |
+| `synapse status` | List deployments in the linked project — `NAME`, `TYPE`, `STATUS`, `FORM`, `URL`. The `FORM` column is `custom` / `wildcard` / `path` / `host` and tells you if the URL is browser-reachable. | `--project=<id>`, `--json` |
+| `synapse doctor` | Health-check panorama: ~12 checks across local env / project / backend / deployments. Exits 0 (clean) / 1 (warnings) / 2 (issues). | `--fix` (auto-safe), `--fix --yes` (also prompt-class), `--verbose`, `--json` |
+| `synapse open [target]` | Open URL in browser. Default: dashboard page for the linked project. | targets: `dashboard` (default) / `docs` / `deployment <name>` / `url`. Includes a cheap pre-flight that warns on stale `.synapse/project.json` but never blocks. |
+| `synapse list <kind>` | List teams / projects / deployments visible to your session. Works without `synapse select`. | kind ∈ `teams`, `projects`, `deployments`. `--project=<id>`, `--team=<slug>`, `--json`. |
 
 ## Deployments
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
-| `synapse deployment create` | Create a new Convex deployment under the linked project. | `--type=dev\|prod\|preview` (default: dev), `--reference=<text>`, `--ha` (HA mode) |
-| `synapse deployment delete <name>` | Delete a deployment (container + volume — irreversible). | `--yes` to skip confirm |
-| `synapse deployment rotate-key <name>` | Re-mint the deployment's admin key from the existing instance secret (cures stale credentials without rotating the secret). | none |
-| `synapse deployment status <name>` | Show one deployment's state, URL, HA shape. | `--watch` to poll until ready, `--json` |
+| `synapse deployment create` | Create a new Convex deployment under the linked project. Name is auto-generated by the backend (`<adjective>-<animal>-<digits>`). | `--type=dev\|prod\|preview\|custom` (default: dev), `--ha`, `--default`, `--project=<id>`, `--yes` |
+| `synapse deployment delete <name>` | Delete a deployment (container + volume — irreversible). Prod requires the typed-name confirmation. | `--yes` (dev only), `--confirm=<name>` (mandatory for prod in `--json` mode), `--json` |
+| `synapse deployment rotate-key <name>` | Re-mint the deployment's admin key (cures stale credentials without rotating the INSTANCE_SECRET — existing deploy keys keep working). | `--yes`, `--confirm=<name>`, `--write` (also patch local `.env.local`), `--json` |
+| `synapse deployment status <name>` | Show one deployment's state, URL, HA shape. | `--watch[=<seconds>]` (default 2s) to poll until terminal, `--json` |
 
 ## Env vars
 
-| Command | Purpose | Key flags / args |
-|---|---|---|
-| `synapse env list` | List project-default env vars (values masked). | `--json` |
-| `synapse env set KEY=v [KEY=v…]` | Set one or more. | `--types=dev,prod,preview` (default: all three) |
-| `synapse env unset KEY [KEY…]` | Delete one or more. | none |
-| `synapse env pull [path]` | Dump as `.env` to stdout or file. | none |
-| `synapse env push <path>` | Apply a `.env`-shaped file. | `--prune` to also delete vars not in file |
-
-## Skills (AI agent integration)
+All four verbs use `--for=<dev\|prod\|preview>` (comma-separated for
+set / push) to scope deployment types. There is no `--types=` flag.
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
-| `synapse skills install` | Write bundled Synapse skills to `.synapse/skills/`, symlink to detected harnesses (`.claude/skills/`, `.agents/skills/`). | none |
-| `synapse skills update` | Refresh bundled skills, preserving customizations (3-way diff). | `--force` to overwrite, `--keep-mine` to only patch new skills |
-| `synapse skills list` | Show installed skills + symlink targets + drift status. | `--json` |
-| `synapse skills remove` | Undo install: remove symlinks. | `--purge` to also delete `.synapse/skills/` |
-| `synapse skills link` | Re-create missing symlinks (idempotent). | none |
+| `synapse env list` | List project-default env vars. Default shows values; pass `--mask` to redact. Columns: `NAME`, `VALUE`, `DEPLOYMENT_TYPES`. | `--for=<type>`, `--mask`, `--project=<id>`, `--json` |
+| `synapse env set KEY=v [KEY=v…]` | Set one or many. Multiple positionals = single transactional update. Name regex: `[A-Z_][A-Z0-9_]*`. | `--for=dev,prod`, `--project=<id>`, `--json` |
+| `synapse env unset KEY [KEY…]` | Delete one or many. | `--project=<id>`, `--json` |
+| `synapse env pull` | Dump project vars as `.env` to stdout or a file (mode 0600 on write). | `--out=<path>`, `--for=<type>`, `--project=<id>`, `--json` |
+| `synapse env push` | Apply a `.env`-shaped file. Additive only — no `--prune`. Refuses `CONVEX_SELF_HOSTED_*`, `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_SITE_URL`. | `--from=<path>`, `--for=<types>`, `--project=<id>`, `--dry-run`, `--yes`, `--json` |
+
+## Local HTTPS dev (for Next.js dev domains)
+
+| Command | Purpose | Key flags / args |
+|---|---|---|
+| `synapse https setup <domain>` | Configure self-signed HTTPS for a dev domain (mkcert + hosts + package.json `dev:https` script). Idempotent. | `--force`, `--yes`, `--dry-run`, `--skip-hosts`, `--skip-script`, `--verbose`, `--json` |
+| `synapse https doctor [domain]` | Read-only diagnosis of the local HTTPS setup. | `--json` |
+| `synapse https status [domain]` | Show state for one or every configured domain. | `--json` |
+| `synapse https remove <domain>` | Undo `setup` — delete cert, restore hosts, revert script. | `--keep-certs`, `--keep-script`, `--keep-hosts`, `--yes`, `--json` |
+| `synapse https migrate` | Move legacy in-repo cert pairs into `~/.config/dev-certs/`. | `--cwd \| --root=<path>`, `--keep-old`, `--dry-run`, `--yes`, `--json` |
+
+## AI agent skills
+
+| Command | Purpose | Key flags / args |
+|---|---|---|
+| `synapse skills install` | Write bundled Synapse skills to `.synapse/skills/`, symlink to detected harnesses (`.claude/skills/`, `.agents/skills/`). | `--force`, `--force-links`, `--all-harnesses`, `--json` |
+| `synapse skills update` | Refresh bundled skills, preserving customisations (3-way diff). Customised files are surfaced + skipped. | `--force` (overwrite even customised), `--force-links`, `--json` |
+| `synapse skills list` | Show installed skills + symlink targets + drift status (`ok` / `pristine` / `customised` / `missing`). | `--json` |
+| `synapse skills remove` | Drop the symlinks under each harness; keep `.synapse/skills/` unless `--purge`. | `--purge`, `--json` |
+| `synapse skills link` | Re-create missing harness symlinks (no SKILL.md writes). | `--force`, `--all-harnesses`, `--json` |
 
 ## Escape hatch
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
-| `synapse convex <args>` | Pass-through to `npx convex <args>` with Synapse creds injected + `CONVEX_DEPLOYMENT` stripped. Use for any `convex` subcommand we don't wrap. | passthrough |
+| `synapse convex <args>` | Pass-through to `npx convex <args>` with Synapse creds injected + `CONVEX_DEPLOYMENT` stripped. Use for any `convex` subcommand we don't wrap. | `--target dev\|prod` to pick which linked deployment supplies the creds. |
 
-## Common flags (all commands)
+## Common flags (most commands)
 
 - `--json` — machine-parseable output to stdout (no decorative stderr)
 - `--help` / `-h` — command-specific help
 - `--yes` / `-y` — bypass confirmations where applicable
+- `--project=<id>` — operate on a non-linked project (resource commands)
 
 ## Exit codes
 
@@ -105,6 +120,13 @@ All commands accept `--help` for the verbose version.
 - `~/.synapse/config.json` — auth session (mode 0600)
 - `.synapse/project.json` — directory-level link to project + DEV/PROD
 - `.synapse/skills/` — bundled AI skills (this catalog ships here)
+- `.synapse/skills/.bundled` — JSON stamp with last-written sha256 per skill
 - `.env.local` — Convex credentials for the linked DEV (auto-managed)
-- `.claude/skills/synapse-*` — symlinks created by `synapse skills install`
-- `.agents/skills/synapse-*` — same, for the Agent SDK convention
+- `.claude/skills/synapse-*` — relative symlinks to `../../.synapse/skills/synapse-*` (created by `synapse skills install` when `.claude/` or `CLAUDE.md` is present)
+- `.agents/skills/synapse-*` — same, when `.agents/` or `AGENTS.md` is present
+- `~/.config/dev-certs/` — mkcert pairs for `synapse https setup`
+
+## Commands NOT in v1.9.x (don't reach for them)
+
+- `synapse logs` — not implemented; use `docker logs <container>` on the host or the dashboard's Logs panel.
+- `synapse team …`, `synapse project …`, `synapse domain …` — not implemented as standalone verbs in the CLI. Team/project lifecycle is dashboard-only; per-project domains are managed via the dashboard's "Custom domains" panel.

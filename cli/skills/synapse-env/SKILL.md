@@ -23,16 +23,24 @@ deployments are NOT automatically updated** — the dashboard has an
 "Apply to existing deployments" button for that (or trigger the same
 via the API; see at the bottom).
 
+> All four env verbs use `--for=<dev|prod|preview>` (comma-separated
+> for set/push) to scope the variable to specific deployment types.
+> There is no `--types=` flag.
+
 ## CLI commands (all under `synapse env`)
 
-### `synapse env list` — show current vars (values masked)
+### `synapse env list` — show current vars
 
 ```bash
-synapse env list
+synapse env list                       # values shown in plain text
+synapse env list --mask                # redact values (length-preserving)
+synapse env list --for=prod            # only vars that apply to PROD
+synapse env list --json
 ```
 
-Prints each var name + masked value + which deployment types it
-applies to (DEV / PROD / PREVIEW). Use `--json` for parseable output.
+Default behaviour shows values; pass `--mask` to redact them (useful
+when sharing a terminal recording). Columns: `NAME`, `VALUE`,
+`DEPLOYMENT_TYPES` (where `(all)` means dev + prod + preview).
 
 ### `synapse env set KEY=value [KEY=value …]` — set one or many
 
@@ -41,12 +49,14 @@ synapse env set STRIPE_KEY=sk_live_xxxx
 synapse env set OPENAI_API_KEY=sk-yyyy RESEND_API_KEY=re_zzzz
 ```
 
-By default applies to ALL deployment types. To restrict:
+Names must match `[A-Z_][A-Z0-9_]*`. Values are split on the first `=`,
+so `FOO=a=b` sets FOO to `a=b`. By default applies to ALL deployment
+types. To restrict:
 
 ```bash
-synapse env set --types=dev STRIPE_TEST_KEY=sk_test_xxxx
-synapse env set --types=prod STRIPE_LIVE_KEY=sk_live_xxxx
-synapse env set --types=dev,preview FEATURE_FLAG_NEW_UI=1
+synapse env set --for=dev STRIPE_TEST_KEY=sk_test_xxxx
+synapse env set --for=prod STRIPE_LIVE_KEY=sk_live_xxxx
+synapse env set --for=dev,preview FEATURE_FLAG_NEW_UI=1
 ```
 
 ### `synapse env unset KEY [KEY …]` — delete one or many
@@ -56,25 +66,40 @@ synapse env unset DEPRECATED_KEY
 synapse env unset KEY_ONE KEY_TWO
 ```
 
-### `synapse env pull [path]` — dump as `.env`
+### `synapse env pull` — dump as `.env` to stdout or file
 
 ```bash
-synapse env pull                         # writes to stdout
-synapse env pull .env.production         # writes to file
+synapse env pull                              # writes to stdout
+synapse env pull --out=.env.production        # writes to file (mode 0600)
+synapse env pull --for=prod                   # only PROD-scoped vars
+synapse env pull --for=prod > .env.prod       # equivalent via shell redirection
 ```
 
-The file is `.env`-shaped (`KEY=value` per line). Quotes added if the
-value contains whitespace or special chars. **The file contains plain
-secrets — gitignore it.**
+The file is `.env`-shaped (`KEY=value` per line, quoted when needed).
+**The file contains plain secrets — gitignore it.**
 
-### `synapse env push [path]` — apply from a `.env`-shaped file
+### `synapse env push` — apply from a `.env`-shaped file
 
 ```bash
-synapse env push .env.production
+synapse env push --from=.env.production
+synapse env push --from=.env.prod --for=prod --yes
+synapse env push --from=.env.production --dry-run    # preview only, no writes
 ```
 
-Idempotent. Sets each KEY=value, leaving other project vars alone. Use
-`--prune` to also delete vars NOT in the file (be careful — destructive).
+Additive — sets / updates each `KEY=value` in the file, leaving other
+project vars alone. **There is no `--prune` flag; the CLI never deletes
+vars to match a file.** To remove a var, use `synapse env unset KEY`
+explicitly.
+
+Push refuses to write these reserved names (they would conflict with
+Convex's self-hosted bootstrap):
+`CONVEX_SELF_HOSTED_URL`, `CONVEX_SELF_HOSTED_ADMIN_KEY`,
+`CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`,
+`NEXT_PUBLIC_CONVEX_SITE_URL`. A `.env` containing any of these is
+rejected before any backend call.
+
+> `synapse env set` does NOT enforce that block. It will happily store
+> e.g. `CONVEX_DEPLOYMENT=foo` if you ask it to — don't.
 
 ## What goes in project env vars vs `.env.local`
 
@@ -84,13 +109,6 @@ Idempotent. Sets each KEY=value, leaving other project vars alone. Use
 | `NEXT_PUBLIC_*` (browser vars) | `.env.local` only | Bundled into the Next.js client at build time. Not visible to Convex backend. |
 | `CONVEX_SELF_HOSTED_URL`, `CONVEX_SELF_HOSTED_ADMIN_KEY` | `.env.local` only — **managed by `synapse select`** | Used by `npx convex` CLI to authenticate against the right deployment. NEVER hand-edit. |
 | `CONVEX_DEPLOYMENT` | NEITHER (synapse comments it out) | Convex Cloud convention; in self-hosted mode it conflicts with `CONVEX_SELF_HOSTED_*` and the official Convex CLI errors. |
-
-## Restricted names — do NOT use as project env vars
-
-The CLI will refuse `synapse env set` on these to prevent foot-guns:
-`CONVEX_DEPLOYMENT`, `CONVEX_SELF_HOSTED_URL`, `CONVEX_SELF_HOSTED_ADMIN_KEY`,
-`CONVEX_CLOUD_URL`, `CONVEX_SITE_URL`. They're set by the
-Synapse-managed deployment lifecycle.
 
 ## Applying changes to EXISTING deployments
 
@@ -115,8 +133,8 @@ You have `STRIPE_TEST_KEY` for dev/preview and `STRIPE_LIVE_KEY` for
 prod. Don't want them to bleed into each other:
 
 ```bash
-synapse env set --types=dev,preview STRIPE_TEST_KEY=sk_test_xxx
-synapse env set --types=prod STRIPE_LIVE_KEY=sk_live_xxx
+synapse env set --for=dev,preview STRIPE_TEST_KEY=sk_test_xxx
+synapse env set --for=prod STRIPE_LIVE_KEY=sk_live_xxx
 ```
 
 In your Convex function code, write defensively:
@@ -147,10 +165,12 @@ undefined"*:
 | Goal | Command |
 |---|---|
 | Show what's configured | `synapse env list` |
+| Mask values (for screen-share) | `synapse env list --mask` |
 | Add / update one var | `synapse env set KEY=value` |
 | Add multiple at once | `synapse env set K1=v1 K2=v2 K3=v3` |
-| Restrict to specific deployment types | `synapse env set --types=prod KEY=value` |
+| Restrict to specific deployment types | `synapse env set --for=prod KEY=value` |
 | Delete a var | `synapse env unset KEY` |
-| Backup to a file | `synapse env pull .env.backup` |
-| Restore from a file | `synapse env push .env.backup` |
+| Backup to a file | `synapse env pull --out=.env.backup` |
+| Restore from a file | `synapse env push --from=.env.backup` |
+| Preview a push (no writes) | `synapse env push --from=.env.backup --dry-run` |
 | Apply changes to existing deploys | Dashboard "Apply to existing", or `POST /v1/projects/{id}/sync_env_to_deployments` |
