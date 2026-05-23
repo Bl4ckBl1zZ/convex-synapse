@@ -1,4 +1,5 @@
 const readline = require("node:readline");
+const { ensureUtf8Console, containsReplacementChar } = require("./windows-console");
 
 // Sentinel returned by `choose` when the user asks to go back to the
 // previous step. Use a Symbol so it can never collide with a legitimate
@@ -19,6 +20,14 @@ function askHidden(question, { input = process.stdin, output = process.stderr } 
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") {
     return ask(question, { input, output });
   }
+
+  // v1.8.10: ensure the Windows console is in UTF-8 mode BEFORE we
+  // enter raw mode. Without this, non-ASCII characters in the
+  // password (ç, ã, é, …) come in as CP-1252 bytes and our
+  // buffer.toString("utf8") below silently replaces them with U+FFFD
+  // — the operator types the right password and the backend rejects
+  // a corrupted version. No-op on macOS / Linux.
+  ensureUtf8Console({ logger: { info: (m) => output.write(m + "\n") } });
 
   return new Promise((resolve, reject) => {
     let value = "";
@@ -88,10 +97,22 @@ async function askCredentials({ input = process.stdin, output = process.stderr }
     }
     return parsed;
   }
-  return {
-    email: await ask("Email: ", { input, output }),
-    password: await askHidden("Password: ", { input, output }),
-  };
+  const email = await ask("Email: ", { input, output });
+  const password = await askHidden("Password: ", { input, output });
+  // v1.8.10: post-read sanity check. If the password still contains
+  // U+FFFD even after ensureUtf8Console, something else in the
+  // pipeline misdecoded the bytes. Surface a concrete error instead
+  // of sending a corrupted password to /v1/auth/login and watching
+  // the operator retype the same correct password forever.
+  if (containsReplacementChar(password) || containsReplacementChar(email)) {
+    throw new Error(
+      "Password or email contains replacement characters (U+FFFD) — your terminal " +
+        "likely failed to encode a non-ASCII character. On Windows, try running " +
+        "`chcp 65001` in this shell before `synapse login`. As a workaround, " +
+        "use an ASCII-only password.",
+    );
+  }
+  return { email, password };
 }
 
 // confirm prompts the user with a yes/no question and resolves to a boolean.
