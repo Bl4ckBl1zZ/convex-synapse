@@ -156,10 +156,13 @@ test("provision three deployments, then delete them all", async ({ page }) => {
     await deleteDeploymentViaDialog(page, name);
     // Wait for the row to vanish before deleting the next — sequential
     // deletes mirror what a human operator would do and avoid stacking
-    // open dialogs.
-    await expect(page.getByText(name, { exact: true })).toBeHidden({
-      timeout: 15_000,
-    });
+    // open dialogs. (v1.10.0+: ActivityFeed keeps the deleted name in the
+    // "deleted deployment" event row, so a page-wide text match never
+    // hides. Use the per-row Delete button's aria-label, scoped to the
+    // live deployments list.)
+    await expect(
+      page.getByRole("button", { name: `Delete deployment ${name}` }),
+    ).toBeHidden({ timeout: 15_000 });
   }
 
   // Empty list, empty container set.

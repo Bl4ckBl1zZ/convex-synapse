@@ -62,6 +62,11 @@ test("project page renders project + app token panels separately", async ({
   await d.getByRole("button", { name: "Create", exact: true }).click();
   await page.getByRole("link", { name: /tok project/i }).click();
 
+  // v1.9.3+: the token panels moved out of the project home and into
+  // /settings/access-tokens. Navigate through the settings sidebar.
+  await page.getByTestId("project-settings-link").click();
+  await page.getByTestId("project-settings-nav-tokens").click();
+
   // Two distinct New-token buttons — project + app — must be present.
   await expect(page.getByTestId("tokens-new-project")).toBeVisible();
   await expect(page.getByTestId("tokens-new-app")).toBeVisible();
@@ -114,11 +119,16 @@ test("project transfer moves the project to another team", async ({ page }) => {
   // /settings/general as an inline select (no modal dialog).
   await page.getByTestId("project-settings-link").click();
   await page.getByTestId("project-settings-nav-general").click();
-  // Click triggers the lazy fetch of /teams; the select still populates
-  // before submit because SWR resolves before the user picks.
-  await page
-    .getByTestId("project-transfer-dest")
-    .selectOption({ label: "Dest Co (dest-co)" });
+  // The select gates its lazy fetch of /teams on a focus/mousedown
+  // touch — Playwright's `selectOption` does not dispatch mousedown,
+  // so click the select first to trigger the SWR fetch, then wait for
+  // the Dest Co option to render before selecting.
+  const transferDest = page.getByTestId("project-transfer-dest");
+  await transferDest.click();
+  await expect(
+    transferDest.locator("option", { hasText: "Dest Co" }),
+  ).toHaveCount(1, { timeout: 10_000 });
+  await transferDest.selectOption({ label: "Dest Co (dest-co)" });
   await page.getByTestId("project-transfer-submit").click();
 
   // URL now points at /teams/dest-co/<projectId>.

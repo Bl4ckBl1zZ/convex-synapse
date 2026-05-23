@@ -62,7 +62,15 @@ test("project env vars: add, list, delete", async ({ page }) => {
 
   // Delete API_KEY.
   await page.getByRole("button", { name: "Delete env var API_KEY" }).click();
-  await expect(page.getByText("API_KEY")).toBeHidden();
+  // The per-row Delete button is unique to the live row in the env-vars
+  // panel; assert through it. (v1.10.0+: ActivityFeed shows the
+  // `updateProjectEnvVars` audit event which mentions the name, so a
+  // page-wide text match never hides.)
+  await expect(
+    page.getByRole("button", { name: "Delete env var API_KEY" }),
+  ).toBeHidden();
   // The other one survives.
-  await expect(page.getByText("DATABASE_URL")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Delete env var DATABASE_URL" }),
+  ).toBeVisible();
 });

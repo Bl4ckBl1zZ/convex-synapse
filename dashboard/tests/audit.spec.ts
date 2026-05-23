@@ -44,13 +44,16 @@ test("audit log records team creation and project creation", async ({
   await page.getByRole("link", { name: /audit log/i }).click();
   await expect(page).toHaveURL(/\/teams\/audit-co\/audit\b/);
 
-  // The page renders a table with one row per audit event. We assert on the
-  // *rows* (data-testid) so the layout can change without breaking the spec.
-  const rows = page.getByTestId("audit-log-row");
+  // The page renders one row per audit event, grouped by day. We assert
+  // on the *rows* (per-event data-testid) so the layout can change without
+  // breaking the spec. (v1.10.0 replaced the legacy `audit-log-row` flat
+  // testid with the AuditLogView component, which emits one
+  // `audit-row-<event-id>` per row inside `audit-log-grouped`.)
+  const rows = page.locator('[data-testid^="audit-row-"]');
   // Both events must show up; allow the polling loop a moment to refresh.
   await expect(rows).toHaveCount(2, { timeout: 5_000 });
 
-  const tableText = (await page.getByTestId("audit-log-table").textContent()) ?? "";
+  const tableText = (await page.getByTestId("audit-log-grouped").textContent()) ?? "";
   expect(tableText).toContain("createTeam");
   expect(tableText).toContain("createProject");
   expect(tableText).toContain(email);

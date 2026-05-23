@@ -128,8 +128,13 @@ test("delete a deployment via the dashboard", async ({ page }) => {
   // Helper picks the right branch (dev → single click, prod → typed name).
   await deleteDeploymentViaDialog(page, deploymentName, "dev");
 
-  // Row disappears from the list.
-  await expect(nameLocator).toBeHidden({ timeout: 15_000 });
+  // Row disappears from the list. (v1.10.0+: ActivityFeed keeps the
+  // deleted name visible in the "deleted deployment" event row, so a
+  // page-wide nameLocator never hides — assert via the per-row Delete
+  // button's aria-label instead, which only exists on the live row.)
+  await expect(
+    page.getByRole("button", { name: `Delete deployment ${deploymentName}` }),
+  ).toBeHidden({ timeout: 15_000 });
 
   // Container is gone on the host too.
   await expect
