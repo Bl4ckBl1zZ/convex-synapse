@@ -25,10 +25,15 @@ A Synapse project can host any number of Convex deployments. The
 | `prod` | The live, customer-facing one (1 per project, usually) | What the production app hits |
 | `preview` | Short-lived branches / PR previews | CI spins up + tears down per branch |
 
-A project always has AT MOST one `prod` (enforced at API level) but
-can have many `dev` and `preview` deployments. The `.synapse/project.json`
-in the cwd stores which DEV + PROD deployment names the CLI should
-target by default.
+"One PROD per project" is a strong convention but it is **not**
+enforced at the DB or API level — the `deployments` table only has
+`UNIQUE (name)` + `UNIQUE (host_port)`. What's enforced is that at
+most one deployment per project can carry `isDefault=true` for a given
+type; the dashboard and CLI assume the default-PROD is "the" prod.
+You can have many `dev` and `preview` deployments freely.
+
+The `.synapse/project.json` in the cwd stores which DEV + PROD
+deployment names the CLI should target by default (see `synapse select`).
 
 ## The "active" deployment concept
 
@@ -75,6 +80,9 @@ synapse deployment create --type=preview --default --project=<uuid>
 - Flags: `--type=<dev|prod|preview|custom>`, `--ha`, `--default`,
   `--project=<id>`, `--yes`. There is no `--reference` / `--name` flag
   — the backend owns the name and there is no "tag" column.
+- `--type=custom` is a real, accepted value (used when you adopt /
+  attach an external Convex backend); for greenfield work the three
+  common types are dev / prod / preview.
 - Returns immediately with `status: provisioning`; the container takes
   ~3 seconds to be ready. Watch readiness:
   `synapse deployment status <name> --watch`.

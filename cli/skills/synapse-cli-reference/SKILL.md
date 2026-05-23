@@ -47,8 +47,8 @@ resource commands when you don't want to use the linked project.
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `synapse version` | Show CLI / backend / Node / OS versions. | `--json` |
-| `synapse status` | List deployments in the linked project — `NAME`, `TYPE`, `STATUS`, `FORM`, `URL`. The `FORM` column is `custom` / `wildcard` / `path` / `host` and tells you if the URL is browser-reachable. | `--project=<id>`, `--json` |
-| `synapse doctor` | Health-check panorama: ~12 checks across local env / project / backend / deployments. Exits 0 (clean) / 1 (warnings) / 2 (issues). | `--fix` (auto-safe), `--fix --yes` (also prompt-class), `--verbose`, `--json` |
+| `synapse status` | List deployments in the linked project — `NAME`, `TYPE`, `STATUS`, `FORM`, `URL`. The `FORM` column is `custom` / `wildcard` / `path` / `no-domain` (internally `host`) and tells you if the URL is browser-reachable. `no-domain` renders red. | `--project=<id>`, `--json` |
+| `synapse doctor` | Health-check panorama: ~19 checks across local env / project / backend / deployments (+ local-HTTPS dev when relevant). Exits 0 (clean) / 1 (warnings) / 2 (issues). | `--fix` (auto-safe), `--fix --yes` (also prompt-class), `--verbose`, `--json` |
 | `synapse open [target]` | Open URL in browser. Default: dashboard page for the linked project. | targets: `dashboard` (default) / `docs` / `deployment <name>` / `url`. Includes a cheap pre-flight that warns on stale `.synapse/project.json` but never blocks. |
 | `synapse list <kind>` | List teams / projects / deployments visible to your session. Works without `synapse select`. | kind ∈ `teams`, `projects`, `deployments`. `--project=<id>`, `--team=<slug>`, `--json`. |
 

@@ -104,8 +104,9 @@ synapse select   # re-pick to refresh .synapse/project.json
 
 ## Pre-deploy hooks the operator may want
 
-This project may have pre-deploy gates the agent should respect — check
-for these and run them BEFORE `synapse deploy` if present:
+`synapse deploy` does NOT auto-run `package.json` scripts. If this
+project has pre-deploy gates, the AGENT (or operator) must run them
+manually BEFORE `synapse deploy`:
 
 ```bash
 # Typical patterns:
@@ -115,7 +116,8 @@ npm run build   # if the deploy uploads built artifacts
 ```
 
 If the user has a custom `predeploy` script in `package.json`, prefer
-running that.
+running that — but explicitly: invoke it (`npm run predeploy`) before
+`synapse deploy`. The wrapper won't fire it for you.
 
 ## What `synapse deploy` does NOT do
 

@@ -23,20 +23,21 @@ autoTrigger:
 synapse doctor
 ```
 
-Runs ~12 checks across local environment, project metadata, backend
-connectivity, and per-deployment health. Categorises results as
-**ok / warn / issue / skipped** and exits **0** (clean), **1** (warnings),
-or **2** (issues).
+Runs ~19 checks across local environment, project metadata, backend
+connectivity, per-deployment health, and (when relevant) local-HTTPS
+dev. Categorises results as **ok / warn / issue / skipped** and exits
+**0** (clean), **1** (warnings), or **2** (issues).
 
-If issues are auto-fixable, the footer shows:
+If issues are auto-fixable, the footer shows one of:
 
 ```
 💡 Tip: 1 issue is auto-fixable — run `synapse doctor --fix`.
+💡 Tip: 2 auto-fixable + 1 prompt-fixable — run `synapse doctor --fix --yes` to apply both.
 ```
 
-Just run that. The `--yes` variant additionally applies "prompt" class
-fixes (e.g. re-link stale `.synapse/project.json` after the project
-was deleted on the backend).
+Just run the suggested command. The `--yes` variant additionally
+applies "prompt" class fixes (e.g. re-link stale `.synapse/project.json`
+after the project was deleted on the backend).
 
 ```bash
 synapse doctor --fix          # auto-safe fixes only
@@ -47,12 +48,12 @@ synapse doctor --fix --yes    # plus prompt-class fixes (stale links, etc)
 
 ### "Email or password is incorrect" on a known-good password (Windows)
 
-CLI v1.8.11+ ships a fix for this. Symptom: dashboard works fine but
+CLI v1.8.10+ ships a fix for this. Symptom: dashboard works fine but
 `synapse login` always returns 401 on PowerShell. Cause: stdin raw mode
 on Windows reads bytes in the local code page (e.g. CP-1252); non-ASCII
 chars in the password get corrupted to U+FFFD before bcrypt compare.
 
-**Fix:** upgrade to CLI ≥ 1.8.11 (`npm install -g @iann29/synapse@latest`).
+**Fix:** upgrade to CLI ≥ 1.8.10 (`npm install -g @iann29/synapse@latest`).
 The CLI now calls `chcp 65001` automatically. As a workaround on older
 versions, run `chcp 65001` in PowerShell manually before `synapse login`.
 
@@ -107,10 +108,12 @@ EmptyState for 404/403 instead of cascading. **Fix:** upgrade both
 (CLI: `npm install -g @iann29/synapse@latest`; Synapse host:
 `bash setup.sh --upgrade` on the VPS).
 
-### `synapse status` shows URL form "host" (red chip) instead of "wildcard"
+### `synapse status` shows a red `no-domain` chip in the FORM column
 
-Same root cause as the "not browser-reachable" issue above — wildcard
-subdomain mode isn't enabled on the host. Same fix path.
+(Internally that's URL form `host` — the operator-facing label is
+`no-domain` in red.) Same root cause as the "not browser-reachable"
+issue above — wildcard subdomain mode isn't enabled on the host. Same
+fix path.
 
 ### `synapse deploy` fails with "No prod deployment saved for this project"
 

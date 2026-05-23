@@ -102,7 +102,7 @@ are set together).
 ## Sanity check the agent can run
 
 If you're not sure the project is properly linked, run
-`synapse doctor`. It enumerates ~12 health checks (Node version, env
-file, backend reachability, deployment health) and exits 0/1/2 based
-on severity. Includes auto-fix flags (`--fix --yes`) for the recoverable
-ones.
+`synapse doctor`. It enumerates ~19 health checks (Node version, env
+file, backend reachability, deployment health, optional local-HTTPS
+dev category) and exits 0/1/2 based on severity. Includes auto-fix
+flags (`--fix --yes`) for the recoverable ones.
