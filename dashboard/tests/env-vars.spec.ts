@@ -26,7 +26,10 @@ async function setupProject(page: Page) {
   // v1.9.3: env vars panel was moved off the project home into its own
   // settings sub-page. Drive through the Settings button so the spec
   // exercises the actual operator flow + the new layout.
+  // v1.9.4 update: `project-settings-link` now points at /settings/general
+  // (was /settings). We need a second click on the env-vars sidebar nav.
   await page.getByTestId("project-settings-link").click();
+  await page.getByTestId("project-settings-nav-env-vars").click();
   await expect(page).toHaveURL(
     /\/teams\/amage\/[0-9a-f-]{36}\/settings\/environment-variables\b/,
   );

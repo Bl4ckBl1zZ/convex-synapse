@@ -108,23 +108,33 @@ test("provision three deployments, then delete them all", async ({ page }) => {
   await createDeployment(page, "prod");
   await createDeployment(page, "dev");
 
-  // Three rows visible — each row's title uses the friendly "<adj>-<animal>-NNNN"
-  // pattern. We rely on count() rather than per-name lookups so the assertion
-  // doesn't have to know what names the allocator picked.
-  const nameRowsSel = page.getByText(/^[a-z]+-[a-z]+-\d{4}$/);
-  await expect(nameRowsSel).toHaveCount(3, { timeout: 30_000 });
+  // Three rows visible — each row exposes a per-row Delete button whose
+  // aria-label is "Delete deployment <name>". v1.9.6+ TopologyPanel and
+  // v1.10.0+ ActivityFeed both render the deployment name too, so a
+  // page-wide text match for the name pattern over-counts; the Delete
+  // button is unique to the live deployment row.
+  const deleteBtns = page.getByRole("button", { name: /^Delete deployment / });
+  await expect(deleteBtns).toHaveCount(3, { timeout: 30_000 });
 
-  const names = (await nameRowsSel.allTextContents()).map((s) => s.trim());
+  const names = (await deleteBtns.evaluateAll((els) =>
+    els.map((el) =>
+      (el.getAttribute("aria-label") ?? "").replace(/^Delete deployment /, ""),
+    ),
+  )).map((s) => s.trim());
   expect(new Set(names).size).toBe(3);
 
-  // Wait for all three to flip to status="running". The page renders three
-  // status badges; they start as "provisioning" and the SWR loop swaps them.
-  // Worker processes jobs serially (one Provision at a time) and may be
-  // catching up on orphans from prior tests that left jobs in flight
-  // during truncate. Keep the timeout generous.
-  await expect(page.getByText("running", { exact: true })).toHaveCount(3, {
-    timeout: 180_000,
-  });
+  // Wait for all three to flip to status="running". The deployment row
+  // exposes a status pill alongside the name; the TopologyPanel + ActivityFeed
+  // render "running" elsewhere too, so scope to deployment rows via the
+  // Delete button's row container.
+  for (const name of names) {
+    await expect(
+      page.getByRole("button", { name: `Delete deployment ${name}` })
+        .locator("xpath=ancestor::*[self::li or self::article or self::div][1]")
+        .getByText("running", { exact: true })
+        .first(),
+    ).toBeVisible({ timeout: 180_000 });
+  }
 
   // Three distinct convex-* containers on the host.
   await expect

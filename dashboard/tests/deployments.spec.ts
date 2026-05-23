@@ -152,7 +152,11 @@ test("deploy key revoke prompt explains credential rotation", async ({ page }) =
   const deploymentName = "seeded-owl-1111";
   await seedDeploymentWithDeployKey(projectId!, deploymentName);
   await page.reload();
-  await expect(page.getByText(deploymentName)).toBeVisible();
+  // v1.9.6+ TopologyPanel renders the name too — strict-mode getByText
+  // chokes on the second match. Use the per-row Delete button instead.
+  await expect(
+    page.getByRole("button", { name: `Delete deployment ${deploymentName}` }),
+  ).toBeVisible();
 
   await page
     .getByRole("button", {
