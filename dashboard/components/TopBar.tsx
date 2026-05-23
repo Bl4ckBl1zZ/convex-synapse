@@ -106,14 +106,18 @@ export function TopBar() {
               admin gate) — every operator who can log in is a CLI
               consumer. */}
           {user && <CliVersionChip />}
-          <a
-            href="https://github.com/get-convex/convex-backend"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hidden rounded-md px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:bg-neutral-900 hover:text-neutral-200 sm:inline-block"
+          <Link
+            href="/docs"
+            data-testid="topnav-docs-link"
+            className={clsx(
+              "hidden rounded-md px-3 py-1.5 text-xs transition-colors sm:inline-block",
+              pathname?.startsWith("/docs")
+                ? "bg-neutral-900 text-neutral-100"
+                : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200",
+            )}
           >
             Docs
-          </a>
+          </Link>
           {user && <ProfileMenu user={user} onLogout={logout} />}
         </div>
       </div>
