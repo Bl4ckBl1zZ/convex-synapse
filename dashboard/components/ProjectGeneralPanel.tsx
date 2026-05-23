@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { mutate as globalMutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
@@ -59,7 +59,15 @@ export function ProjectGeneralPanel({ projectId, teamRef }: Props) {
       />
       <DangerZoneCard
         project={project}
-        onDeleted={() => router.push(`/teams/${encodeURIComponent(teamRef)}`)}
+        onDeleted={() => {
+          // Invalidate the team-page project-list cache BEFORE navigating,
+          // so the destination page doesn't render the deleted project
+          // from stale SWR data (visible as a one-second flicker for
+          // human operators and as a reliable test failure for Playwright).
+          // SWR key matches the team-page useSWR below.
+          void globalMutate(["/projects", teamRef]);
+          router.push(`/teams/${encodeURIComponent(teamRef)}`);
+        }}
       />
     </div>
   );
