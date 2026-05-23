@@ -126,9 +126,14 @@ test("adopt an existing Convex backend via the dashboard", async ({ page }) => {
   // Adopt button should disappear once the dialog closes; the new row shows
   // up in the deployments list with the "adopted" badge.
   await expect(adoptDialog).toBeHidden({ timeout: 30_000 });
+  // v1.10.0+ the project page also renders the deployment name inside the
+  // ActivityFeed event ("Op adopted imported-app") and v1.9.6+ inside the
+  // TopologyPanel grouping — so a page-wide exact-text match resolves to
+  // multiple elements. Confirm presence via the per-row Delete-button's
+  // aria-label, which is unique to the deployments list.
   await expect(
-    page.getByText("imported-app", { exact: true }),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Delete deployment imported-app" }),
+  ).toBeVisible({ timeout: 10_000 });
   await expect(
     page.getByRole("listitem").filter({ hasText: "imported-app" }).getByText("adopted").first(),
   ).toBeVisible({ timeout: 5_000 }).catch(async () => {
@@ -149,8 +154,12 @@ test("adopt an existing Convex backend via the dashboard", async ({ page }) => {
   // call (defaults to 'dev' for `adopt_deployment` without type). Helper
   // looks it up; for a 'dev' / 'custom' row the dialog needs only a click.
   await deleteDeploymentViaDialog(page, "imported-app");
+  // After deletion, the row disappears from the deployments list. The
+  // ActivityFeed still keeps the "adopted imported-app" event around, so
+  // a page-wide hidden check would fail; assert via the row-specific
+  // Delete button instead.
   await expect(
-    page.getByText("imported-app", { exact: true }),
+    page.getByRole("button", { name: "Delete deployment imported-app" }),
   ).toBeHidden({ timeout: 10_000 });
 
   // Container is still alive (the original provisioned one).

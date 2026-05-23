@@ -29,8 +29,16 @@ async function setupProject(page: Page): Promise<{ teamSlug: string; projectId: 
   await dialog.locator("#project-name").fill("AuditProj");
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await page.getByRole("link", { name: /auditproj/i }).click();
+  // SPA navigation via next/link — `await click()` does not wait for
+  // history.pushState to settle, so reading page.url() immediately can
+  // return the team page URL. Wait until the URL actually matches the
+  // project pattern before parsing.
+  await page.waitForURL(/\/teams\/[^/]+\/[0-9a-f-]{36}(?:\b|\/|$)/, {
+    timeout: 10_000,
+  });
   const m = page.url().match(/\/teams\/[^/]+\/([0-9a-f-]{36})/);
-  return { teamSlug: "audit-co", projectId: m![1] };
+  if (!m) throw new Error(`unexpected project URL: ${page.url()}`);
+  return { teamSlug: "audit-co", projectId: m[1] };
 }
 
 function buildActivityEvent(overrides: Record<string, unknown>) {
