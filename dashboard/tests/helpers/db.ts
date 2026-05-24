@@ -11,6 +11,17 @@ const TABLES = [
   "audit_events",
   "provisioning_jobs",
   "deploy_keys",
+  // Cell Control Plane (feat/cell-control-plane). cells/cell_resources/
+  // deployment_placements would CASCADE from deployments/projects/teams, but
+  // hosts (+ host_agents/host_adoption_tokens) are only referenced via
+  // ON DELETE SET NULL, so they must be truncated explicitly to keep test
+  // isolation clean.
+  "deployment_placements",
+  "cell_resources",
+  "cells",
+  "host_adoption_tokens",
+  "host_agents",
+  "hosts",
   "deployments",
   "project_env_vars",
   "projects",

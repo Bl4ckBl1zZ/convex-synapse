@@ -548,6 +548,142 @@ export type ListAuditLogResponse = {
   nextCursor?: string;
 };
 
+// ---- Cell Control Plane (feat/cell-control-plane) ----
+// Hosts are instance-level machines (VPSs); Cells are project-scoped
+// operational units; placements tie a deployment to a Cell + Host. These
+// mirror the Go models in synapse/internal/models/models.go.
+
+export type Host = {
+  id: string;
+  name: string;
+  provider: string;
+  region: string;
+  publicIp?: string;
+  privateIp?: string;
+  labels: Record<string, string>;
+  status: "online" | "offline" | "draining" | "unknown" | string;
+  agentVersion?: string;
+  dockerVersion?: string;
+  cpuCores?: number;
+  memoryMb?: number;
+  diskGb?: number;
+  // True for the single host the control plane itself runs on (the synthetic
+  // "primary" host the backfill creates). Agent-adopted VPSs are false.
+  isSynapseHost: boolean;
+  lastHeartbeatAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateHostInput = {
+  name: string;
+  provider?: string;
+  region?: string;
+  publicIp?: string;
+  privateIp?: string;
+  labels?: Record<string, string>;
+};
+
+// Returned ONCE by POST /v1/hosts/{id}/adoption_token. `token` is the
+// plaintext join secret (never returned again — backend stores only the
+// hash); `joinCommand` is the ready-to-paste `synapse-agent join …` line.
+export type HostAdoptionToken = {
+  token: string;
+  id: string;
+  hostId: string;
+  name?: string;
+  expiresAt?: string;
+  joinCommand: string;
+};
+
+export type CellKind =
+  | "core"
+  | "runtime"
+  | "integration"
+  | "preview"
+  | "enterprise-app";
+export type CellEnvironment = "dev" | "staging" | "prod" | "preview";
+export type CellIsolationTier = "shared" | "premium" | "dedicated" | "internal";
+export type CellStatus =
+  | "active"
+  | "inactive"
+  | "draining"
+  | "migrating"
+  | "maintenance";
+
+export type Cell = {
+  id: string;
+  teamId: string;
+  projectId: string;
+  name: string;
+  slug: string;
+  kind: CellKind | string;
+  environment: CellEnvironment | string;
+  region: string;
+  isolationTier: CellIsolationTier | string;
+  status: CellStatus | string;
+  primaryDeploymentId?: string;
+  primaryHostId?: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateCellInput = {
+  name: string;
+  kind?: CellKind;
+  environment?: CellEnvironment;
+  region?: string;
+  isolationTier?: CellIsolationTier;
+  description?: string;
+};
+
+export type UpdateCellInput = {
+  name?: string;
+  description?: string;
+  status?: CellStatus;
+  region?: string;
+  isolationTier?: CellIsolationTier;
+};
+
+export type CellResource = {
+  id: string;
+  cellId: string;
+  resourceType: string;
+  resourceId: string;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DeploymentPlacement = {
+  id: string;
+  deploymentId: string;
+  cellId: string;
+  hostId?: string;
+  desiredStatus: string;
+  observedStatus: string;
+  dockerContainerId?: string;
+  internalPort?: number;
+  publicUrl?: string;
+  routeId?: string;
+  volumeRef?: string;
+  lastAppliedAt?: string;
+  lastObservedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CellResourcesResponse = {
+  resources: CellResource[];
+  placements: DeploymentPlacement[];
+};
+
+export type AttachDeploymentResult = {
+  cell: Cell;
+  placement: DeploymentPlacement;
+};
+
 class ApiError extends Error {
   status: number;
   code?: string;
@@ -1365,6 +1501,108 @@ export const api = {
       return request<DeploymentDomain>(
         `/v1/deployments/${encodeURIComponent(name)}/domains/${encodeURIComponent(domainId)}/auto_configure`,
         { method: "POST", body: credentialId ? { credentialId } : {} },
+      );
+    },
+  },
+
+  // Cells (feat/cell-control-plane). Project-scoped operational units.
+  // listByProject + create are mounted under the project; the rest under
+  // /v1/cells/{id}. RBAC rides on the existing project membership.
+  cells: {
+    async listByProject(projectId: string): Promise<Cell[]> {
+      const r = await request<{ items: Cell[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cells`,
+      );
+      return r.items ?? [];
+    },
+    create(projectId: string, body: CreateCellInput): Promise<Cell> {
+      return request<Cell>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cells`,
+        { method: "POST", body },
+      );
+    },
+    get(id: string): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}`);
+    },
+    update(id: string, patch: UpdateCellInput): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: patch,
+      });
+    },
+    drain(id: string): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}/drain`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    // Attaches an existing deployment (by name) as a resource of the cell.
+    // 409 deployment_already_attached when it lives in another cell; 404
+    // when the name is unknown OR in a project the caller can't see.
+    attachDeployment(
+      id: string,
+      deploymentName: string,
+      role?: string,
+    ): Promise<AttachDeploymentResult> {
+      return request<AttachDeploymentResult>(
+        `/v1/cells/${encodeURIComponent(id)}/attach_deployment`,
+        {
+          method: "POST",
+          body: role ? { deploymentName, role } : { deploymentName },
+        },
+      );
+    },
+    // hostId accepts a host UUID or name (backend resolves either).
+    attachHost(id: string, hostId: string): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}/attach_host`, {
+        method: "POST",
+        body: { hostId },
+      });
+    },
+    resources(id: string): Promise<CellResourcesResponse> {
+      return request<CellResourcesResponse>(
+        `/v1/cells/${encodeURIComponent(id)}/resources`,
+      );
+    },
+  },
+
+  // Hosts (feat/cell-control-plane). Instance-level — every endpoint is
+  // gated to instance-admin server-side, so list() can 403 for non-admin
+  // operators; the HostsPanel hides itself on 403 the same way TopologyPanel
+  // does. Adoption tokens are returned once in plaintext (hash-at-rest).
+  hosts: {
+    async list(): Promise<Host[]> {
+      const r = await request<{ items: Host[] }>("/v1/hosts");
+      return r.items ?? [];
+    },
+    create(body: CreateHostInput): Promise<Host> {
+      return request<Host>("/v1/hosts", { method: "POST", body });
+    },
+    get(id: string): Promise<Host> {
+      return request<Host>(`/v1/hosts/${encodeURIComponent(id)}`);
+    },
+    update(
+      id: string,
+      patch: Partial<CreateHostInput> & { status?: string },
+    ): Promise<Host> {
+      return request<Host>(`/v1/hosts/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: patch,
+      });
+    },
+    drain(id: string): Promise<Host> {
+      return request<Host>(`/v1/hosts/${encodeURIComponent(id)}/drain`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    createAdoptionToken(
+      id: string,
+      body: { name?: string; ttlSeconds?: number } = {},
+    ): Promise<HostAdoptionToken> {
+      return request<HostAdoptionToken>(
+        `/v1/hosts/${encodeURIComponent(id)}/adoption_token`,
+        { method: "POST", body },
       );
     },
   },
