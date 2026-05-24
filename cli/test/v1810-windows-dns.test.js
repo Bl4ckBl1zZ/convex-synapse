@@ -171,13 +171,24 @@ function syntheticDetection(overrides = {}) {
   };
 }
 
-test("planner: Windows hosts entry present + resolution fails → exec 'Refresh DNS cache' (v1.8.10 fix)", () => {
+test("planner: Windows hosts entry present + resolution fails → exec repair (v1.8.10 fix, v1.9.3 reworded)", () => {
   const steps = plannerMod.plan(syntheticDetection({}));
   const hosts = steps.find((s) => s.id === "hosts");
   assert.ok(hosts);
   assert.equal(hosts.kind, "exec", "must be EXEC, not skip — this was the Matheus bug");
-  assert.match(hosts.title, /Refresh DNS cache for dev\.foo\.com/);
-  assert.match(hosts.reason, /Windows DNS cache is stale/);
+  assert.match(hosts.title, /Repair hosts resolution for dev\.foo\.com/);
+  // v1.9.3: the diagnosis no longer blames a stale cache exclusively —
+  // it names the ACL / cache causes the self-healing re-write covers.
+  assert.match(hosts.reason, /read ACL|Dnscache|stale/i);
+});
+
+test("planner: Windows hosts entry present + BOM → exec repair names the BOM (v1.9.3)", () => {
+  const steps = plannerMod.plan(
+    syntheticDetection({ hosts: { ...syntheticDetection().hosts, hasBom: true } }),
+  );
+  const hosts = steps.find((s) => s.id === "hosts");
+  assert.equal(hosts.kind, "exec");
+  assert.match(hosts.reason, /BOM/);
 });
 
 test("planner: Linux hosts entry present + resolution fails → also exec, with Linux-shaped message", () => {

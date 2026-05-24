@@ -167,14 +167,46 @@ function planRemoveEntry(currentContent, domain) {
   return { lines: next, changed: true, reason: "removed managed entry" };
 }
 
+// Strips a leading UTF-8 BOM (U+FEFF) if present. The Windows hosts
+// parser (and the Dnscache service) does NOT tolerate a BOM — a hosts
+// file that starts with EF BB BF is silently ignored in its entirety,
+// so even `host.docker.internal` stops resolving. Node's
+// fs.readFileSync(path, "utf8") does NOT strip the BOM, so without
+// this every read-modify-write cycle would faithfully preserve a BOM
+// some other tool wrote, perpetuating the breakage. We strip on read
+// and never emit one on write.
+function stripBom(s) {
+  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+}
+
 // Reads a hosts file in a way that survives missing files (returns
-// empty string instead of throwing).
+// empty string instead of throwing). Strips a leading BOM so the
+// rest of the pipeline never sees one.
 function readHosts(hostsPath) {
   try {
-    return fs.readFileSync(hostsPath, "utf8");
+    return stripBom(fs.readFileSync(hostsPath, "utf8"));
   } catch (err) {
     if (err.code === "ENOENT") return "";
     throw new HostsError(`Could not read ${hostsPath}: ${err.message}`, { kind: "permission" });
+  }
+}
+
+// True if the file on disk begins with a UTF-8 BOM. Cheap 3-byte read;
+// returns false on any error (missing file, permission). Used by the
+// detector so the doctor can name "BOM" as the real cause instead of
+// blaming a stale DNS cache.
+function hasUtf8Bom(hostsPath) {
+  try {
+    const fd = fs.openSync(hostsPath, "r");
+    try {
+      const buf = Buffer.alloc(3);
+      const n = fs.readSync(fd, buf, 0, 3, 0);
+      return n === 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
   }
 }
 
@@ -225,8 +257,12 @@ function writeHosts(hostsPath, content, {
   execImpl = execFileSync,
   platform = process.platform,
 } = {}) {
+  // Defence in depth: never let a BOM reach disk. readHosts already
+  // strips it, but a caller could hand us content assembled from a
+  // BOM-carrying source.
+  const noBom = stripBom(content);
   const onDiskContent =
-    platform === "win32" ? content.replace(/\r?\n/g, "\r\n") : content;
+    platform === "win32" ? noBom.replace(/\r?\n/g, "\r\n") : noBom;
 
   // Try direct write first (fast path).
   let result;
@@ -317,16 +353,43 @@ function writeHostsViaRunAs(hostsPath, content, { execImpl = execFileSync } = {}
   const backupPath = `${hostsPath}.synapse-bak.${Date.now()}`;
   // PowerShell script — runs ELEVATED via Start-Process RunAs below.
   //   1. Copy current hosts to backup
-  //   2. Move new content over hosts
-  //   3. ipconfig /flushdns (v1.8.10): WITHOUT this the Windows DNS
-  //      Client cache keeps returning NXDOMAIN for the freshly-added
-  //      entry, breaking `next dev --hostname dev.foo.com` with
-  //      ENOTFOUND despite the hosts file being correct.
+  //   2. Write new content IN-PLACE over the existing hosts file
+  //   3. Regrant read ACEs the Dnscache service needs
+  //   4. ipconfig /flushdns
+  //
+  // Why in-place WriteAllText and NOT Move-Item -Force (the v1.8.10
+  // approach): Move-Item replaces the destination inode with the temp
+  // file, so the resulting hosts file inherits the ACL of %TEMP%,
+  // DROPPING the read ACEs a normal hosts file carries
+  // (BUILTIN\Users, ALL APPLICATION PACKAGES, and — transitively —
+  // NT AUTHORITY\NETWORK SERVICE, the SID the Dnscache service runs
+  // as, S-1-5-20). When those reads are missing, Dnscache can't open
+  // the file and SILENTLY ignores the entire hosts file — not just our
+  // entry, but host.docker.internal too. `ipconfig /flushdns` cannot
+  // fix a read-permission problem. WriteAllText opens the existing
+  // file (truncate-in-place), so the ACL is preserved.
+  //
+  // Step 3 regrants the read ACEs unconditionally (idempotent) so we
+  // self-heal a hosts file whose ACL was previously clobbered — by an
+  // older synapse, by a sandbox, or by any other tool. SIDs are used
+  // instead of names so this works on PT-BR / EN / any-locale Windows:
+  //   S-1-5-20      = NT AUTHORITY\NETWORK SERVICE (Dnscache)
+  //   S-1-5-32-545  = BUILTIN\Users
+  //   S-1-15-2-1    = APPLICATION PACKAGE AUTHORITY\ALL APPLICATION PACKAGES
+  //
+  // Content is written without a BOM: WriteAllText with a
+  // UTF8Encoding($false) constructor emits no preamble. (Set-Content
+  // / Out-File default to a BOM on Windows PowerShell 5.x, which is
+  // exactly the breakage we're avoiding — so we go through .NET.)
   const script = [
     `try {`,
     `  Copy-Item -LiteralPath '${hostsPath}' -Destination '${backupPath}' -ErrorAction Stop;`,
-    `  Move-Item -LiteralPath '${tmpFile}' -Destination '${hostsPath}' -Force -ErrorAction Stop;`,
+    `  $c = [System.IO.File]::ReadAllText('${tmpFile}');`,
+    `  $enc = New-Object System.Text.UTF8Encoding($false);`,
+    `  [System.IO.File]::WriteAllText('${hostsPath}', $c, $enc);`,
+    `  & icacls '${hostsPath}' /grant '*S-1-5-20:(RX)' '*S-1-5-32-545:(RX)' '*S-1-15-2-1:(RX)' | Out-Null;`,
     `  & ipconfig /flushdns | Out-Null;`,
+    `  Remove-Item -LiteralPath '${tmpFile}' -Force -ErrorAction SilentlyContinue;`,
     `  exit 0`,
     `} catch {`,
     `  Write-Error $_.Exception.Message;`,
@@ -368,16 +431,36 @@ function writeHostsViaRunAs(hostsPath, content, { execImpl = execFileSync } = {}
   return { method: "runas", elevated: true, backupPath };
 }
 
-// One-shot "add a domain" patch. Idempotent.
+// One-shot "add a domain" patch. Idempotent in content, but with a
+// `force` escape hatch.
+//
+// `opts.force` (default false): when the entry is already present so
+// the content wouldn't change, a normal call returns early WITHOUT
+// touching the file. The "entry present but the name still doesn't
+// resolve" repair path needs the opposite — it must re-write the file
+// even when the content is identical, because the *act of writing* is
+// what re-grants the read ACL, drops a stray BOM, and triggers the
+// post-write `ipconfig /flushdns`. With `force: true` we write the
+// (BOM-stripped, conflict-resolved) content back unconditionally.
 function addEntry(hostsPath, domain, opts = {}) {
+  const { force = false, ...writeOpts } = opts;
   const current = readHosts(hostsPath);
   const plan = planAddEntry(current, domain);
-  if (!plan.changed) {
+  if (!plan.changed && !force) {
     return { changed: false, reason: plan.reason };
   }
-  const next = plan.lines.join("\n");
-  const result = writeHosts(hostsPath, next, opts);
-  return { changed: true, reason: plan.reason, ...result };
+  // When forcing an unchanged file, write the current (already-correct,
+  // BOM-stripped) content back so the side effects still fire.
+  const next = plan.changed
+    ? plan.lines.join("\n")
+    : current.split(/\r?\n/).join("\n");
+  const result = writeHosts(hostsPath, next, writeOpts);
+  return {
+    changed: plan.changed,
+    forced: !plan.changed && force,
+    reason: plan.changed ? plan.reason : "re-applied to repair resolution (ACL/BOM/cache)",
+    ...result,
+  };
 }
 
 // One-shot "remove a domain" patch. Idempotent.
@@ -398,6 +481,8 @@ module.exports = {
   MANAGED_BLOCK_END,
   hostsPathForOS,
   flushDnsCacheIfWindows,
+  stripBom,
+  hasUtf8Bom,
   planAddEntry,
   planRemoveEntry,
   readHosts,

@@ -221,16 +221,38 @@ function plan(detection, {
       skipReason: "entry present + DNS cache fresh",
     });
   } else if (hostsHasEntry && !detection.resolution.resolvesToLoopback) {
+    // The entry is present but the name still doesn't resolve. On
+    // Windows there are THREE distinct causes, and only one of them is
+    // a stale DNS cache — the other two (a UTF-8 BOM at the top of the
+    // file, or a hosts ACL that the Dnscache service can't read) make
+    // Windows ignore the whole file, and `ipconfig /flushdns` is
+    // powerless against both. We name the most likely cause so the
+    // operator isn't sent chasing flushdns forever, but the fix is the
+    // same self-healing re-write either way: addEntry now writes in
+    // place without a BOM, regrants the read ACEs the resolver needs
+    // (SID-based, locale-independent), and flushes the cache.
+    let reason;
+    if (detection.platform.id === "windows") {
+      if (detection.hosts.hasBom) {
+        reason = `${detection.hosts.path} starts with a UTF-8 BOM — Windows ignores the whole file. Rewriting without the BOM (then regranting read ACL + flushing DNS).`;
+      } else {
+        reason = `${detection.hosts.path} has the entry but ${detection.domain} still doesn't resolve. Most often the Dnscache service can't read the file (missing read ACL) or the DNS cache is stale — rewriting in place, regranting read access to NETWORK SERVICE/Users, and flushing the cache.`;
+      }
+    } else {
+      reason = `${detection.hosts.path} has the entry but resolution still fails — re-writing to force a refresh`;
+    }
     steps.push({
       id: "hosts",
-      title: `Refresh DNS cache for ${detection.domain}`,
+      title: `Repair hosts resolution for ${detection.domain}`,
       kind: "exec",
-      reason:
-        detection.platform.id === "windows"
-          ? `${detection.hosts.path} has the entry but Windows DNS cache is stale — re-writing to trigger \`ipconfig /flushdns\``
-          : `${detection.hosts.path} has the entry but resolution still fails — re-writing to force a refresh`,
+      reason,
       async run() {
-        return hostsMod.addEntry(detection.hosts.path, detection.domain);
+        // force: the entry is already present, so without this the
+        // write (and its ACL regrant / BOM strip / flushdns side
+        // effects) would be skipped as a no-op.
+        return hostsMod.addEntry(detection.hosts.path, detection.domain, {
+          force: true,
+        });
       },
     });
   } else {

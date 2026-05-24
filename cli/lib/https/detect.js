@@ -304,6 +304,7 @@ function detectHostsForDomain(domain, hostsPath) {
     exists: false,
     readable: false,
     writable: false,
+    hasBom: false,
     matches: [],
     allLines: [],
   };
@@ -312,7 +313,11 @@ function detectHostsForDomain(domain, hostsPath) {
     result.exists = true;
     const content = fs.readFileSync(hostsPath, "utf8");
     result.readable = true;
-    result.allLines = content.split(/\r?\n/);
+    // A UTF-8 BOM decodes to U+FEFF as the first char. The Windows
+    // hosts parser + Dnscache reject a file that starts with one,
+    // silently ignoring every entry — so flag it for the diagnosis.
+    result.hasBom = content.charCodeAt(0) === 0xfeff;
+    result.allLines = content.replace(/^﻿/, "").split(/\r?\n/);
     for (const raw of result.allLines) {
       if (!raw || raw.trim().startsWith("#")) continue;
       // hosts file rows: <address> <hostname> [<hostname> ...]

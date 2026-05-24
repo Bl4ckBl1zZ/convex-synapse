@@ -711,6 +711,7 @@ function makeDeploymentCheck(target) {
 // ============================================================
 
 const httpsDetect = require("../https/detect");
+const httpsHosts = require("../https/hosts");
 
 // Read the cwd's package.json dev:https script (if any) and extract
 // the --hostname / --experimental-https-cert / --experimental-https-key
@@ -858,11 +859,29 @@ const checkHttpsDomainResolves = {
         data: { domain: dev.domain, source: resolution.source },
       };
     }
+    // Resolution failed. If the hosts file already has the entry, the
+    // cause is NOT "missing entry" — on Windows it's almost always a
+    // UTF-8 BOM at the top of the file (Windows ignores the whole
+    // file) or a hosts ACL the Dnscache service can't read. Surface
+    // that so the operator doesn't conclude "I already added it, why
+    // doesn't it work?". `synapse https setup` re-applies in place,
+    // strips any BOM, regrants the read ACL, and flushes the cache.
+    const hostsPath = httpsHosts.hostsPathForOS();
+    const hostsState = httpsDetect.detectHostsForDomain(dev.domain, hostsPath);
+    const hasEntry = hostsState.matches.some((m) => m.address === "127.0.0.1");
+    let summary = `${dev.domain} doesn't resolve to 127.0.0.1 (got: ${resolution.got.join(", ") || "nothing"})`;
+    if (hasEntry && hostsState.hasBom) {
+      summary += ` — hosts file starts with a UTF-8 BOM, which Windows ignores`;
+    } else if (hasEntry) {
+      summary += ` — entry is present but not resolving (stale DNS cache, or the Dnscache service can't read the hosts file)`;
+    }
     return {
       status: "issue",
-      summary: `${dev.domain} doesn't resolve to 127.0.0.1 (got: ${resolution.got.join(", ") || "nothing"})`,
-      remediation: `Run \`synapse https setup ${dev.domain}\` to add the hosts entry, OR add a DNS A record pointing the domain at 127.0.0.1.`,
-      data: { domain: dev.domain, got: resolution.got },
+      summary,
+      remediation: hasEntry
+        ? `Run \`synapse https setup ${dev.domain}\` — it re-applies the entry in place, strips any BOM, regrants the hosts read ACL (Windows), and flushes the DNS cache.`
+        : `Run \`synapse https setup ${dev.domain}\` to add the hosts entry, OR add a DNS A record pointing the domain at 127.0.0.1.`,
+      data: { domain: dev.domain, got: resolution.got, hasEntry, hasBom: hostsState.hasBom },
     };
   }),
 };

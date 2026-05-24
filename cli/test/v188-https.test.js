@@ -496,3 +496,96 @@ test("integration: setup → status → remove roundtrip (requires mkcert)", asy
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });
+
+// ---- v1.9.3: BOM strip + force re-write + ACL/diagnosis --------------
+// Windows hosts failures reported in the field: a UTF-8 BOM and a
+// clobbered hosts ACL both make Windows ignore the entire hosts file,
+// and the old code (a) preserved the BOM through read/write and (b)
+// reset the ACL by Move-Item'ing a temp file over the original. These
+// tests lock the cross-platform-observable behaviour (BOM strip, force
+// re-write, no-BOM on disk). The Windows-only icacls/in-place specifics
+// are exercised by the PowerShell script string, asserted below.
+
+test("readHosts strips a leading UTF-8 BOM", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-bom-"));
+  const p = path.join(dir, "hosts");
+  // EF BB BF + content
+  fs.writeFileSync(p, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("127.0.0.1 dev.foo.com\n")]));
+  const content = hostsMod.readHosts(p);
+  assert.equal(content.charCodeAt(0), "1".charCodeAt(0), "BOM stripped — first char is the address digit");
+  assert.ok(!content.includes("﻿"), "no U+FEFF anywhere");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("hasUtf8Bom detects + rejects correctly", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-bom2-"));
+  const withBom = path.join(dir, "with");
+  const without = path.join(dir, "without");
+  fs.writeFileSync(withBom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("x")]));
+  fs.writeFileSync(without, "127.0.0.1 dev.foo.com\n");
+  assert.equal(hostsMod.hasUtf8Bom(withBom), true);
+  assert.equal(hostsMod.hasUtf8Bom(without), false);
+  assert.equal(hostsMod.hasUtf8Bom(path.join(dir, "nope")), false, "missing file → false");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("writeHosts (direct) never leaves a BOM on disk even if handed one", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-bom3-"));
+  const p = path.join(dir, "hosts");
+  hostsMod.writeHosts(p, "﻿127.0.0.1\tdev.foo.com\n", { platform: "linux" });
+  const raw = fs.readFileSync(p);
+  assert.notDeepEqual([raw[0], raw[1], raw[2]], [0xef, 0xbb, 0xbf], "no BOM bytes at the head");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("addEntry force:true re-writes even when the entry already exists", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-force-"));
+  const p = path.join(dir, "hosts");
+  // Pre-seed with the entry already present (so planAddEntry is a no-op).
+  fs.writeFileSync(p, [hostsMod.MANAGED_BLOCK_START, "127.0.0.1\tdev.foo.com", hostsMod.MANAGED_BLOCK_END, ""].join("\n"));
+  let writes = 0;
+  const writeImpl = (fp, content) => { writes += 1; fs.writeFileSync(fp, content); };
+
+  // Without force: no write (idempotent).
+  const r1 = hostsMod.addEntry(p, "dev.foo.com", { platform: "linux", writeImpl });
+  assert.equal(r1.changed, false);
+  assert.equal(writes, 0, "no write when content is unchanged and force is off");
+
+  // With force: writes anyway (this is what triggers ACL regrant +
+  // flushdns on the real Windows path).
+  const r2 = hostsMod.addEntry(p, "dev.foo.com", { platform: "linux", writeImpl, force: true });
+  assert.equal(r2.changed, false, "content didn't change");
+  assert.equal(r2.forced, true, "but it was force-written");
+  assert.equal(writes, 1, "exactly one forced write");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("writeHostsViaRunAs PowerShell: in-place WriteAllText + icacls regrant + no Move-Item", () => {
+  let psArgs = null;
+  const execImpl = (cmd, args) => {
+    if (cmd === "powershell") psArgs = args.join(" ");
+    // Simulate the elevated child having written the content so the
+    // post-write verification (readHosts === content) passes.
+    return Buffer.from("");
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-runas-"));
+  const p = path.join(dir, "hosts");
+  const content = "127.0.0.1\tdev.foo.com\n";
+  // Seed the file so the verification read matches what we "wrote".
+  fs.writeFileSync(p, content);
+  try {
+    hostsMod.writeHostsViaRunAs(p, content, { execImpl });
+  } catch {
+    // The verification may still throw in some environments; we only
+    // assert on the generated script, captured before any throw.
+  }
+  assert.ok(psArgs, "powershell was invoked");
+  assert.ok(psArgs.includes("WriteAllText"), "writes in place via .NET WriteAllText");
+  assert.ok(psArgs.includes("UTF8Encoding"), "UTF-8 encoder (no-BOM constructor)");
+  assert.ok(psArgs.includes("icacls"), "regrants ACL via icacls");
+  assert.ok(psArgs.includes("S-1-5-20"), "grants NETWORK SERVICE (Dnscache) read");
+  assert.ok(psArgs.includes("S-1-5-32-545"), "grants BUILTIN\\Users read");
+  assert.ok(psArgs.includes("flushdns"), "flushes the DNS cache");
+  assert.ok(!psArgs.includes("Move-Item"), "no Move-Item (would reset the ACL)");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
