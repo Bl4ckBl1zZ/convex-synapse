@@ -138,6 +138,12 @@ type RouterDeps struct {
 	// a deterministic stub so they don't burn outbound calls + so
 	// CI stays offline-friendly.
 	GeoResolver geo.Resolver
+
+	// AgentStaleAfter / AgentOfflineAfter (Bloco 6.5) tune the computed host
+	// effectiveStatus. Zero → HostsHandler defaults (60s / 300s), which is
+	// what the test harness uses.
+	AgentStaleAfter   time.Duration
+	AgentOfflineAfter time.Duration
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -266,7 +272,12 @@ func NewRouter(d RouterDeps) http.Handler {
 	// startup backfill in cmd/server, not API availability.
 	cellsH := &CellsHandler{DB: d.DB, Projects: projectsH}
 	projectsH.Cells = cellsH
-	hostsH := &HostsHandler{DB: d.DB, PublicURL: d.PublicURL}
+	hostsH := &HostsHandler{
+		DB:           d.DB,
+		PublicURL:    d.PublicURL,
+		StaleAfter:   d.AgentStaleAfter,
+		OfflineAfter: d.AgentOfflineAfter,
+	}
 	// Agent contact points (feat/cell-control-plane, Bloco 6). Public —
 	// register authenticates with the adoption token in the body, heartbeat
 	// + desired_state with the agent bearer token. Mounted in the public
@@ -340,6 +351,9 @@ func NewRouter(d RouterDeps) http.Handler {
 			// instance-admin gated inside its own Routes(); /cells is
 			// project-RBAC gated per cell.
 			r.Mount("/hosts", hostsH.Routes())
+			// /v1/host_agents — instance-admin agent lifecycle (revoke /
+			// rotate_token). Same gate as /hosts; separate prefix.
+			r.Mount("/host_agents", hostsH.AgentAdminRoutes())
 			r.Mount("/cells", cellsH.Routes())
 			// /v1/admin — instance-level operations (version check + auto-
 			// upgrade). The handler's own middleware gates each route to

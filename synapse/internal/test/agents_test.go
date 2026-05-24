@@ -220,3 +220,162 @@ func TestAgent_DesiredStateEmptyButAuthenticated(t *testing.T) {
 	// Unauthenticated → 401.
 	h.AssertStatus(http.MethodGet, "/v1/agents/desired_state", "", nil, http.StatusUnauthorized)
 }
+
+// ---------- Bloco 6.5: liveness + agent lifecycle ----------
+
+type hostAgentItem struct {
+	ID             string     `json:"id"`
+	HostID         string     `json:"hostId"`
+	Status         string     `json:"status"`
+	ConnectionMode string     `json:"connectionMode"`
+	LastSeenAt     *time.Time `json:"lastSeenAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	Observed       *struct {
+		DockerAvailable       bool `json:"dockerAvailable"`
+		ManagedContainerCount int  `json:"managedContainerCount"`
+	} `json:"observed,omitempty"`
+}
+
+type hostAgentsListResult struct {
+	AgentVersion string          `json:"agentVersion,omitempty"`
+	Items        []hostAgentItem `json:"items"`
+}
+
+func TestHost_EffectiveStatusTransitions(t *testing.T) {
+	h := Setup(t)
+	admin, hostID, tok := mintHostToken(t, h, "vps-1")
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &agentRegisterResult{})
+
+	getStatus := func() string {
+		var host models.Host
+		h.DoJSON(http.MethodGet, "/v1/hosts/"+hostID, admin.AccessToken, nil, http.StatusOK, &host)
+		return host.EffectiveStatus
+	}
+	setHeartbeatAge := func(seconds int) {
+		if _, err := h.DB.Exec(context.Background(),
+			`UPDATE hosts SET last_heartbeat_at = now() - make_interval(secs => $2) WHERE id = $1`,
+			hostID, seconds); err != nil {
+			t.Fatalf("age heartbeat: %v", err)
+		}
+	}
+
+	// Fresh register → online (default thresholds 60/300 in tests).
+	if s := getStatus(); s != models.HostStatusOnline {
+		t.Errorf("fresh host effectiveStatus = %q, want online", s)
+	}
+	// 120s old → stale.
+	setHeartbeatAge(120)
+	if s := getStatus(); s != models.HostStatusStale {
+		t.Errorf("120s-old host effectiveStatus = %q, want stale", s)
+	}
+	// 600s old → offline.
+	setHeartbeatAge(600)
+	if s := getStatus(); s != models.HostStatusOffline {
+		t.Errorf("600s-old host effectiveStatus = %q, want offline", s)
+	}
+}
+
+func TestHost_AgentsList(t *testing.T) {
+	h := Setup(t)
+	admin, hostID, tok := mintHostToken(t, h, "vps-1")
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &reg)
+
+	// Heartbeat with an observed payload so the summary is populated.
+	hb := map[string]any{
+		"agentVersion": "test-agent-1.0",
+		"observed": map[string]any{
+			"dockerAvailable":          true,
+			"synapseManagedContainers": []string{"convex-a", "convex-b"},
+		},
+	}
+	h.DoJSON(http.MethodPost, "/v1/agents/heartbeat", reg.AgentToken, hb, http.StatusOK, &map[string]any{})
+
+	var list hostAgentsListResult
+	h.DoJSON(http.MethodGet, "/v1/hosts/"+hostID+"/agents", admin.AccessToken, nil, http.StatusOK, &list)
+	if len(list.Items) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(list.Items))
+	}
+	a := list.Items[0]
+	if a.ID != reg.AgentID || a.HostID != hostID || a.Status != models.HostAgentStatusOnline {
+		t.Errorf("agent view wrong: %+v", a)
+	}
+	if a.Observed == nil || !a.Observed.DockerAvailable || a.Observed.ManagedContainerCount != 2 {
+		t.Errorf("observed summary wrong: %+v", a.Observed)
+	}
+	// Non-admin can't list agents.
+	stranger := h.RegisterRandomUser()
+	h.AssertStatus(http.MethodGet, "/v1/hosts/"+hostID+"/agents", stranger.AccessToken, nil, http.StatusForbidden)
+}
+
+func TestAgent_RevokeBlocksHeartbeat(t *testing.T) {
+	h := Setup(t)
+	admin, _, tok := mintHostToken(t, h, "vps-1")
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &reg)
+
+	// Heartbeat works before revoke.
+	h.DoJSON(http.MethodPost, "/v1/agents/heartbeat", reg.AgentToken, map[string]any{}, http.StatusOK, &map[string]any{})
+
+	// Revoke (instance-admin).
+	h.DoJSON(http.MethodPost, "/v1/host_agents/"+reg.AgentID+"/revoke", admin.AccessToken, map[string]any{}, http.StatusOK, &map[string]any{})
+
+	// Same token now fails.
+	h.AssertStatus(http.MethodPost, "/v1/agents/heartbeat", reg.AgentToken, map[string]any{}, http.StatusUnauthorized)
+
+	// Non-admin can't revoke.
+	stranger := h.RegisterRandomUser()
+	h.AssertStatus(http.MethodPost, "/v1/host_agents/"+reg.AgentID+"/revoke", stranger.AccessToken, map[string]any{}, http.StatusForbidden)
+}
+
+func TestAgent_RotateToken(t *testing.T) {
+	h := Setup(t)
+	admin, _, tok := mintHostToken(t, h, "vps-1")
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &reg)
+
+	var rot struct {
+		ID         string `json:"id"`
+		HostID     string `json:"hostId"`
+		AgentToken string `json:"agentToken"`
+	}
+	h.DoJSON(http.MethodPost, "/v1/host_agents/"+reg.AgentID+"/rotate_token", admin.AccessToken, map[string]any{}, http.StatusOK, &rot)
+	if !strings.HasPrefix(rot.AgentToken, "syn_agent_") || rot.AgentToken == reg.AgentToken {
+		t.Errorf("rotate should mint a new syn_agent_ token, got %q", rot.AgentToken)
+	}
+
+	// Old token no longer works; new token does.
+	h.AssertStatus(http.MethodPost, "/v1/agents/heartbeat", reg.AgentToken, map[string]any{}, http.StatusUnauthorized)
+	h.DoJSON(http.MethodPost, "/v1/agents/heartbeat", rot.AgentToken, map[string]any{}, http.StatusOK, &map[string]any{})
+}
+
+func TestAgent_HeartbeatIgnoresBodyHostID(t *testing.T) {
+	h := Setup(t)
+	admin, hostAID, tokA := mintHostToken(t, h, "host-A")
+	var regA agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tokA.Token), http.StatusCreated, &regA)
+
+	// A second, unrelated host.
+	var hostB models.Host
+	h.DoJSON(http.MethodPost, "/v1/hosts", admin.AccessToken, map[string]any{"name": "host-B"}, http.StatusCreated, &hostB)
+
+	// Agent A heartbeats but LIES about hostId (claims host B). The server must
+	// update host A (from the token), never host B (from the body).
+	hb := map[string]any{
+		"hostId":       hostB.ID,
+		"agentId":      "whatever",
+		"agentVersion": "lied-1.2.3",
+	}
+	h.DoJSON(http.MethodPost, "/v1/agents/heartbeat", regA.AgentToken, hb, http.StatusOK, &map[string]any{})
+
+	var a, b models.Host
+	h.DoJSON(http.MethodGet, "/v1/hosts/"+hostAID, admin.AccessToken, nil, http.StatusOK, &a)
+	h.DoJSON(http.MethodGet, "/v1/hosts/"+hostB.ID, admin.AccessToken, nil, http.StatusOK, &b)
+	if a.AgentVersion != "lied-1.2.3" {
+		t.Errorf("host A should have been updated from the token, got agentVersion %q", a.AgentVersion)
+	}
+	if b.AgentVersion == "lied-1.2.3" {
+		t.Errorf("host B must NOT be updated from a body hostId — tenant/host isolation breach")
+	}
+}

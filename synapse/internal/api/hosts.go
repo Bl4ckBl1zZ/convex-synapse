@@ -37,6 +37,62 @@ type HostsHandler struct {
 	// returned by createAdoptionToken. Empty → a "<your-synapse-url>"
 	// placeholder is used. Wired from RouterDeps.PublicURL.
 	PublicURL string
+	// StaleAfter / OfflineAfter drive the computed effectiveStatus
+	// (feat/cell-control-plane, Bloco 6.5). A host whose last heartbeat is
+	// older than StaleAfter reads "stale"; older than OfflineAfter reads
+	// "offline". Zero values fall back to 60s / 300s so tests (which don't
+	// wire them) and unconfigured installs behave sensibly.
+	StaleAfter   time.Duration
+	OfflineAfter time.Duration
+}
+
+func (h *HostsHandler) staleAfter() time.Duration {
+	if h.StaleAfter > 0 {
+		return h.StaleAfter
+	}
+	return 60 * time.Second
+}
+
+func (h *HostsHandler) offlineAfter() time.Duration {
+	if h.OfflineAfter > 0 {
+		return h.OfflineAfter
+	}
+	return 300 * time.Second
+}
+
+// effectiveHostStatus is the honest, computed liveness of a host — distinct
+// from the stored hosts.status (which is just the last heartbeat's signal).
+//   - operator intent wins: a drained host always reads "draining".
+//   - no heartbeat yet: the control-plane self-host is "online" (Synapse is
+//     demonstrably up); any other host keeps its stored status (e.g. a
+//     manually-created host stays "unknown" until an agent reports).
+//   - otherwise: online ≤ staleAfter < stale ≤ offlineAfter < offline.
+func effectiveHostStatus(hst models.Host, staleAfter, offlineAfter time.Duration, now time.Time) string {
+	if hst.Status == models.HostStatusDraining {
+		return models.HostStatusDraining
+	}
+	if hst.LastHeartbeatAt == nil {
+		if hst.IsSynapseHost {
+			return models.HostStatusOnline
+		}
+		return hst.Status
+	}
+	age := now.Sub(*hst.LastHeartbeatAt)
+	switch {
+	case age <= staleAfter:
+		return models.HostStatusOnline
+	case age <= offlineAfter:
+		return models.HostStatusStale
+	default:
+		return models.HostStatusOffline
+	}
+}
+
+// writeHost stamps the computed effectiveStatus and writes the host. Every
+// host response goes through here so the field is always present + honest.
+func (h *HostsHandler) writeHost(w http.ResponseWriter, status int, hst models.Host) {
+	hst.EffectiveStatus = effectiveHostStatus(hst, h.staleAfter(), h.offlineAfter(), time.Now())
+	writeJSON(w, status, hst)
 }
 
 func (h *HostsHandler) Routes() chi.Router {
@@ -49,7 +105,19 @@ func (h *HostsHandler) Routes() chi.Router {
 		r.Patch("/", h.updateHost)
 		r.Post("/drain", h.drainHost)
 		r.Post("/adoption_token", h.createAdoptionToken)
+		r.Get("/agents", h.listHostAgents)
 	})
+	return r
+}
+
+// AgentAdminRoutes mounts the instance-admin agent-lifecycle endpoints at
+// /v1/host_agents (feat/cell-control-plane, Bloco 6.5). Separate from Routes()
+// because the path prefix differs; reuses the same instance-admin gate.
+func (h *HostsHandler) AgentAdminRoutes() chi.Router {
+	r := chi.NewRouter()
+	r.Use(h.requireInstanceAdmin)
+	r.Post("/{agentID}/revoke", h.revokeAgent)
+	r.Post("/{agentID}/rotate_token", h.rotateAgentToken)
 	return r
 }
 
@@ -123,6 +191,8 @@ func (h *HostsHandler) listHosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+	now := time.Now()
+	staleAfter, offlineAfter := h.staleAfter(), h.offlineAfter()
 	items := make([]models.Host, 0)
 	for rows.Next() {
 		hst, err := scanHost(rows)
@@ -131,6 +201,7 @@ func (h *HostsHandler) listHosts(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to read hosts")
 			return
 		}
+		hst.EffectiveStatus = effectiveHostStatus(hst, staleAfter, offlineAfter, now)
 		items = append(items, hst)
 	}
 	if err := rows.Err(); err != nil {
@@ -203,7 +274,7 @@ func (h *HostsHandler) createHost(w http.ResponseWriter, r *http.Request) {
 		TargetID:   hst.ID,
 		Metadata:   map[string]any{"name": hst.Name, "provider": hst.Provider, "region": hst.Region},
 	})
-	writeJSON(w, http.StatusCreated, hst)
+	h.writeHost(w, http.StatusCreated, hst)
 }
 
 // ---------- GET /v1/hosts/{hostID} ----------
@@ -213,7 +284,7 @@ func (h *HostsHandler) getHost(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, hst)
+	h.writeHost(w, http.StatusOK, hst)
 }
 
 // ---------- PATCH /v1/hosts/{hostID} ----------
@@ -296,7 +367,7 @@ func (h *HostsHandler) updateHost(w http.ResponseWriter, r *http.Request) {
 		TargetType: audit.TargetHost,
 		TargetID:   updated.ID,
 	})
-	writeJSON(w, http.StatusOK, updated)
+	h.writeHost(w, http.StatusOK, updated)
 }
 
 // ---------- POST /v1/hosts/{hostID}/drain ----------
@@ -324,7 +395,7 @@ func (h *HostsHandler) drainHost(w http.ResponseWriter, r *http.Request) {
 		TargetType: audit.TargetHost,
 		TargetID:   updated.ID,
 	})
-	writeJSON(w, http.StatusOK, updated)
+	h.writeHost(w, http.StatusOK, updated)
 }
 
 // ---------- POST /v1/hosts/{hostID}/adoption_token ----------
@@ -406,6 +477,170 @@ func (h *HostsHandler) createAdoptionToken(w http.ResponseWriter, r *http.Reques
 		Metadata:   map[string]any{"tokenId": resp.ID},
 	})
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// ---------- GET /v1/hosts/{hostID}/agents ----------
+
+// hostAgentView is the safe, no-secrets projection of a host_agents row. It
+// deliberately omits token_hash; the heartbeat payload is reduced to a tiny
+// summary (docker availability + managed-container count) so we never echo an
+// agent's raw observed blob back over the API.
+type hostAgentView struct {
+	ID             string                `json:"id"`
+	HostID         string                `json:"hostId"`
+	Status         string                `json:"status"`
+	ConnectionMode string                `json:"connectionMode"`
+	LastSeenAt     *time.Time            `json:"lastSeenAt,omitempty"`
+	CreatedAt      time.Time             `json:"createdAt"`
+	UpdatedAt      time.Time             `json:"updatedAt"`
+	Observed       *agentObservedSummary `json:"observed,omitempty"`
+}
+
+type agentObservedSummary struct {
+	DockerAvailable       bool `json:"dockerAvailable"`
+	ManagedContainerCount int  `json:"managedContainerCount"`
+}
+
+type listHostAgentsResp struct {
+	// AgentVersion is a host-level fact (all agents on a host report the same
+	// running version); surfaced here so the agents view shows it without a
+	// per-agent column. Empty until the first heartbeat.
+	AgentVersion string          `json:"agentVersion,omitempty"`
+	Items        []hostAgentView `json:"items"`
+}
+
+func (h *HostsHandler) listHostAgents(w http.ResponseWriter, r *http.Request) {
+	hst, ok := h.loadHost(w, r)
+	if !ok {
+		return
+	}
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT id, host_id, status, connection_mode, last_seen_at,
+		       last_heartbeat_payload, created_at, updated_at
+		  FROM host_agents
+		 WHERE host_id = $1
+		 ORDER BY created_at ASC
+	`, hst.ID)
+	if err != nil {
+		logErr("list host agents", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to list agents")
+		return
+	}
+	defer rows.Close()
+	items := make([]hostAgentView, 0)
+	for rows.Next() {
+		var v hostAgentView
+		var payload []byte
+		if err := rows.Scan(&v.ID, &v.HostID, &v.Status, &v.ConnectionMode, &v.LastSeenAt,
+			&payload, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			logErr("scan host agent", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to read agents")
+			return
+		}
+		v.Observed = summarizeObserved(payload)
+		items = append(items, v)
+	}
+	if err := rows.Err(); err != nil {
+		logErr("iterate host agents", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to read agents")
+		return
+	}
+	writeJSON(w, http.StatusOK, listHostAgentsResp{AgentVersion: hst.AgentVersion, Items: items})
+}
+
+// summarizeObserved reduces the agent's last_heartbeat_payload jsonb to a
+// non-sensitive summary. Returns nil when there's no payload.
+func summarizeObserved(raw []byte) *agentObservedSummary {
+	if len(raw) == 0 {
+		return nil
+	}
+	var p struct {
+		DockerAvailable          bool     `json:"dockerAvailable"`
+		SynapseManagedContainers []string `json:"synapseManagedContainers"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil
+	}
+	return &agentObservedSummary{
+		DockerAvailable:       p.DockerAvailable,
+		ManagedContainerCount: len(p.SynapseManagedContainers),
+	}
+}
+
+// ---------- POST /v1/host_agents/{agentID}/revoke ----------
+
+func (h *HostsHandler) revokeAgent(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	id := chi.URLParam(r, "agentID")
+	var hostID string
+	err := h.DB.QueryRow(r.Context(), `
+		UPDATE host_agents SET status = 'revoked', updated_at = now()
+		 WHERE id::text = $1
+		RETURNING host_id
+	`, id).Scan(&hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "agent_not_found", "Agent not found")
+		return
+	}
+	if err != nil {
+		logErr("revoke agent", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to revoke agent")
+		return
+	}
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		ActorID:    uid,
+		Action:     audit.ActionRevokeHostAgent,
+		TargetType: audit.TargetHostAgent,
+		TargetID:   id,
+		Metadata:   map[string]any{"hostId": hostID},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": models.HostAgentStatusRevoked})
+}
+
+// ---------- POST /v1/host_agents/{agentID}/rotate_token ----------
+
+type rotateAgentTokenResp struct {
+	// AgentToken is the freshly-minted bearer, shown ONCE. The previous
+	// token's hash is overwritten, so it stops working immediately.
+	ID         string `json:"id"`
+	HostID     string `json:"hostId"`
+	AgentToken string `json:"agentToken"`
+}
+
+func (h *HostsHandler) rotateAgentToken(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	id := chi.URLParam(r, "agentID")
+	plain, hash, err := auth.GenerateTokenWithPrefix(auth.AgentTokenPrefix)
+	if err != nil {
+		logErr("generate rotated agent token", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to rotate token")
+		return
+	}
+	// Rotating also un-revokes (status→online) — operators rotate to recover a
+	// leaked-but-needed agent. last_seen_at is left as-is.
+	var hostID string
+	err = h.DB.QueryRow(r.Context(), `
+		UPDATE host_agents SET token_hash = $2, status = 'online', updated_at = now()
+		 WHERE id::text = $1
+		RETURNING host_id
+	`, id, hash).Scan(&hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "agent_not_found", "Agent not found")
+		return
+	}
+	if err != nil {
+		logErr("rotate agent token", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to rotate token")
+		return
+	}
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		ActorID:    uid,
+		Action:     audit.ActionRotateHostAgentToken,
+		TargetType: audit.TargetHostAgent,
+		TargetID:   id,
+		Metadata:   map[string]any{"hostId": hostID},
+	})
+	writeJSON(w, http.StatusOK, rotateAgentTokenResp{ID: id, HostID: hostID, AgentToken: plain})
 }
 
 // ---------- helpers ----------

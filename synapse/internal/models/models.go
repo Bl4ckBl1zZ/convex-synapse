@@ -329,6 +329,10 @@ const (
 	HostStatusOffline  = "offline"
 	HostStatusDraining = "draining"
 	HostStatusUnknown  = "unknown"
+	// HostStatusStale is a COMPUTED effectiveStatus value only — never stored
+	// in hosts.status (whose CHECK constraint doesn't allow it). It means
+	// "last heartbeat is older than the stale threshold but not yet offline".
+	HostStatusStale = "stale"
 )
 
 // Host is a physical/virtual machine the control plane knows about. Today
@@ -352,6 +356,11 @@ type Host struct {
 	LastHeartbeatAt *time.Time        `json:"lastHeartbeatAt,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
+	// EffectiveStatus (Bloco 6.5) is computed at read time from
+	// LastHeartbeatAt + the stale/offline thresholds — NOT stored. The API
+	// always sets it; `Status` remains the last-known stored signal. Clients
+	// should display EffectiveStatus. See api.effectiveHostStatus.
+	EffectiveStatus string `json:"effectiveStatus,omitempty"`
 }
 
 const (

@@ -15,6 +15,7 @@ import {
   api,
   type Host,
   type HostAdoptionToken,
+  type HostAgentsResponse,
 } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 
@@ -130,7 +131,11 @@ export function HostsPanel() {
         host={tokenHost}
         onClose={() => setTokenHost(null)}
       />
-      <HostDetailsDialog host={detailsHost} onClose={() => setDetailsHost(null)} />
+      <HostDetailsDialog
+        key={detailsHost?.id ?? "host-details-closed"}
+        host={detailsHost}
+        onClose={() => setDetailsHost(null)}
+      />
       <DrainHostDialog
         host={drainHost}
         onClose={() => setDrainHost(null)}
@@ -144,6 +149,7 @@ function hostStatusTone(status: string): "green" | "yellow" | "red" | "neutral" 
   switch (status) {
     case "online":
       return "green";
+    case "stale":
     case "draining":
       return "yellow";
     case "offline":
@@ -151,6 +157,26 @@ function hostStatusTone(status: string): "green" | "yellow" | "red" | "neutral" 
     default:
       return "neutral";
   }
+}
+
+// hostStatus prefers the computed effectiveStatus (online/stale/offline),
+// falling back to the stored status for older/stubbed payloads.
+function hostStatus(host: Host): string {
+  return host.effectiveStatus || host.status;
+}
+
+// timeAgo renders a compact relative time ("42s ago", "3m ago", "2d ago").
+function timeAgo(iso?: string): string {
+  if (!iso) return "never";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return iso;
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 function HostCard({
@@ -172,7 +198,7 @@ function HostCard({
             <span className="font-mono text-sm font-medium text-neutral-100">
               {host.name}
             </span>
-            <Badge tone={hostStatusTone(host.status)}>{host.status}</Badge>
+            <Badge tone={hostStatusTone(hostStatus(host))}>{hostStatus(host)}</Badge>
             {host.isSynapseHost && <Badge tone="violet">this host</Badge>}
             <Badge tone="neutral">{host.provider}</Badge>
             {host.region && <Badge tone="neutral">{host.region}</Badge>}
@@ -187,9 +213,9 @@ function HostCard({
             {host.cpuCores != null && <span>{host.cpuCores} vCPU</span>}
             {host.memoryMb != null && <span>{formatMb(host.memoryMb)}</span>}
             {host.diskGb != null && <span>{host.diskGb} GB disk</span>}
-            <span>
-              <span className="text-neutral-600">Heartbeat:</span>{" "}
-              {host.lastHeartbeatAt ? formatDate(host.lastHeartbeatAt) : "never"}
+            <span title={host.lastHeartbeatAt ? formatDate(host.lastHeartbeatAt) : undefined}>
+              <span className="text-neutral-600">Last seen:</span>{" "}
+              {timeAgo(host.lastHeartbeatAt)}
             </span>
           </div>
         </div>
@@ -459,6 +485,19 @@ function AdoptionTokenDialog({
 
 /* -------------------- host details -------------------- */
 
+function agentTone(status: string): "green" | "yellow" | "red" | "neutral" {
+  switch (status) {
+    case "online":
+      return "green";
+    case "offline":
+      return "yellow";
+    case "revoked":
+      return "red";
+    default:
+      return "neutral";
+  }
+}
+
 function HostDetailsDialog({
   host,
   onClose,
@@ -466,6 +505,19 @@ function HostDetailsDialog({
   host: Host | null;
   onClose: () => void;
 }) {
+  // Fetch this host's agents while the dialog is open (null key → no fetch).
+  // Hooks run unconditionally (before the !host early-return) per the rules
+  // of hooks.
+  const { data, error, mutate } = useSWR<HostAgentsResponse>(
+    host ? ["/host-agents", host.id] : null,
+    () => api.hosts.agents(host!.id),
+    { revalidateOnFocus: false },
+  );
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
+  const [rotated, setRotated] = useState<{ agentId: string; token: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
   if (!host) {
     return (
       <Dialog open={false} onClose={onClose}>
@@ -474,11 +526,40 @@ function HostDetailsDialog({
     );
   }
   const labelEntries = Object.entries(host.labels ?? {});
+  const agents = data?.items ?? [];
+
+  const revoke = async (agentId: string) => {
+    setActionError(null);
+    setBusyAgentId(agentId);
+    try {
+      await api.hosts.revokeAgent(agentId);
+      await mutate();
+    } catch (e) {
+      setActionError(e instanceof ApiError ? e.message : "Could not revoke agent");
+    } finally {
+      setBusyAgentId(null);
+    }
+  };
+  const rotate = async (agentId: string) => {
+    setActionError(null);
+    setBusyAgentId(agentId);
+    try {
+      const r = await api.hosts.rotateAgentToken(agentId);
+      setRotated({ agentId, token: r.agentToken });
+      setCopied(false);
+      await mutate();
+    } catch (e) {
+      setActionError(e instanceof ApiError ? e.message : "Could not rotate token");
+    } finally {
+      setBusyAgentId(null);
+    }
+  };
+
   return (
     <Dialog open onClose={onClose} title={host.name} className="max-w-lg">
       <div className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge tone={hostStatusTone(host.status)}>{host.status}</Badge>
+          <Badge tone={hostStatusTone(hostStatus(host))}>{hostStatus(host)}</Badge>
           {host.isSynapseHost && <Badge tone="violet">this host</Badge>}
           <Badge tone="neutral">{host.provider}</Badge>
           {host.region && <Badge tone="neutral">{host.region}</Badge>}
@@ -491,10 +572,7 @@ function HostDetailsDialog({
           <Meta label="vCPU" value={host.cpuCores != null ? String(host.cpuCores) : "—"} />
           <Meta label="Memory" value={host.memoryMb != null ? formatMb(host.memoryMb) : "—"} />
           <Meta label="Disk" value={host.diskGb != null ? `${host.diskGb} GB` : "—"} />
-          <Meta
-            label="Last heartbeat"
-            value={host.lastHeartbeatAt ? formatDate(host.lastHeartbeatAt) : "never"}
-          />
+          <Meta label="Last seen" value={timeAgo(host.lastHeartbeatAt)} />
           <Meta label="Created" value={formatDate(host.createdAt)} />
         </dl>
         {labelEntries.length > 0 && (
@@ -509,10 +587,95 @@ function HostDetailsDialog({
             </div>
           </div>
         )}
+
+        {/* Agents on this host (Bloco 6.5). */}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-neutral-200">
+            Agents{agents.length ? ` (${agents.length})` : ""}
+          </p>
+          {error instanceof ApiError && (
+            <p className="text-xs text-red-400">{error.message}</p>
+          )}
+          {agents.length === 0 ? (
+            <p className="text-[11px] text-neutral-500">
+              No agent has registered on this host yet. Generate an adoption
+              token and run <code>synapse-agent join</code> on the VPS.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {agents.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center justify-between gap-2 rounded border border-neutral-800/80 px-2.5 py-1.5"
+                >
+                  <div className="min-w-0 text-[11px]">
+                    <div className="flex items-center gap-1.5">
+                      <Badge tone={agentTone(a.status)}>{a.status}</Badge>
+                      <span className="text-neutral-500">{a.connectionMode}</span>
+                      <span className="text-neutral-500">seen {timeAgo(a.lastSeenAt)}</span>
+                    </div>
+                    {a.observed && (
+                      <p className="mt-0.5 text-neutral-600">
+                        docker {a.observed.dockerAvailable ? "up" : "down"} ·{" "}
+                        {a.observed.managedContainerCount} managed
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    {a.status !== "revoked" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busyAgentId === a.id}
+                        onClick={() => revoke(a.id)}
+                      >
+                        Revoke
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={busyAgentId === a.id}
+                      onClick={() => rotate(a.id)}
+                    >
+                      Rotate
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {actionError && <p className="text-xs text-red-400">{actionError}</p>}
+          {rotated && (
+            <div className="space-y-1 rounded border border-yellow-900/60 bg-yellow-900/20 px-2.5 py-2">
+              <p className="text-[11px] text-yellow-200">
+                New agent token (shown once) — update the VPS config or re-run{" "}
+                <code>synapse-agent join</code>:
+              </p>
+              <pre className="overflow-x-auto break-all rounded bg-neutral-950 p-2 font-mono text-[11px] text-neutral-200">
+                {rotated.token}
+              </pre>
+              <div className="flex justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={async () => {
+                    if (await copyToClipboard(rotated.token)) {
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    }
+                  }}
+                >
+                  {copied ? "Copied!" : "Copy token"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
         <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
-          Agent runtime is not implemented yet — this host can be registered
-          manually and issued an adoption token. Live heartbeat, metrics and
-          observed state arrive with the synapse-agent (a later block).
+          The agent is observe-only — live heartbeat + metrics; no
+          apply/reconcile yet.
         </p>
         <div className="flex justify-end">
           <Button onClick={onClose}>Close</Button>

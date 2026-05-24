@@ -562,6 +562,11 @@ export type Host = {
   privateIp?: string;
   labels: Record<string, string>;
   status: "online" | "offline" | "draining" | "unknown" | string;
+  // effectiveStatus (Bloco 6.5) is the honest, computed liveness — derived
+  // from lastHeartbeatAt + the stale/offline thresholds. Prefer it over
+  // `status` for display; adds "stale". May be absent on stubbed/older
+  // payloads, so callers fall back to `status`.
+  effectiveStatus?: "online" | "offline" | "stale" | "draining" | "unknown" | string;
   agentVersion?: string;
   dockerVersion?: string;
   cpuCores?: number;
@@ -573,6 +578,26 @@ export type Host = {
   lastHeartbeatAt?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+// HostAgent is the no-secrets view of an agent registered on a host
+// (GET /v1/hosts/{id}/agents). The observed summary never carries the raw
+// heartbeat payload.
+export type HostAgent = {
+  id: string;
+  hostId: string;
+  status: "pending" | "online" | "offline" | "revoked" | string;
+  connectionMode: string;
+  lastSeenAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  observed?: { dockerAvailable: boolean; managedContainerCount: number };
+};
+
+export type HostAgentsResponse = {
+  // agentVersion is a host-level fact (the running agent version).
+  agentVersion?: string;
+  items: HostAgent[];
 };
 
 export type CreateHostInput = {
@@ -1603,6 +1628,28 @@ export const api = {
       return request<HostAdoptionToken>(
         `/v1/hosts/${encodeURIComponent(id)}/adoption_token`,
         { method: "POST", body },
+      );
+    },
+    // Agent lifecycle (Bloco 6.5), all instance-admin.
+    agents(id: string): Promise<HostAgentsResponse> {
+      return request<HostAgentsResponse>(
+        `/v1/hosts/${encodeURIComponent(id)}/agents`,
+      );
+    },
+    revokeAgent(agentId: string): Promise<{ id: string; status: string }> {
+      return request(`/v1/host_agents/${encodeURIComponent(agentId)}/revoke`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    // Returns the new agent token ONCE. The operator must update the agent's
+    // config (or re-run `synapse-agent join`) with it.
+    rotateAgentToken(
+      agentId: string,
+    ): Promise<{ id: string; hostId: string; agentToken: string }> {
+      return request(
+        `/v1/host_agents/${encodeURIComponent(agentId)}/rotate_token`,
+        { method: "POST", body: {} },
       );
     },
   },

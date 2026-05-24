@@ -168,6 +168,13 @@ type Config struct {
 	// backfill time, falling back to "local" when that's the placeholder.
 	// Set SYNAPSE_REGION to make Cell names deterministic across hosts.
 	Region string
+
+	// AgentStaleAfter / AgentOfflineAfter (Bloco 6.5) drive the computed host
+	// effectiveStatus: a host whose last agent heartbeat is older than
+	// AgentStaleAfter reads "stale"; older than AgentOfflineAfter reads
+	// "offline". Defaults: 60s / 300s.
+	AgentStaleAfter   time.Duration
+	AgentOfflineAfter time.Duration
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -258,7 +265,23 @@ func Load() (*Config, error) {
 
 		EnableCells: getEnvDefault("SYNAPSE_ENABLE_CELLS", "true") != "false",
 		Region:      strings.TrimSpace(os.Getenv("SYNAPSE_REGION")),
+
+		AgentStaleAfter:   time.Duration(getEnvInt("SYNAPSE_AGENT_STALE_AFTER_SECONDS", 60)) * time.Second,
+		AgentOfflineAfter: time.Duration(getEnvInt("SYNAPSE_AGENT_OFFLINE_AFTER_SECONDS", 300)) * time.Second,
 	}, nil
+}
+
+// getEnvInt reads an integer env var, falling back to def on unset/invalid.
+func getEnvInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 func getEnvDefault(key, def string) string {
