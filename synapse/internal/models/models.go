@@ -306,3 +306,193 @@ type AccessToken struct {
 	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 }
+
+// ============================================================
+// Cell Control Plane (feat/cell-control-plane)
+// ============================================================
+//
+// New domain layer that turns Synapse from a per-deployment control plane
+// into a "Cell" control plane. These types are Synapse-original (no Convex
+// Cloud / OpenAPI counterpart), so their JSON tags use camelCase
+// createdAt/updatedAt to match the most recent additions (DeploymentDomain,
+// DNSCredential) rather than the older createTime/updateTime parity fields.
+//
+// Conceptual model:
+//   Host   = a machine (VPS) the control plane can place resources on.
+//   Cell   = an operational unit of a Project (core / runtime / …).
+//   Deployment (existing) = a resource that lives inside a Cell.
+//   DeploymentPlacement = where a deployment physically runs (host + state).
+// See docs/CELLS.md (added in a later block) for the full vocabulary.
+
+const (
+	HostStatusOnline   = "online"
+	HostStatusOffline  = "offline"
+	HostStatusDraining = "draining"
+	HostStatusUnknown  = "unknown"
+)
+
+// Host is a physical/virtual machine the control plane knows about. Today
+// there's one (the VPS Synapse runs on, marked IsSynapseHost); agent-adopted
+// VPSs arrive in a later block. Secrets never live here.
+type Host struct {
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Provider        string            `json:"provider"`
+	Region          string            `json:"region"`
+	PublicIP        string            `json:"publicIp,omitempty"`
+	PrivateIP       string            `json:"privateIp,omitempty"`
+	Labels          map[string]string `json:"labels"`
+	Status          string            `json:"status"`
+	AgentVersion    string            `json:"agentVersion,omitempty"`
+	DockerVersion   string            `json:"dockerVersion,omitempty"`
+	CPUCores        *int              `json:"cpuCores,omitempty"`
+	MemoryMB        *int64            `json:"memoryMb,omitempty"`
+	DiskGB          *int64            `json:"diskGb,omitempty"`
+	IsSynapseHost   bool              `json:"isSynapseHost"`
+	LastHeartbeatAt *time.Time        `json:"lastHeartbeatAt,omitempty"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	UpdatedAt       time.Time         `json:"updatedAt"`
+}
+
+const (
+	HostAgentStatusPending = "pending"
+	HostAgentStatusOnline  = "online"
+	HostAgentStatusOffline = "offline"
+	HostAgentStatusRevoked = "revoked"
+)
+
+// HostAgent is the agent process running on a Host. The agent binary itself
+// (Go, synapse/cmd/synapse-agent) lands in a later block; this type + the
+// adoption-token flow are modelled now so the DB/API are agent-ready.
+// TokenHash + heartbeat payload never leave the server.
+type HostAgent struct {
+	ID             string     `json:"id"`
+	HostID         string     `json:"hostId"`
+	Name           string     `json:"name"`
+	Status         string     `json:"status"`
+	ConnectionMode string     `json:"connectionMode"`
+	LastSeenAt     *time.Time `json:"lastSeenAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+// HostAdoptionToken is a short-lived credential an operator mints to connect
+// a VPS ("synapse-agent join --token <token>"). Stored as a hash; the
+// plaintext Token is populated ONLY on the create response, shown once.
+type HostAdoptionToken struct {
+	ID        string     `json:"id"`
+	HostID    *string    `json:"hostId,omitempty"`
+	Name      string     `json:"name"`
+	Token     string     `json:"token,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	UsedAt    *time.Time `json:"usedAt,omitempty"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+	CreatedBy *string    `json:"createdBy,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+}
+
+const (
+	CellKindCore          = "core"
+	CellKindRuntime       = "runtime"
+	CellKindIntegration   = "integration"
+	CellKindPreview       = "preview"
+	CellKindEnterpriseApp = "enterprise-app"
+
+	CellEnvDev     = "dev"
+	CellEnvStaging = "staging"
+	CellEnvProd    = "prod"
+	CellEnvPreview = "preview"
+
+	CellTierShared    = "shared"
+	CellTierPremium   = "premium"
+	CellTierDedicated = "dedicated"
+	CellTierInternal  = "internal"
+
+	CellStatusActive      = "active"
+	CellStatusInactive    = "inactive"
+	CellStatusDraining    = "draining"
+	CellStatusMigrating   = "migrating"
+	CellStatusMaintenance = "maintenance"
+)
+
+// Cell is an operational unit of a Project. See migration 000018 for the
+// kind/environment/isolation taxonomy and the "a Cell is not a customer and
+// not a deployment" framing.
+type Cell struct {
+	ID                  string    `json:"id"`
+	TeamID              string    `json:"teamId"`
+	ProjectID           string    `json:"projectId"`
+	Name                string    `json:"name"`
+	Slug                string    `json:"slug"`
+	Kind                string    `json:"kind"`
+	Environment         string    `json:"environment"`
+	Region              string    `json:"region"`
+	IsolationTier       string    `json:"isolationTier"`
+	Status              string    `json:"status"`
+	PrimaryDeploymentID *string   `json:"primaryDeploymentId,omitempty"`
+	PrimaryHostID       *string   `json:"primaryHostId,omitempty"`
+	Description         string    `json:"description,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+}
+
+const (
+	CellResourceConvexDeployment = "convex_deployment"
+	CellResourceAppRoute         = "app_route"
+	CellResourceStorageScope     = "storage_scope"
+	CellResourceSecretsScope     = "secrets_scope"
+	CellResourceWorkerPool       = "worker_pool"
+	CellResourceCustom           = "custom"
+
+	CellResourceRolePrimary   = "primary"
+	CellResourceRoleSecondary = "secondary"
+	CellResourceRoleBackup    = "backup"
+	CellResourceRoleInternal  = "internal"
+)
+
+// CellResource ties a resource (a Convex deployment, today) to a Cell. The
+// partial unique index on (resource_id) WHERE resource_type='convex_deployment'
+// enforces that a deployment belongs to at most one Cell.
+type CellResource struct {
+	ID           string            `json:"id"`
+	CellID       string            `json:"cellId"`
+	ResourceType string            `json:"resourceType"`
+	ResourceID   string            `json:"resourceId"`
+	Role         string            `json:"role"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
+}
+
+const (
+	PlacementDesiredRunning = "running"
+	PlacementDesiredStopped = "stopped"
+	PlacementDesiredAbsent  = "absent"
+
+	PlacementObservedRunning = "running"
+	PlacementObservedStopped = "stopped"
+	PlacementObservedFailed  = "failed"
+	PlacementObservedUnknown = "unknown"
+)
+
+// DeploymentPlacement is the physical placement of a deployment: the Cell it
+// belongs to, the Host it runs on, and desired-vs-observed runtime state. It
+// sits ON TOP of the deployments table — deployments.container_id/host_port
+// stay authoritative for the existing provisioner + health worker.
+type DeploymentPlacement struct {
+	ID                string     `json:"id"`
+	DeploymentID      string     `json:"deploymentId"`
+	CellID            string     `json:"cellId"`
+	HostID            *string    `json:"hostId,omitempty"`
+	DesiredStatus     string     `json:"desiredStatus"`
+	ObservedStatus    string     `json:"observedStatus"`
+	DockerContainerID string     `json:"dockerContainerId,omitempty"`
+	InternalPort      *int       `json:"internalPort,omitempty"`
+	PublicURL         string     `json:"publicUrl,omitempty"`
+	RouteID           *string    `json:"routeId,omitempty"`
+	VolumeRef         string     `json:"volumeRef,omitempty"`
+	LastAppliedAt     *time.Time `json:"lastAppliedAt,omitempty"`
+	LastObservedAt    *time.Time `json:"lastObservedAt,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
+}

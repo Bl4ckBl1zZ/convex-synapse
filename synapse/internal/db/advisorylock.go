@@ -34,6 +34,13 @@ const (
 	// coordination: at most one verifier runs per tick across the fleet;
 	// followers observe acquired=false and skip silently.
 	LockDNSVerifier int64 = 0xC0DE0003
+
+	// LockCellBackfill guards the startup-time backfill that turns existing
+	// deployments into core Cells + placements (feat/cell-control-plane,
+	// internal/cells.Backfill). N nodes booting at once would each try the
+	// same inserts; the lock ensures exactly one runs it. The backfill is
+	// idempotent regardless, but the lock avoids redundant work + log noise.
+	LockCellBackfill int64 = 0xC0DE0004
 )
 
 // WithTryAdvisoryLock attempts to acquire a session-level Postgres advisory

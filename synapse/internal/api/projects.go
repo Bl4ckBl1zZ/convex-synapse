@@ -31,6 +31,9 @@ type ProjectsHandler struct {
 	DNSCredentials *DNSCredentialsHandler
 	Topology       *TopologyHandler
 	Activity       *ActivityHandler
+	// Cells (feat/cell-control-plane) — project-scoped list/create routes
+	// for the Cell Control Plane. Nil = wired without Cells support.
+	Cells *CellsHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -130,6 +133,13 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		}
 		if h.Deployments != nil {
 			h.Deployments.MountProjectScopedRoutes(r)
+		}
+		// Cell Control Plane (feat/cell-control-plane) — project-scoped
+		// list/create. Cell-scoped operations live under /v1/cells/{cellID}
+		// (mounted separately in router.go).
+		if h.Cells != nil {
+			r.Get("/cells", h.Cells.listCellsByProject)
+			r.Post("/cells", h.Cells.createCell)
 		}
 	})
 
@@ -396,7 +406,7 @@ func (h *ProjectsHandler) listProjectScopedTokens(w http.ResponseWriter, r *http
 
 // sqlNullableString turns a *string into the value pgx will treat as NULL
 // when nil. Helper kept private — only used by COALESCE-style updates that
-// need three-valued logic ("not present in JSON" ≠ "set to ''").
+// need three-valued logic ("not present in JSON" ≠ "set to ”").
 func sqlNullableString(s *string) any {
 	if s == nil {
 		return nil

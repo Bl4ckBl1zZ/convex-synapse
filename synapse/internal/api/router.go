@@ -258,6 +258,16 @@ func NewRouter(d RouterDeps) http.Handler {
 	activityH := &ActivityHandler{DB: d.DB, Projects: projectsH}
 	projectsH.Activity = activityH
 
+	// Cell Control Plane (feat/cell-control-plane). Cells are project-scoped
+	// and reuse loadProjectForRequest via the same Projects-reference pattern
+	// TopologyHandler uses. Hosts are instance-level (their own
+	// instance-admin gate). Both route surfaces are always mounted — they're
+	// additive + auth-gated; the SYNAPSE_ENABLE_CELLS flag only governs the
+	// startup backfill in cmd/server, not API availability.
+	cellsH := &CellsHandler{DB: d.DB, Projects: projectsH}
+	projectsH.Cells = cellsH
+	hostsH := &HostsHandler{DB: d.DB, PublicURL: d.PublicURL}
+
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"name": "synapse", "api": "v1"})
@@ -315,6 +325,11 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Mount("/projects", projectsH.Routes())
 			r.Mount("/deployments", deploymentsH.Routes())
 			r.Mount("/team_invites", invitesH.Routes())
+			// Cell Control Plane (feat/cell-control-plane). /hosts is
+			// instance-admin gated inside its own Routes(); /cells is
+			// project-RBAC gated per cell.
+			r.Mount("/hosts", hostsH.Routes())
+			r.Mount("/cells", cellsH.Routes())
 			// /v1/admin — instance-level operations (version check + auto-
 			// upgrade). The handler's own middleware gates each route to
 			// users.is_instance_admin; we mount inside the authenticated group
