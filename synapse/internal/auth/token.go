@@ -12,15 +12,29 @@ import (
 // catch leaks and helps users identify what a token is for.
 const TokenPrefix = "syn_"
 
-// GenerateToken returns a fresh random token (with prefix) and the hash that
-// should be stored in the database. The plain token is returned to the caller
-// only once — at issuance.
+// AgentTokenPrefix marks long-lived synapse-agent tokens (feat/cell-control-
+// plane, Bloco 6). It deliberately starts with TokenPrefix so leak scanners
+// still match; the longer prefix just makes it human-identifiable. Agent
+// tokens are stored in host_agents.token_hash (never access_tokens), so they
+// can NOT authenticate a user even if presented to a user-scoped route —
+// the access_tokens lookup simply misses.
+const AgentTokenPrefix = "syn_agent_"
+
+// GenerateToken returns a fresh random token (with the personal-access-token
+// prefix) and the hash that should be stored in the database. The plain token
+// is returned to the caller only once — at issuance.
 func GenerateToken() (plain, hash string, err error) {
+	return GenerateTokenWithPrefix(TokenPrefix)
+}
+
+// GenerateTokenWithPrefix is GenerateToken with a caller-chosen prefix. Used
+// for agent tokens (AgentTokenPrefix); the entropy + hashing are identical.
+func GenerateTokenWithPrefix(prefix string) (plain, hash string, err error) {
 	buf := make([]byte, 32) // 256 bits of entropy
 	if _, err := rand.Read(buf); err != nil {
 		return "", "", err
 	}
-	plain = TokenPrefix + base64.RawURLEncoding.EncodeToString(buf)
+	plain = prefix + base64.RawURLEncoding.EncodeToString(buf)
 	hash = HashToken(plain)
 	return plain, hash, nil
 }

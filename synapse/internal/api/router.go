@@ -267,6 +267,11 @@ func NewRouter(d RouterDeps) http.Handler {
 	cellsH := &CellsHandler{DB: d.DB, Projects: projectsH}
 	projectsH.Cells = cellsH
 	hostsH := &HostsHandler{DB: d.DB, PublicURL: d.PublicURL}
+	// Agent contact points (feat/cell-control-plane, Bloco 6). Public —
+	// register authenticates with the adoption token in the body, heartbeat
+	// + desired_state with the agent bearer token. Mounted in the public
+	// group below (NOT under the JWT Authenticator).
+	agentsH := &AgentsHandler{DB: d.DB, PublicURL: d.PublicURL}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -314,6 +319,12 @@ func NewRouter(d RouterDeps) http.Handler {
 			// Public + unauthenticated; result is informational only.
 			r.Method(http.MethodGet, "/dns_provider", &DNSProviderHandler{Lookup: d.DNSProviderLookup})
 		})
+
+		// synapse-agent contact points (feat/cell-control-plane, Bloco 6).
+		// Public group: register uses a single-use adoption token in the
+		// body; heartbeat + desired_state use the agent bearer token
+		// (looked up in host_agents, never access_tokens).
+		r.Mount("/agents", agentsH.Routes())
 
 		// Authenticated.
 		r.Group(func(r chi.Router) {
