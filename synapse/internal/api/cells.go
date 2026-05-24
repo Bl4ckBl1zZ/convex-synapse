@@ -389,7 +389,7 @@ func (h *CellsHandler) attachDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	dep, _, _, err := loadDeployment(r.Context(), h.DB, req.DeploymentName)
+	dep, _, depTeam, err := loadDeployment(r.Context(), h.DB, req.DeploymentName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "deployment_not_found", "Deployment not found")
 		return
@@ -400,6 +400,23 @@ func (h *CellsHandler) attachDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if dep.ProjectID != cell.ProjectID {
+		// Cross-project attach is never allowed. Deployment names are
+		// globally unique, so a naive "wrong project" 400 would leak the
+		// existence of deployments in teams the caller can't see. Only
+		// return the helpful message when the caller actually has access to
+		// the deployment's project (typically a sibling project in the same
+		// team); otherwise mirror the not-found path so there's no
+		// cross-tenant existence oracle.
+		_, rerr := effectiveProjectRole(r.Context(), h.DB, dep.ProjectID, depTeam.ID, uid)
+		if errors.Is(rerr, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "deployment_not_found", "Deployment not found")
+			return
+		}
+		if rerr != nil {
+			logErr("attach cross-project membership check", rerr)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to attach deployment")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "deployment_wrong_project", "Deployment belongs to a different project than this cell")
 		return
 	}

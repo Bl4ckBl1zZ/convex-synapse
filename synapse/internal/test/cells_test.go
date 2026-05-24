@@ -235,6 +235,32 @@ func TestCells_AttachDeployment_WrongProject(t *testing.T) {
 	}
 }
 
+func TestCells_AttachDeployment_CrossTeamIsNotFound(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser() // team 1 (also instance admin — must NOT bypass project RBAC here)
+	team := createTeam(t, h, owner.AccessToken, "Amage IA")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "amagejumpy")
+	var cell models.Cell
+	h.DoJSON(http.MethodPost, "/v1/projects/"+proj.ID+"/cells", owner.AccessToken,
+		map[string]any{"name": "core-prod-br-1"}, http.StatusCreated, &cell)
+
+	// A different user owns a different team + project + deployment.
+	stranger := h.RegisterRandomUser()
+	otherTeam := createTeam(t, h, stranger.AccessToken, "Other Co")
+	otherProj := createProject(t, h, stranger.AccessToken, otherTeam.Slug, "other-proj")
+	h.SeedDeployment(otherProj.ID, "foreign-dep-0001", "prod", "running", true, stranger.ID, 3340, "")
+
+	// Attaching a deployment from a team the caller can't see must NOT reveal
+	// that the deployment exists — it returns the same 404 as a bogus name,
+	// not a 400 "wrong project". (Even though owner is the instance admin,
+	// that role manages hosts/infra, not arbitrary project data.)
+	env := h.AssertStatus(http.MethodPost, "/v1/cells/"+cell.ID+"/attach_deployment", owner.AccessToken,
+		map[string]any{"deploymentName": "foreign-dep-0001"}, http.StatusNotFound)
+	if env.Code != "deployment_not_found" {
+		t.Errorf("cross-team attach should look like not-found, got %q", env.Code)
+	}
+}
+
 // ---------- Backfill ----------
 
 func TestBackfill_Idempotent(t *testing.T) {
