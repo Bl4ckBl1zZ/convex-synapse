@@ -612,23 +612,24 @@ func (h *CellLinksHandler) Discovery(w http.ResponseWriter, r *http.Request) {
 	if dl.AllowedEvents == nil {
 		dl.AllowedEvents = []string{}
 	}
-	dl.Endpoint, dl.EndpointSource = h.resolveEndpoint(r.Context(), dl.TargetCellID)
+	dl.Endpoint, dl.EndpointSource = resolveCellEndpoint(r.Context(), h.DB, dl.TargetCellID)
 	resp.Links = append(resp.Links, dl)
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// resolveEndpoint best-effort resolves a reachable URL for a target cell,
+// resolveCellEndpoint best-effort resolves a reachable URL for a target cell,
 // reusing the EXISTING Route layer (deployment_domains) and the deployment's
 // stored URL — no new routing. Returns (nil, "none") when nothing safe is
 // known (e.g. a provisioned deployment with only a loopback URL + no domain).
-func (h *CellLinksHandler) resolveEndpoint(ctx context.Context, targetCellID string) (*string, string) {
+// Package-level so the topology handler can reuse it.
+func resolveCellEndpoint(ctx context.Context, pool *pgxpool.Pool, targetCellID string) (*string, string) {
 	var depID *string
-	if err := h.DB.QueryRow(ctx, `SELECT primary_deployment_id FROM cells WHERE id = $1`, targetCellID).Scan(&depID); err != nil || depID == nil {
+	if err := pool.QueryRow(ctx, `SELECT primary_deployment_id FROM cells WHERE id = $1`, targetCellID).Scan(&depID); err != nil || depID == nil {
 		return nil, "none"
 	}
 	// 1. Route: an active 'api'-role custom domain (deployment_domains).
 	var domain string
-	err := h.DB.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		SELECT domain FROM deployment_domains
 		 WHERE deployment_id = $1 AND status = 'active' AND role = 'api'
 		 ORDER BY created_at ASC LIMIT 1
@@ -641,7 +642,7 @@ func (h *CellLinksHandler) resolveEndpoint(ctx context.Context, targetCellID str
 	// deployments carry a real external URL; provisioned ones store loopback,
 	// which we skip).
 	var depURL *string
-	_ = h.DB.QueryRow(ctx, `SELECT deployment_url FROM deployments WHERE id = $1`, *depID).Scan(&depURL)
+	_ = pool.QueryRow(ctx, `SELECT deployment_url FROM deployments WHERE id = $1`, *depID).Scan(&depURL)
 	if depURL != nil && isPublicURL(*depURL) {
 		u := *depURL
 		return &u, "deployment"
@@ -652,7 +653,7 @@ func (h *CellLinksHandler) resolveEndpoint(ctx context.Context, targetCellID str
 // decorateLink stamps the computed Endpoint/EndpointSource on a link for the
 // dashboard. Omits the fields (EndpointSource="") when nothing safe is known.
 func (h *CellLinksHandler) decorateLink(ctx context.Context, l *models.CellLink) {
-	ep, src := h.resolveEndpoint(ctx, l.TargetCellID)
+	ep, src := resolveCellEndpoint(ctx, h.DB, l.TargetCellID)
 	if src == "none" {
 		l.Endpoint, l.EndpointSource = nil, ""
 		return

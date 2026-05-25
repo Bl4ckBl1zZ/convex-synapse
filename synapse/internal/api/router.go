@@ -276,6 +276,15 @@ func NewRouter(d RouterDeps) http.Handler {
 	// loadProjectForRequest via Projects; discovery is mounted publicly below.
 	cellLinksH := &CellLinksHandler{DB: d.DB, Projects: projectsH}
 	projectsH.CellLinks = cellLinksH
+	// Bloco 8: real Cell Control Plane topology. Shares the host-liveness
+	// thresholds with HostsHandler.
+	cellTopologyH := &CellTopologyHandler{
+		DB:           d.DB,
+		Projects:     projectsH,
+		StaleAfter:   d.AgentStaleAfter,
+		OfflineAfter: d.AgentOfflineAfter,
+	}
+	projectsH.CellTopology = cellTopologyH
 	hostsH := &HostsHandler{
 		DB:           d.DB,
 		PublicURL:    d.PublicURL,

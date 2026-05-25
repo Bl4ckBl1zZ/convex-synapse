@@ -741,6 +741,93 @@ export type CreateCellLinkInput = {
   allowedEvents?: string[];
 };
 
+// ---- Cell topology (Bloco 8) — the real Host → Cell → Deployment view. ----
+
+export type CellTopologyRoute = { domain: string; role: string; status: string };
+
+export type CellTopologyPlacement = {
+  hostId?: string;
+  cellId: string;
+  desiredStatus: string;
+  observedStatus: string;
+};
+
+export type CellTopologyDeployment = {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  url?: string;
+  adopted: boolean;
+  placement?: CellTopologyPlacement;
+  routes: CellTopologyRoute[];
+};
+
+export type CellTopologyLinkRef = {
+  id: string;
+  sourceCellId: string;
+  targetCellId: string;
+  protocol: string;
+  status: string;
+};
+
+export type CellTopologyCell = {
+  id: string;
+  name: string;
+  slug: string;
+  kind: string;
+  environment: string;
+  region: string;
+  isolationTier: string;
+  status: string;
+  primaryDeploymentId?: string;
+  primaryHostId?: string;
+  deployments: CellTopologyDeployment[];
+  routes: CellTopologyRoute[];
+  outgoingLinks: CellTopologyLinkRef[];
+  incomingLinks: CellTopologyLinkRef[];
+  warnings: string[];
+};
+
+export type CellTopologyHost = {
+  id: string;
+  name: string;
+  provider: string;
+  region: string;
+  publicIp?: string;
+  privateIp?: string;
+  status: string;
+  effectiveStatus: string;
+  isSynapseHost: boolean;
+  lastHeartbeatAt?: string;
+  agentCount: number;
+  agentsSummary: { online: number; offline: number; revoked: number };
+};
+
+export type CellTopologyLink = {
+  id: string;
+  sourceCellId: string;
+  targetCellId: string;
+  protocol: string;
+  authMode: string;
+  status: string;
+  allowedCommandsCount: number;
+  allowedEventsCount: number;
+  activeTokenCount: number;
+  hasEndpoint: boolean;
+  endpointSource?: string;
+};
+
+export type CellTopologyResponse = {
+  mode: "cell_control_plane" | "legacy_synthetic" | string;
+  project: { id: string; name: string; slug: string };
+  hosts: CellTopologyHost[];
+  cells: CellTopologyCell[];
+  unassignedDeployments: CellTopologyDeployment[];
+  links: CellTopologyLink[];
+  warnings: string[];
+};
+
 // ServiceToken — credential for a CellLink. `token` (syn_svc_…) is populated
 // ONLY on the create response.
 export type ServiceToken = {
@@ -1389,6 +1476,13 @@ export const api = {
     topology(id: string): Promise<TopologyResponse> {
       return request<TopologyResponse>(
         `/v1/projects/${encodeURIComponent(id)}/topology`,
+      );
+    },
+    // Bloco 8: the real Cell Control Plane topology (Host→Cell→Deployment +
+    // links + warnings). mode=legacy_synthetic when the project has no cells.
+    cellTopology(id: string): Promise<CellTopologyResponse> {
+      return request<CellTopologyResponse>(
+        `/v1/projects/${encodeURIComponent(id)}/cell_topology`,
       );
     },
     // v1.10.0+: project-scoped activity feed (audit_events filtered to

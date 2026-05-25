@@ -37,6 +37,8 @@ type ProjectsHandler struct {
 	// CellLinks (Bloco 7) — project-scoped list/create for service-to-service
 	// contracts between Cells.
 	CellLinks *CellLinksHandler
+	// CellTopology (Bloco 8) — the real Host→Cell→Deployment topology.
+	CellTopology *CellTopologyHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -103,6 +105,12 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		// handler.
 		if h.Topology != nil {
 			r.Get("/topology", h.Topology.ServeHTTP)
+		}
+		// Bloco 8: the real Cell Control Plane topology (Host→Cell→Deployment
+		// + links + warnings). Separate from the legacy /topology above, which
+		// stays as the synthetic fallback.
+		if h.CellTopology != nil {
+			r.Get("/cell_topology", h.CellTopology.ServeHTTP)
 		}
 		// v1.10.0+: activity feed — project-scoped audit_events for
 		// the dashboard's ActivityFeed component. Member-visible

@@ -17,6 +17,7 @@ import { TopologyPanel } from "@/components/TopologyPanel";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { CellsPanel } from "@/components/CellsPanel";
 import { CellLinksPanel } from "@/components/CellLinksPanel";
+import { CellTopologyPanel } from "@/components/CellTopologyPanel";
 import { HostsPanel } from "@/components/HostsPanel";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
@@ -643,6 +644,13 @@ await Promise.all([
       <CellsPanel projectId={projectId} />
       <CellLinksPanel projectId={projectId} />
       <HostsPanel />
+
+      {/*
+        Bloco 8: the real Host→Cell→Deployment topology. Renders only when the
+        project has cells (mode=cell_control_plane); otherwise it hides and the
+        legacy synthetic TopologyPanel below covers the no-cells case.
+      */}
+      <CellTopologyPanel projectId={projectId} />
 
       <TopologyPanel projectId={projectId} />
 
