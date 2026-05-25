@@ -1959,6 +1959,31 @@ func (h *DeploymentsHandler) upgradeToHA(w http.ResponseWriter, r *http.Request)
 
 // ---------- POST /v1/deployments/{name}/delete ----------
 
+// cleanupDeploymentCellState removes the Cell Control Plane footprint of a
+// now-deleted deployment: it supersedes the active desired state, drops the
+// placement, and unlinks the cell_resource so the deployment stops showing as a
+// ghost in cells / topology / drift. Best-effort — a hiccup here must never
+// fail the user's delete (the drift engine treats a deleted deployment as
+// orphaned regardless, so a leftover desired row is classified correctly, never
+// recreated). The cell itself is left in place: an empty cell is harmless and
+// may be reused. resource_id is text; deployment_id is uuid (hence ::text).
+func (h *DeploymentsHandler) cleanupDeploymentCellState(ctx context.Context, deploymentID string) {
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE desired_states SET status = 'superseded', updated_at = now()
+		 WHERE resource_type = 'convex_deployment' AND resource_id = $1 AND status = 'active'
+	`, deploymentID); err != nil {
+		logErr("cleanup desired_state on delete", err)
+	}
+	if _, err := h.DB.Exec(ctx, `DELETE FROM deployment_placements WHERE deployment_id::text = $1`, deploymentID); err != nil {
+		logErr("cleanup placement on delete", err)
+	}
+	if _, err := h.DB.Exec(ctx, `
+		DELETE FROM cell_resources WHERE resource_type = 'convex_deployment' AND resource_id = $1
+	`, deploymentID); err != nil {
+		logErr("cleanup cell_resource on delete", err)
+	}
+}
+
 func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Request) {
 	d, _, t, role, ok := h.loadDeploymentForRequest(w, r)
 	if !ok {
@@ -1985,6 +2010,7 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusInternalServerError, "internal", "Database error")
 			return
 		}
+		h.cleanupDeploymentCellState(r.Context(), d.ID)
 		uid, _ := auth.UserID(r.Context())
 		_ = audit.Record(r.Context(), h.DB, audit.Options{
 			TeamID:     t.ID,
@@ -2024,6 +2050,7 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "internal", "Container removed but DB update failed")
 		return
 	}
+	h.cleanupDeploymentCellState(r.Context(), d.ID)
 
 	uid, _ := auth.UserID(r.Context())
 	_ = audit.Record(r.Context(), h.DB, audit.Options{

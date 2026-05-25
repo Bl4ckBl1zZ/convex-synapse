@@ -1227,7 +1227,10 @@ func loadDeploymentExistence(ctx context.Context, pool *pgxpool.Pool, ids []stri
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := pool.Query(ctx, `SELECT id::text FROM deployments WHERE id::text = ANY($1::text[])`, ids)
+	// status <> 'deleted': a soft-deleted deployment must read as "no longer
+	// exists" so drift classifies its lingering desired state as orphaned
+	// (operator deleted it) rather than missing→create (engine would recreate).
+	rows, err := pool.Query(ctx, `SELECT id::text FROM deployments WHERE id::text = ANY($1::text[]) AND status <> 'deleted'`, ids)
 	if err != nil {
 		return nil, err
 	}

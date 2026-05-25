@@ -132,6 +132,67 @@ func summaryCount(t *testing.T, m map[string]any, key string) int {
 	return int(f)
 }
 
+func markDeploymentDeleted(t *testing.T, h *Harness, depID string) {
+	t.Helper()
+	if _, err := h.DB.Exec(h.rootCtx, `UPDATE deployments SET status = 'deleted' WHERE id::text = $1`, depID); err != nil {
+		t.Fatalf("mark deployment deleted: %v", err)
+	}
+}
+
+func countRowsArg(t *testing.T, h *Harness, query, arg string) int {
+	t.Helper()
+	var n int
+	if err := h.DB.QueryRow(h.rootCtx, query, arg).Scan(&n); err != nil {
+		t.Fatalf("count query %q: %v", query, err)
+	}
+	return n
+}
+
+// Bloco 14: a soft-deleted deployment (status='deleted') with a lingering
+// active desired state must read as ORPHANED — never missing→create. Pre-fix
+// the existence check ignored status, so the engine thought it still existed
+// and recommended recreating a deployment the operator intentionally deleted.
+func TestDrift_SoftDeletedIsOrphaned(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	markDeploymentDeleted(t, h, depID)
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if it := findDriftItem(res.Items, models.DriftStatusMissing); it != nil {
+		t.Fatalf("soft-deleted deployment must NOT be missing→create, got %+v", it)
+	}
+	if it := findDriftItem(res.Items, models.DriftStatusOrphaned); it == nil {
+		t.Fatalf("expected orphaned for soft-deleted deployment, items=%+v", res.Items)
+	}
+}
+
+// Bloco 14: deleting a deployment must clean up its Cell Control Plane
+// footprint — supersede the desired state, drop the placement, unlink the
+// cell_resource — so it stops appearing as a ghost in cells / topology / drift.
+func TestDeleteDeployment_CleansCellState(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, _, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID) // desired + placement now exist
+
+	if n := countRowsArg(t, h, `SELECT count(*) FROM desired_states WHERE resource_id = $1 AND status = 'active'`, depID); n != 1 {
+		t.Fatalf("precondition: expected 1 active desired state, got %d", n)
+	}
+
+	h.DoJSON(http.MethodPost, "/v1/deployments/lush-heron-4656/delete", owner.AccessToken, map[string]any{}, http.StatusOK, &map[string]string{})
+
+	if n := countRowsArg(t, h, `SELECT count(*) FROM desired_states WHERE resource_id = $1 AND status = 'active'`, depID); n != 0 {
+		t.Errorf("desired_state should be superseded after delete, %d still active", n)
+	}
+	if n := countRowsArg(t, h, `SELECT count(*) FROM deployment_placements WHERE deployment_id::text = $1`, depID); n != 0 {
+		t.Errorf("placement should be gone after delete, %d remain", n)
+	}
+	if n := countRowsArg(t, h, `SELECT count(*) FROM cell_resources WHERE resource_id = $1`, depID); n != 0 {
+		t.Errorf("cell_resource should be gone after delete, %d remain", n)
+	}
+}
+
 // ---------- A. in_sync ----------
 
 func TestDrift_CleanInSync(t *testing.T) {
