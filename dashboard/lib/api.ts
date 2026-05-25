@@ -709,6 +709,50 @@ export type AttachDeploymentResult = {
   placement: DeploymentPlacement;
 };
 
+// CellLink (Bloco 7) — a service-to-service contract between two Cells in the
+// same project. serviceTokenCount is computed (active tokens).
+export type CellLink = {
+  id: string;
+  teamId: string;
+  projectId: string;
+  sourceCellId: string;
+  targetCellId: string;
+  protocol: "http" | "convex_action" | "outbox" | "webhook" | "polling" | string;
+  authMode: "service_token" | "mtls" | "none" | string;
+  allowedCommands: string[];
+  allowedEvents: string[];
+  status: "active" | "disabled" | string;
+  serviceTokenCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateCellLinkInput = {
+  sourceCellId: string;
+  targetCellId: string;
+  protocol?: string;
+  authMode?: string;
+  allowedCommands?: string[];
+  allowedEvents?: string[];
+};
+
+// ServiceToken — credential for a CellLink. `token` (syn_svc_…) is populated
+// ONLY on the create response.
+export type ServiceToken = {
+  id: string;
+  cellLinkId: string;
+  sourceCellId: string;
+  targetCellId: string;
+  name: string;
+  token?: string;
+  scopes: string[];
+  status: "active" | "revoked" | "expired" | string;
+  expiresAt?: string;
+  lastUsedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 class ApiError extends Error {
   status: number;
   code?: string;
@@ -1587,6 +1631,51 @@ export const api = {
     resources(id: string): Promise<CellResourcesResponse> {
       return request<CellResourcesResponse>(
         `/v1/cells/${encodeURIComponent(id)}/resources`,
+      );
+    },
+  },
+
+  // Cell links + service tokens (Bloco 7). Project-scoped create/list; the rest
+  // under /v1/cell_links + /v1/service_tokens. Discovery is server-to-server
+  // (service-token bearer) and not called from the dashboard.
+  cellLinks: {
+    async listByProject(projectId: string): Promise<CellLink[]> {
+      const r = await request<{ items: CellLink[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cell_links`,
+      );
+      return r.items ?? [];
+    },
+    create(projectId: string, body: CreateCellLinkInput): Promise<CellLink> {
+      return request<CellLink>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cell_links`,
+        { method: "POST", body },
+      );
+    },
+    disable(id: string): Promise<CellLink> {
+      return request<CellLink>(`/v1/cell_links/${encodeURIComponent(id)}/disable`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    async listTokens(id: string): Promise<ServiceToken[]> {
+      const r = await request<{ items: ServiceToken[] }>(
+        `/v1/cell_links/${encodeURIComponent(id)}/service_tokens`,
+      );
+      return r.items ?? [];
+    },
+    createToken(
+      id: string,
+      body: { name?: string; scopes?: string[]; expiresAt?: string } = {},
+    ): Promise<ServiceToken> {
+      return request<ServiceToken>(
+        `/v1/cell_links/${encodeURIComponent(id)}/service_tokens`,
+        { method: "POST", body },
+      );
+    },
+    revokeToken(tokenId: string): Promise<{ id: string; status: string }> {
+      return request(
+        `/v1/service_tokens/${encodeURIComponent(tokenId)}/revoke`,
+        { method: "POST", body: {} },
       );
     },
   },

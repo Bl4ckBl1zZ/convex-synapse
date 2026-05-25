@@ -148,6 +148,12 @@ const (
 	// Agent lifecycle (Bloco 6.5).
 	ActionRevokeHostAgent      = "revokeHostAgent"
 	ActionRotateHostAgentToken = "rotateHostAgentToken"
+	// Cell links + service tokens (Bloco 7).
+	ActionCreateCellLink     = "createCellLink"
+	ActionUpdateCellLink     = "updateCellLink"
+	ActionDisableCellLink    = "disableCellLink"
+	ActionCreateServiceToken = "createServiceToken"
+	ActionRevokeServiceToken = "revokeServiceToken"
 )
 
 // Target type names.
@@ -167,9 +173,11 @@ const (
 	// TargetDNSCredential is a dns_credentials row.
 	TargetDNSCredential = "dnsCredential"
 	// Cell Control Plane (feat/cell-control-plane).
-	TargetHost      = "host"
-	TargetCell      = "cell"
-	TargetHostAgent = "hostAgent"
+	TargetHost         = "host"
+	TargetCell         = "cell"
+	TargetHostAgent    = "hostAgent"
+	TargetCellLink     = "cellLink"
+	TargetServiceToken = "serviceToken"
 )
 
 // Options collects the optional fields of an audit event. Empty strings are

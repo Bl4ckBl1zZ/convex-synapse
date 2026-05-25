@@ -484,6 +484,66 @@ const (
 	PlacementObservedUnknown = "unknown"
 )
 
+const (
+	CellLinkProtocolHTTP         = "http"
+	CellLinkProtocolConvexAction = "convex_action"
+	CellLinkProtocolOutbox       = "outbox"
+	CellLinkProtocolWebhook      = "webhook"
+	CellLinkProtocolPolling      = "polling"
+
+	CellLinkAuthServiceToken = "service_token"
+	CellLinkAuthMTLS         = "mtls"
+	CellLinkAuthNone         = "none"
+
+	CellLinkStatusActive   = "active"
+	CellLinkStatusDisabled = "disabled"
+)
+
+// CellLink is a service-to-service CONTRACT between two Cells in the same
+// project (feat/cell-control-plane, Bloco 7). It records who may talk, the
+// protocol, and the allowed command/event vocabulary — Synapse registers and
+// protects the channel but never transports the payload itself.
+type CellLink struct {
+	ID              string   `json:"id"`
+	TeamID          string   `json:"teamId"`
+	ProjectID       string   `json:"projectId"`
+	SourceCellID    string   `json:"sourceCellId"`
+	TargetCellID    string   `json:"targetCellId"`
+	Protocol        string   `json:"protocol"`
+	AuthMode        string   `json:"authMode"`
+	AllowedCommands []string `json:"allowedCommands"`
+	AllowedEvents   []string `json:"allowedEvents"`
+	Status          string   `json:"status"`
+	// ServiceTokenCount is a computed convenience (active tokens for this
+	// link) for the dashboard table — not a stored column.
+	ServiceTokenCount int       `json:"serviceTokenCount"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+const (
+	ServiceTokenStatusActive  = "active"
+	ServiceTokenStatusRevoked = "revoked"
+	ServiceTokenStatusExpired = "expired"
+)
+
+// ServiceToken is a credential for one CellLink. Stored as a sha256 hash; the
+// plaintext (Token, syn_svc_…) is populated ONLY on the create response.
+type ServiceToken struct {
+	ID           string     `json:"id"`
+	CellLinkID   string     `json:"cellLinkId"`
+	SourceCellID string     `json:"sourceCellId"`
+	TargetCellID string     `json:"targetCellId"`
+	Name         string     `json:"name"`
+	Token        string     `json:"token,omitempty"`
+	Scopes       []string   `json:"scopes"`
+	Status       string     `json:"status"`
+	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
+	LastUsedAt   *time.Time `json:"lastUsedAt,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+}
+
 // DeploymentPlacement is the physical placement of a deployment: the Cell it
 // belongs to, the Host it runs on, and desired-vs-observed runtime state. It
 // sits ON TOP of the deployments table — deployments.container_id/host_port

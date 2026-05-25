@@ -20,6 +20,12 @@ const TokenPrefix = "syn_"
 // the access_tokens lookup simply misses.
 const AgentTokenPrefix = "syn_agent_"
 
+// ServiceTokenPrefix marks Cell-to-Cell service tokens (feat/cell-control-
+// plane, Bloco 7). Like AgentTokenPrefix it starts with TokenPrefix (scanner
+// match) but is stored only in service_tokens.token_hash — it can't
+// authenticate a user or an agent.
+const ServiceTokenPrefix = "syn_svc_"
+
 // GenerateToken returns a fresh random token (with the personal-access-token
 // prefix) and the hash that should be stored in the database. The plain token
 // is returned to the caller only once — at issuance.

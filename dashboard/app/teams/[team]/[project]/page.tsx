@@ -16,6 +16,7 @@ import { BackendVersionPill } from "@/components/BackendVersionPill";
 import { TopologyPanel } from "@/components/TopologyPanel";
 import { ActivityFeed } from "@/components/ActivityFeed";
 import { CellsPanel } from "@/components/CellsPanel";
+import { CellLinksPanel } from "@/components/CellLinksPanel";
 import { HostsPanel } from "@/components/HostsPanel";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
@@ -640,6 +641,7 @@ await Promise.all([
         deployments list. HostsPanel hides itself for non-instance-admins.
       */}
       <CellsPanel projectId={projectId} />
+      <CellLinksPanel projectId={projectId} />
       <HostsPanel />
 
       <TopologyPanel projectId={projectId} />

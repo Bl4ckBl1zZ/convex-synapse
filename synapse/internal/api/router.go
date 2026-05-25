@@ -272,6 +272,10 @@ func NewRouter(d RouterDeps) http.Handler {
 	// startup backfill in cmd/server, not API availability.
 	cellsH := &CellsHandler{DB: d.DB, Projects: projectsH}
 	projectsH.Cells = cellsH
+	// Cell links + service tokens (Bloco 7). Project-scoped create/list reuse
+	// loadProjectForRequest via Projects; discovery is mounted publicly below.
+	cellLinksH := &CellLinksHandler{DB: d.DB, Projects: projectsH}
+	projectsH.CellLinks = cellLinksH
 	hostsH := &HostsHandler{
 		DB:           d.DB,
 		PublicURL:    d.PublicURL,
@@ -337,6 +341,11 @@ func NewRouter(d RouterDeps) http.Handler {
 		// (looked up in host_agents, never access_tokens).
 		r.Mount("/agents", agentsH.Routes())
 
+		// Cell-link discovery (Bloco 7). Public — authenticated by a syn_svc_
+		// service-token bearer (looked up in service_tokens, never
+		// access_tokens). Returns the active links from the token's source cell.
+		r.Get("/internal/cell_links/discovery", cellLinksH.Discovery)
+
 		// Authenticated.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Authenticator(d.JWT, d.DB))
@@ -355,6 +364,10 @@ func NewRouter(d RouterDeps) http.Handler {
 			// rotate_token). Same gate as /hosts; separate prefix.
 			r.Mount("/host_agents", hostsH.AgentAdminRoutes())
 			r.Mount("/cells", cellsH.Routes())
+			// Cell links + service tokens (Bloco 7). Project-RBAC gated per
+			// link (loadCellLinkForRequest); discovery is the public route above.
+			r.Mount("/cell_links", cellLinksH.Routes())
+			r.Mount("/service_tokens", cellLinksH.ServiceTokenRoutes())
 			// /v1/admin — instance-level operations (version check + auto-
 			// upgrade). The handler's own middleware gates each route to
 			// users.is_instance_admin; we mount inside the authenticated group

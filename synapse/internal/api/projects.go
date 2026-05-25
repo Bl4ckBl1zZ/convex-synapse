@@ -34,6 +34,9 @@ type ProjectsHandler struct {
 	// Cells (feat/cell-control-plane) — project-scoped list/create routes
 	// for the Cell Control Plane. Nil = wired without Cells support.
 	Cells *CellsHandler
+	// CellLinks (Bloco 7) — project-scoped list/create for service-to-service
+	// contracts between Cells.
+	CellLinks *CellLinksHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -140,6 +143,11 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		if h.Cells != nil {
 			r.Get("/cells", h.Cells.listCellsByProject)
 			r.Post("/cells", h.Cells.createCell)
+		}
+		// Cell Links (Bloco 7) — service-to-service contracts between Cells.
+		if h.CellLinks != nil {
+			r.Get("/cell_links", h.CellLinks.listCellLinksByProject)
+			r.Post("/cell_links", h.CellLinks.createCellLink)
 		}
 	})
 
