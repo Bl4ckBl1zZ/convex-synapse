@@ -429,6 +429,7 @@ type desiredCmp struct {
 	cellID        *string
 	projectID     *string
 	depID         string
+	depName       string // deployment name — used for the legacy-label fallback
 	resourceKey   string
 	desiredStatus string
 }
@@ -440,7 +441,8 @@ type observedCmp struct {
 	resourceKey string
 	state       string
 	managed     bool
-	depID       string
+	depID       string // synapse.deployment_id (UUID) — primary correlation key
+	depName     string // synapse.deployment (name) — legacy fallback key
 	cellID      string
 	projectID   string
 }
@@ -484,12 +486,57 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 		return nil, nil, err
 	}
 
-	// Index observed managed containers by host|deploymentId.
+	// Index observed managed containers by host|deploymentId (primary key).
 	observedByHostDep := map[string]*observedCmp{}
 	for i := range observed {
 		o := &observed[i]
 		if o.managed && o.depID != "" {
 			observedByHostDep[o.hostID+"|"+o.depID] = o
+		}
+	}
+	// Legacy-label fallback index (Bloco 12.6): managed containers WITHOUT a
+	// synapse.deployment_id (pre-12.6 provisioner) keyed by host|name
+	// (synapse.deployment). Built from the scoped observed set PLUS — for
+	// project/cell scope, whose observed query filters on the
+	// synapse.project_id/cell_id label that legacy containers LACK — a
+	// host-scoped top-up so pre-fix containers on the project's hosts still
+	// correlate. Used for fallback matching only (never for unmanaged
+	// detection). Ambiguous (host,name) pairs are dropped so it never guesses.
+	legacyPool := make([]*observedCmp, 0)
+	seenObsID := map[string]bool{}
+	for i := range observed {
+		o := &observed[i]
+		seenObsID[o.id] = true
+		if o.managed && o.depID == "" && o.depName != "" {
+			legacyPool = append(legacyPool, o)
+		}
+	}
+	if scope.kind != scopeHost {
+		desiredHosts := map[string]bool{}
+		for _, d := range desired {
+			desiredHosts[d.hostID] = true
+		}
+		extra, err := loadLegacyContainers(ctx, h.DB, keysOf(desiredHosts))
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range extra {
+			o := &extra[i]
+			if !seenObsID[o.id] {
+				legacyPool = append(legacyPool, o)
+			}
+		}
+	}
+	observedByHostName := map[string]*observedCmp{}
+	nameSeen := map[string]int{}
+	for _, o := range legacyPool {
+		key := o.hostID + "|" + o.depName
+		nameSeen[key]++
+		observedByHostName[key] = o
+	}
+	for key, n := range nameSeen {
+		if n > 1 {
+			delete(observedByHostName, key) // ambiguous → no fallback
 		}
 	}
 	matched := map[string]bool{}
@@ -515,6 +562,15 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 		hst := hosts[d.hostID]
 		tr := hostTrust(hst, facts[d.hostID], staleAfter, offlineAfter, now)
 		o := observedByHostDep[d.hostID+"|"+d.depID]
+		// Legacy fallback: no deployment_id match, but a managed container on
+		// this host carries the matching synapse.deployment NAME (no UUID).
+		fallback := false
+		if o == nil && d.depName != "" {
+			if cand := observedByHostName[d.hostID+"|"+d.depName]; cand != nil && legacyProjectOK(cand, d) {
+				o = cand
+				fallback = true
+			}
+		}
 		if !tr.ok {
 			if o != nil {
 				matched[o.id] = true
@@ -558,7 +614,7 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 		}
 
 		// 5. State comparison.
-		items = append(items, annotateDraining(compareState(d, o, dsID), tr.draining))
+		items = append(items, annotateDraining(annotateLegacyFallback(compareState(d, o, dsID), fallback), tr.draining))
 	}
 
 	// 6. Unmanaged: observed synapse-managed containers with no active desired,
@@ -606,6 +662,32 @@ func annotateDraining(it models.DriftItem, draining bool) models.DriftItem {
 			it.Diff = map[string]any{}
 		}
 		it.Diff["lifecycle"] = models.HostStatusDraining
+	}
+	return it
+}
+
+// legacyProjectOK guards the legacy-label fallback: a name-matched container is
+// accepted only if its project label is absent (a true legacy container) or
+// matches the desired project. A different project means it's NOT the same
+// resource, so the fallback is refused.
+func legacyProjectOK(o *observedCmp, d desiredCmp) bool {
+	if o.projectID == "" {
+		return true
+	}
+	return d.projectID != nil && o.projectID == *d.projectID
+}
+
+// annotateLegacyFallback flags an item that matched via the legacy
+// synapse.deployment (name) label instead of synapse.deployment_id (UUID), so
+// the operator knows to recreate/upgrade the container to stamp the UUID.
+func annotateLegacyFallback(it models.DriftItem, fallback bool) models.DriftItem {
+	if fallback {
+		if it.Diff == nil {
+			it.Diff = map[string]any{}
+		}
+		it.Diff["legacyLabelFallback"] = true
+		it.Diff["legacyLabel"] = "synapse.deployment"
+		it.Diff["recommendedLabelRefresh"] = true
 	}
 	return it
 }
@@ -965,12 +1047,15 @@ func buildPlanJSON(scope driftScope, steps []planStep) map[string]any {
 // ============================================================
 
 func (h *DriftHandler) loadDesiredForScope(ctx context.Context, scope driftScope) ([]desiredCmp, error) {
-	col := map[string]string{scopeHost: "host_id", scopeCell: "cell_id", scopeProject: "project_id"}[scope.kind]
+	col := map[string]string{scopeHost: "ds.host_id", scopeCell: "ds.cell_id", scopeProject: "ds.project_id"}[scope.kind]
+	// LEFT JOIN deployments for the name — the legacy-label fallback correlates
+	// an observed container (synapse.deployment=name, no UUID) to its desired.
 	rows, err := h.DB.Query(ctx, `
-		SELECT id, host_id, cell_id, project_id, COALESCE(resource_id, ''), resource_key,
-		       COALESCE(desired_json->>'desiredStatus', 'running')
-		  FROM desired_states
-		 WHERE status = 'active' AND resource_type = $1 AND `+col+` = $2
+		SELECT ds.id, ds.host_id, ds.cell_id, ds.project_id, COALESCE(ds.resource_id, ''), ds.resource_key,
+		       COALESCE(ds.desired_json->>'desiredStatus', 'running'), COALESCE(d.name, '')
+		  FROM desired_states ds
+		  LEFT JOIN deployments d ON d.id::text = ds.resource_id
+		 WHERE ds.status = 'active' AND ds.resource_type = $1 AND `+col+` = $2
 	`, models.ResourceTypeConvexDeployment, scope.id())
 	if err != nil {
 		return nil, err
@@ -979,7 +1064,7 @@ func (h *DriftHandler) loadDesiredForScope(ctx context.Context, scope driftScope
 	var out []desiredCmp
 	for rows.Next() {
 		var d desiredCmp
-		if err := rows.Scan(&d.id, &d.hostID, &d.cellID, &d.projectID, &d.depID, &d.resourceKey, &d.desiredStatus); err != nil {
+		if err := rows.Scan(&d.id, &d.hostID, &d.cellID, &d.projectID, &d.depID, &d.resourceKey, &d.desiredStatus, &d.depName); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -1002,6 +1087,7 @@ func (h *DriftHandler) loadObservedForScope(ctx context.Context, scope driftScop
 		       COALESCE(observed_json->>'state', ''),
 		       COALESCE(observed_json->'labels'->>'synapse.managed', ''),
 		       COALESCE(observed_json->'labels'->>'synapse.deployment_id', ''),
+		       COALESCE(observed_json->'labels'->>'synapse.deployment', ''),
 		       COALESCE(observed_json->'labels'->>'synapse.cell_id', ''),
 		       COALESCE(observed_json->'labels'->>'synapse.project_id', '')
 		  FROM observed_states
@@ -1015,7 +1101,46 @@ func (h *DriftHandler) loadObservedForScope(ctx context.Context, scope driftScop
 	for rows.Next() {
 		var o observedCmp
 		var managed string
-		if err := rows.Scan(&o.id, &o.hostID, &o.resourceKey, &o.state, &managed, &o.depID, &o.cellID, &o.projectID); err != nil {
+		if err := rows.Scan(&o.id, &o.hostID, &o.resourceKey, &o.state, &managed, &o.depID, &o.depName, &o.cellID, &o.projectID); err != nil {
+			return nil, err
+		}
+		o.managed = managed == "true"
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// loadLegacyContainers returns managed docker_container observed rows on the
+// given hosts that have NO synapse.deployment_id but DO carry a
+// synapse.deployment (name) label — i.e. pre-12.6 containers. Used to top up
+// the legacy-fallback index for project/cell scope (whose primary observed
+// query filters on the project/cell label these containers lack).
+func loadLegacyContainers(ctx context.Context, pool *pgxpool.Pool, hostIDs []string) ([]observedCmp, error) {
+	out := []observedCmp{}
+	if len(hostIDs) == 0 {
+		return out, nil
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT id, host_id, resource_key,
+		       COALESCE(observed_json->>'state', ''),
+		       COALESCE(observed_json->'labels'->>'synapse.managed', ''),
+		       COALESCE(observed_json->'labels'->>'synapse.deployment', ''),
+		       COALESCE(observed_json->'labels'->>'synapse.cell_id', ''),
+		       COALESCE(observed_json->'labels'->>'synapse.project_id', '')
+		  FROM observed_states
+		 WHERE resource_type = '`+models.ResourceTypeDockerContainer+`'
+		   AND host_id::text = ANY($1::text[])
+		   AND COALESCE(observed_json->'labels'->>'synapse.deployment_id', '') = ''
+		   AND COALESCE(observed_json->'labels'->>'synapse.deployment', '') <> ''
+	`, hostIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var o observedCmp
+		var managed string
+		if err := rows.Scan(&o.id, &o.hostID, &o.resourceKey, &o.state, &managed, &o.depName, &o.cellID, &o.projectID); err != nil {
 			return nil, err
 		}
 		o.managed = managed == "true"

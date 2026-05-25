@@ -222,6 +222,8 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 
 	spec := dockerprov.DeploymentSpec{
 		Name:                  deploymentName,
+		DeploymentID:          deploymentID,
+		ProjectID:             projectID,
 		InstanceSecret:        instanceSecret,
 		HostPort:              *hostPort,
 		EnvVars:               envVars,
@@ -330,9 +332,16 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 		HostPort: primaryReplicaPort,
 	}, h.lookupActiveAPIDomain(ctx, deploymentID))
 
+	// Project id for the synapse.project_id container label (best-effort; the
+	// synapse.deployment_id label is the one drift correlates on).
+	var projectID string
+	_ = h.DB.QueryRow(ctx, `SELECT project_id::text FROM deployments WHERE id = $1`, deploymentID).Scan(&projectID)
+
 	for _, r := range replicas {
 		spec := dockerprov.DeploymentSpec{
 			Name:                  deploymentName,
+			DeploymentID:          deploymentID,
+			ProjectID:             projectID,
 			InstanceSecret:        instanceSecret,
 			HostPort:              *r.hostPort,
 			EnvVars:               envVars,
@@ -2482,6 +2491,8 @@ func (h *DeploymentsHandler) revokeDeployKey(w http.ResponseWriter, r *http.Requ
 
 	spec := dockerprov.DeploymentSpec{
 		Name:                  d.Name,
+		DeploymentID:          d.ID,
+		ProjectID:             d.ProjectID,
 		InstanceSecret:        newSecret,
 		HostPort:              d.HostPort,
 		EnvVars:               envVars,

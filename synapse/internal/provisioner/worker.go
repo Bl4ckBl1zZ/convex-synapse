@@ -687,6 +687,8 @@ func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) 
 
 	spec := dockerprov.DeploymentSpec{
 		Name:                  j.Name,
+		DeploymentID:          j.DeploymentID,
+		ProjectID:             j.ProjectID,
 		InstanceSecret:        j.InstanceSecret,
 		HostPort:              j.HostPort,
 		EnvVars:               j.EnvVars,
@@ -810,6 +812,8 @@ func (w *Worker) runUpgradeToHA(ctx context.Context, logger *slog.Logger, cfg Co
 	for idx, port := range ports {
 		info, err := w.Docker.Provision(ctx, dockerprov.DeploymentSpec{
 			Name:                  j.Name,
+			DeploymentID:          j.DeploymentID,
+			ProjectID:             j.ProjectID,
 			InstanceSecret:        j.InstanceSecret,
 			HostPort:              port,
 			EnvVars:               j.EnvVars,
@@ -835,6 +839,8 @@ func (w *Worker) runUpgradeToHA(ctx context.Context, logger *slog.Logger, cfg Co
 	}
 	if err := w.SnapshotMigrator.MigrateSnapshot(ctx, dockerprov.SnapshotMigrationSpec{
 		DeploymentName: j.Name,
+		DeploymentID:   j.DeploymentID,
+		ProjectID:      j.ProjectID,
 		SourceURL:      "http://" + dockerprov.ContainerName(j.Name, 0, false) + ":3210",
 		SourceAdminKey: j.AdminKey,
 		TargetURLs:     targetURLs,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/Iann29/synapse/internal/models"
 )
@@ -720,6 +721,134 @@ func TestDrift_DrainingOnlineStillDiagnoses(t *testing.T) {
 	}
 	if it.Diff["lifecycle"] != models.HostStatusDraining {
 		t.Errorf("draining should be annotated on the item diff, got %+v", it.Diff)
+	}
+}
+
+// ---------- Bloco 12.6: provisioner labels + legacy-label drift fallback ----------
+
+// seedObservedLegacy inserts a docker_container observed row the way a PRE-12.6
+// provisioner labelled it: synapse.deployment=<name> + synapse.managed, but NO
+// synapse.deployment_id. Used to test the drift legacy-label fallback.
+func seedObservedLegacy(t *testing.T, h *Harness, hostID, depName, projectID, state string) {
+	t.Helper()
+	labels := map[string]string{"synapse.managed": "true", "synapse.deployment": depName}
+	if projectID != "" {
+		labels["synapse.project_id"] = projectID
+	}
+	observed := map[string]any{
+		"id": "c" + randHex(6), "name": "convex-" + depName, "image": "img",
+		"state": state, "status": "Up", "labels": labels, "ports": "", "createdAt": "",
+	}
+	raw, _ := json.Marshal(observed)
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO observed_states (host_id, resource_type, resource_id, resource_key, observed_json, observed_hash, source)
+		VALUES ($1, 'docker_container', NULL, $2, $3, $4, 'agent')
+	`, hostID, "docker_container:"+depName+"-"+randHex(4), raw, "hash-"+randHex(6)); err != nil {
+		t.Fatalf("seed legacy observed: %v", err)
+	}
+}
+
+// The fix: provisioned containers carry the deployment UUID + project UUID so
+// drift can correlate them.
+func TestProvisioner_StampsDeploymentLabels(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Prov Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "provproj")
+	var got deploymentResp
+	h.DoJSON(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken, map[string]string{"type": "dev"}, http.StatusCreated, &got)
+	waitForStatus(t, h, got.Name, "running", 5*time.Second)
+
+	specs := h.Docker.ProvisionedSpecs()
+	if len(specs) != 1 {
+		t.Fatalf("want 1 provision spec, got %d", len(specs))
+	}
+	if specs[0].DeploymentID == "" {
+		t.Errorf("provisioner spec missing DeploymentID — drift correlation needs the UUID label")
+	}
+	if specs[0].ProjectID != proj.ID {
+		t.Errorf("spec.ProjectID = %q, want %q", specs[0].ProjectID, proj.ID)
+	}
+	if specs[0].Name != got.Name {
+		t.Errorf("spec.Name = %q, want %q", specs[0].Name, got.Name)
+	}
+}
+
+// Legacy container (name label only, no UUID) on a trusted host → correlates
+// via fallback → in_sync, annotated. (This is the exact staging blocker.)
+func TestDrift_LegacyLabelFallback(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedLegacy(t, h, hostID, "lush-heron-4656", "", "running") // no project_id (true legacy)
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if findDriftItem(res.Items, models.DriftStatusMissing) != nil {
+		t.Fatalf("legacy container must NOT show as missing — %+v", res.Items)
+	}
+	it := findDriftItem(res.Items, models.DriftStatusInSync)
+	if it == nil {
+		t.Fatalf("legacy-label container should correlate → in_sync, got %+v", res.Items)
+	}
+	if it.Diff["legacyLabelFallback"] != true {
+		t.Errorf("expected legacyLabelFallback=true, diff=%+v", it.Diff)
+	}
+}
+
+// Legacy container whose name does NOT match any desired → no fallback → missing.
+func TestDrift_LegacyFallbackWrongName(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedLegacy(t, h, hostID, "some-other-deployment", "", "running")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if findDriftItem(res.Items, models.DriftStatusInSync) != nil {
+		t.Errorf("a non-matching name must NOT fallback to in_sync: %+v", res.Items)
+	}
+	if findDriftItem(res.Items, models.DriftStatusMissing) == nil {
+		t.Errorf("expected missing (no correlation), got %+v", res.Items)
+	}
+}
+
+// Project-scope: the observed query filters on the synapse.project_id label
+// that legacy containers LACK, so the fallback must top up from the project's
+// hosts. (Exactly the case the live staging re-verify surfaced.)
+func TestDrift_LegacyFallbackProjectScope(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedLegacy(t, h, hostID, "lush-heron-4656", "", "running") // no project_id label
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/projects/"+projectID)
+	if findDriftItem(res.Items, models.DriftStatusMissing) != nil {
+		t.Fatalf("project-scope: legacy container must NOT be missing — %+v", res.Items)
+	}
+	it := findDriftItem(res.Items, models.DriftStatusInSync)
+	if it == nil || it.Diff["legacyLabelFallback"] != true {
+		t.Fatalf("project-scope: expected in_sync via legacy fallback, got %+v", res.Items)
+	}
+}
+
+// Two legacy containers with the same name → ambiguous → fallback refused.
+func TestDrift_LegacyFallbackAmbiguous(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedLegacy(t, h, hostID, "lush-heron-4656", "", "running")
+	seedObservedLegacy(t, h, hostID, "lush-heron-4656", "", "running")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if findDriftItem(res.Items, models.DriftStatusInSync) != nil {
+		t.Errorf("ambiguous name must NOT fallback to in_sync: %+v", res.Items)
+	}
+	if findDriftItem(res.Items, models.DriftStatusUnmanaged) == nil {
+		t.Errorf("ambiguous legacy containers should be unmanaged, got %+v", res.Items)
 	}
 }
 

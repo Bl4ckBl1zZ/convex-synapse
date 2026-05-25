@@ -30,7 +30,14 @@ import (
 // the per-deployment Postgres database + S3 buckets that both replicas
 // share — the volume mount is dropped (state lives in Postgres + S3).
 type DeploymentSpec struct {
-	Name           string            // friendly name, used for container suffix and INSTANCE_NAME
+	Name string // friendly name, used for container suffix and INSTANCE_NAME
+	// DeploymentID / ProjectID are the resource UUIDs. They're stamped onto the
+	// container as synapse.deployment_id / synapse.project_id labels so the Cell
+	// Control Plane's ObservedState can correlate the container with its
+	// DesiredState (which keys on the deployment UUID). Empty → the label is
+	// omitted (e.g. legacy callers); never put secrets here.
+	DeploymentID   string
+	ProjectID      string
 	InstanceSecret string            // hex-encoded secret
 	HostPort       int               // host port mapped to the container's 3210
 	EnvVars        map[string]string // additional env, applied last (overrides defaults)
@@ -108,6 +115,10 @@ type DeploymentInfo struct {
 // container DNS name.
 type SnapshotMigrationSpec struct {
 	DeploymentName string
+	// DeploymentID / ProjectID label the transient migration container so it's
+	// traceable + correlatable like the deployment container. Empty → omitted.
+	DeploymentID   string
+	ProjectID      string
 	SourceURL      string
 	SourceAdminKey string
 	TargetURLs     []string
@@ -243,11 +254,11 @@ fi
 			"TARGET_CONVEX_SELF_HOSTED_ADMIN_KEY=" + spec.TargetAdminKey,
 			"CONVEX_DISABLE_ANALYTICS=1",
 		},
-		Labels: map[string]string{
+		Labels: mergeLabels(map[string]string{
 			"synapse.managed":    "true",
 			"synapse.task":       "upgrade_to_ha",
 			"synapse.deployment": spec.DeploymentName,
-		},
+		}, spec.DeploymentID, spec.ProjectID),
 	}, &container.HostConfig{}, &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			c.Network: {},
@@ -304,6 +315,19 @@ func (c *Client) migrationLogs(ctx context.Context, containerID string, spec Sna
 // Provision creates and starts a Convex backend container per spec.
 // On failure, it best-effort removes any partially-created container so the
 // caller can retry without leaking resources.
+// mergeLabels adds the Cell Control Plane correlation labels
+// (synapse.deployment_id / synapse.project_id) to base when the ids are
+// non-empty. Carries only the resource UUIDs — never env vars or secrets.
+func mergeLabels(base map[string]string, deploymentID, projectID string) map[string]string {
+	if deploymentID != "" {
+		base["synapse.deployment_id"] = deploymentID
+	}
+	if projectID != "" {
+		base["synapse.project_id"] = projectID
+	}
+	return base
+}
+
 func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*DeploymentInfo, error) {
 	if spec.Name == "" || spec.InstanceSecret == "" || spec.HostPort == 0 {
 		return nil, errors.New("provision: name, instance secret, and host port required")
@@ -365,10 +389,12 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 		env = append(env, k+"="+v)
 	}
 
-	labels := map[string]string{
+	// synapse.deployment (name) is kept for backward compatibility; the Cell
+	// Control Plane correlates on synapse.deployment_id (UUID). No secrets here.
+	labels := mergeLabels(map[string]string{
 		"synapse.managed":    "true",
 		"synapse.deployment": spec.Name,
-	}
+	}, spec.DeploymentID, spec.ProjectID)
 	if spec.HAReplica {
 		labels["synapse.replica_index"] = strconv.Itoa(spec.ReplicaIndex)
 	}
