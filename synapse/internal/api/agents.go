@@ -31,6 +31,11 @@ type AgentsHandler struct {
 	// as the canonical control-plane origin. Empty → the agent keeps the
 	// --control-url it was invoked with.
 	PublicURL string
+	// Bloco 9 flags. EnableObservedState gates writing observed_states from
+	// heartbeats; EnableDesiredState gates serving desired state to the agent.
+	// applyAllowed is ALWAYS false in this block regardless of these.
+	EnableObservedState bool
+	EnableDesiredState  bool
 }
 
 func (h *AgentsHandler) Routes() chi.Router {
@@ -291,6 +296,15 @@ func (h *AgentsHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to record heartbeat")
 		return
 	}
+
+	// Record observed_states (Bloco 9). Best-effort + AFTER commit so a bad
+	// observed payload never blocks host liveness. Writes only safe metadata.
+	if h.EnableObservedState {
+		if err := recordObservedStates(r.Context(), h.DB, hostID, &agentID, req); err != nil {
+			logErr("record observed states", err)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,
 		"hostId": hostID,
@@ -300,14 +314,37 @@ func (h *AgentsHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 // ---------- GET /v1/agents/desired_state ----------
 
 func (h *AgentsHandler) desiredState(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.authenticateAgent(w, r); !ok {
+	_, hostID, ok := h.authenticateAgent(w, r)
+	if !ok {
 		return
 	}
-	// Observe-only: no reconcile yet. The shape is forward-compatible with a
-	// later block that fills `resources` from a desired_states table.
+	resources := []map[string]any{}
+	if h.EnableDesiredState {
+		states, err := loadActiveDesiredByHost(r.Context(), h.DB, hostID)
+		if err != nil {
+			logErr("agent desired_state load", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to load desired state")
+			return
+		}
+		for _, d := range states {
+			resources = append(resources, map[string]any{
+				"desiredStateId": d.ID,
+				"resourceType":   d.ResourceType,
+				"resourceKey":    d.ResourceKey,
+				"version":        d.Version,
+				"desiredHash":    d.DesiredHash,
+				"desired":        d.DesiredJSON,
+			})
+		}
+	}
+	// applyAllowed is ALWAYS false in Bloco 9 — the agent stays observe-only.
+	// `version` is the count of resources (a cheap change-signal for the agent
+	// to log "received N desired resources").
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":   0,
-		"resources": []any{},
+		"version":      len(resources),
+		"mode":         "observe-only",
+		"applyAllowed": false,
+		"resources":    resources,
 	})
 }
 

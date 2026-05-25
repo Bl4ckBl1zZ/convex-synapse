@@ -207,14 +207,19 @@ func TestAgent_DesiredStateEmptyButAuthenticated(t *testing.T) {
 	var reg agentRegisterResult
 	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &reg)
 
-	// Authenticated → empty desired state.
+	// Authenticated → empty desired state (this host has no placements/desired).
 	var ds struct {
-		Version   int   `json:"version"`
-		Resources []any `json:"resources"`
+		Version      int    `json:"version"`
+		Mode         string `json:"mode"`
+		ApplyAllowed bool   `json:"applyAllowed"`
+		Resources    []any  `json:"resources"`
 	}
 	h.DoJSON(http.MethodGet, "/v1/agents/desired_state", reg.AgentToken, nil, http.StatusOK, &ds)
 	if ds.Version != 0 || len(ds.Resources) != 0 {
 		t.Errorf("desired state = %+v, want empty", ds)
+	}
+	if ds.ApplyAllowed {
+		t.Errorf("applyAllowed MUST be false")
 	}
 
 	// Unauthenticated → 401.

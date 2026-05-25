@@ -65,33 +65,83 @@ func dockerVersion(ctx context.Context) (string, bool) {
 // containers — the agent never mutates anything.
 func buildObserved(ctx context.Context, info SystemInfo) map[string]any {
 	return map[string]any{
-		"dockerAvailable":          info.DockerAvailable,
-		"dockerVersion":            info.DockerVersion,
-		"synapseManagedContainers": listSynapseContainers(ctx, info.DockerAvailable),
+		"dockerAvailable": info.DockerAvailable,
+		"dockerVersion":   info.DockerVersion,
+		"containers":      observeContainers(ctx, info.DockerAvailable),
 	}
 }
 
-// listSynapseContainers returns the names of containers labelled
-// synapse.managed=true. READ-ONLY (`docker ps`); returns an empty slice when
-// docker is unavailable or the probe fails. Never an action.
-func listSynapseContainers(ctx context.Context, dockerAvailable bool) []string {
-	names := []string{}
+// dockerPSLine is the subset of `docker ps --format {{json .}}` we parse. We
+// deliberately do NOT read Command (can carry secrets) or any env.
+type dockerPSLine struct {
+	ID        string `json:"ID"`
+	Names     string `json:"Names"`
+	Image     string `json:"Image"`
+	State     string `json:"State"`
+	Status    string `json:"Status"`
+	Labels    string `json:"Labels"`
+	Ports     string `json:"Ports"`
+	CreatedAt string `json:"CreatedAt"`
+}
+
+// observeContainers returns SAFE metadata for containers labelled
+// synapse.managed=true. READ-ONLY (`docker ps`). Never env, command, or
+// non-synapse labels. Empty slice when docker is unavailable / the probe
+// fails. Never an action.
+func observeContainers(ctx context.Context, dockerAvailable bool) []map[string]any {
+	out := []map[string]any{}
 	if !dockerAvailable {
-		return names
+		return out
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, "docker", "ps",
-		"--filter", "label=synapse.managed=true", "--format", "{{.Names}}").Output()
+	raw, err := exec.CommandContext(cctx, "docker", "ps",
+		"--filter", "label=synapse.managed=true", "--format", "{{json .}}").Output()
 	if err != nil {
-		return names
+		return out
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			names = append(names, s)
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var p dockerPSLine
+		if json.Unmarshal([]byte(line), &p) != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id":        shortDockerID(p.ID),
+			"name":      p.Names,
+			"image":     p.Image,
+			"state":     p.State,
+			"status":    p.Status,
+			"labels":    parseSynapseLabels(p.Labels),
+			"ports":     p.Ports,
+			"createdAt": p.CreatedAt,
+		})
+	}
+	return out
+}
+
+// parseSynapseLabels parses docker's "k=v,k2=v2" label string and keeps ONLY
+// synapse.* labels — never echoes arbitrary operator labels.
+func parseSynapseLabels(s string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		k = strings.TrimSpace(k)
+		if ok && strings.HasPrefix(k, "synapse.") {
+			out[k] = strings.TrimSpace(v)
 		}
 	}
-	return names
+	return out
+}
+
+func shortDockerID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func writeJSON(w io.Writer, v any) error {

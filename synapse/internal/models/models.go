@@ -583,3 +583,110 @@ type DeploymentPlacement struct {
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
 }
+
+// ============================================================
+// Desired / Observed / Operation state (Bloco 9)
+// ============================================================
+//
+// The intention/observation/operation layer. Synapse MODELS, OBSERVES,
+// COMPARES, PLANS — never APPLIES (Bloco 9). No secrets in DesiredJSON /
+// ObservedJSON.
+
+const (
+	DesiredStateStatusActive     = "active"
+	DesiredStateStatusSuperseded = "superseded"
+	DesiredStateStatusDisabled   = "disabled"
+
+	DesiredSourcePlacement = "placement"
+	DesiredSourceRoute     = "route"
+	DesiredSourceManual    = "manual"
+	DesiredSourceSystem    = "system"
+	DesiredSourceImported  = "imported"
+
+	ResourceTypeConvexDeployment = "convex_deployment"
+	ResourceTypeHostFacts        = "host_facts"
+	ResourceTypeDockerContainer  = "docker_container"
+	ResourceTypeRoute            = "route"
+)
+
+// DesiredState is what Synapse wants to exist on a host. DesiredJSON carries
+// no secrets — just placement intent + synapse.* labels.
+type DesiredState struct {
+	ID           string         `json:"id"`
+	TeamID       *string        `json:"teamId,omitempty"`
+	ProjectID    *string        `json:"projectId,omitempty"`
+	CellID       *string        `json:"cellId,omitempty"`
+	HostID       string         `json:"hostId"`
+	ResourceType string         `json:"resourceType"`
+	ResourceID   *string        `json:"resourceId,omitempty"`
+	ResourceKey  string         `json:"resourceKey"`
+	DesiredJSON  map[string]any `json:"desired"`
+	DesiredHash  string         `json:"desiredHash"`
+	Version      int            `json:"version"`
+	Status       string         `json:"status"`
+	Source       string         `json:"source"`
+	CreatedBy    *string        `json:"createdBy,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	UpdatedAt    time.Time      `json:"updatedAt"`
+}
+
+const (
+	ObservedSourceAgent  = "agent"
+	ObservedSourceServer = "server"
+	ObservedSourceImport = "import"
+)
+
+// ObservedState is what an agent reported exists on a host. ObservedJSON
+// carries only safe metadata (never env vars, commands-with-secrets, tokens).
+type ObservedState struct {
+	ID           string         `json:"id"`
+	HostID       string         `json:"hostId"`
+	AgentID      *string        `json:"agentId,omitempty"`
+	ResourceType string         `json:"resourceType"`
+	ResourceID   *string        `json:"resourceId,omitempty"`
+	ResourceKey  string         `json:"resourceKey"`
+	ObservedJSON map[string]any `json:"observed"`
+	ObservedHash string         `json:"observedHash"`
+	ObservedAt   time.Time      `json:"observedAt"`
+	Source       string         `json:"source"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	UpdatedAt    time.Time      `json:"updatedAt"`
+}
+
+const (
+	OperationStatusQueued    = "queued"
+	OperationStatusRunning   = "running"
+	OperationStatusSucceeded = "succeeded"
+	OperationStatusFailed    = "failed"
+	OperationStatusCancelled = "cancelled"
+
+	OperationTypeSyncDesiredFromPlacements = "sync_desired_from_placements"
+	OperationTypeRecordObservedState       = "record_observed_state"
+	OperationTypeComputeDrift              = "compute_drift"
+	OperationTypeReconcileDryRun           = "reconcile_dry_run"
+	OperationTypeCreateDesiredState        = "create_desired_state"
+	OperationTypeDisableDesiredState       = "disable_desired_state"
+)
+
+// OperationRun tracks a Synapse operation (sync / drift / dry-run). PlanJSON
+// holds a dry-run plan; ResultJSON the outcome summary. Never executes an
+// apply in Bloco 9.
+type OperationRun struct {
+	ID           string         `json:"id"`
+	Type         string         `json:"type"`
+	TeamID       *string        `json:"teamId,omitempty"`
+	ProjectID    *string        `json:"projectId,omitempty"`
+	CellID       *string        `json:"cellId,omitempty"`
+	HostID       *string        `json:"hostId,omitempty"`
+	DeploymentID *string        `json:"deploymentId,omitempty"`
+	Status       string         `json:"status"`
+	InputJSON    map[string]any `json:"input,omitempty"`
+	PlanJSON     map[string]any `json:"plan,omitempty"`
+	ResultJSON   map[string]any `json:"result,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	CreatedBy    *string        `json:"createdBy,omitempty"`
+	StartedAt    *time.Time     `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time     `json:"finishedAt,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	UpdatedAt    time.Time      `json:"updatedAt"`
+}

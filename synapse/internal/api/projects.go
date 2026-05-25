@@ -39,6 +39,9 @@ type ProjectsHandler struct {
 	CellLinks *CellLinksHandler
 	// CellTopology (Bloco 8) — the real Host→Cell→Deployment topology.
 	CellTopology *CellTopologyHandler
+	// Bloco 9 — desired state + operation runs (project-scoped surfaces).
+	DesiredState *DesiredStateHandler
+	Operations   *OperationsHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -156,6 +159,15 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		if h.CellLinks != nil {
 			r.Get("/cell_links", h.CellLinks.listCellLinksByProject)
 			r.Post("/cell_links", h.CellLinks.createCellLink)
+		}
+		// Bloco 9 — desired state (derive from placements + list) + operation
+		// runs (read). Sync is project-admin; reads are project-member.
+		if h.DesiredState != nil {
+			r.Post("/desired_state/sync_from_placements", h.DesiredState.syncFromPlacements)
+			r.Get("/desired_state", h.DesiredState.listProjectDesired)
+		}
+		if h.Operations != nil {
+			r.Get("/operation_runs", h.Operations.listProjectOperationRuns)
 		}
 	})
 

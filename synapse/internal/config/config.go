@@ -175,6 +175,14 @@ type Config struct {
 	// "offline". Defaults: 60s / 300s.
 	AgentStaleAfter   time.Duration
 	AgentOfflineAfter time.Duration
+
+	// Bloco 9 — desired/observed/drift. These gate the model/observe/compare/
+	// plan layer; NONE of them enable apply. AgentApply is the hard gate for a
+	// future apply mode and MUST stay false in this block.
+	EnableDesiredState    bool
+	EnableObservedState   bool
+	EnableReconcileDryRun bool
+	AgentApply            bool
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -268,6 +276,13 @@ func Load() (*Config, error) {
 
 		AgentStaleAfter:   time.Duration(getEnvInt("SYNAPSE_AGENT_STALE_AFTER_SECONDS", 60)) * time.Second,
 		AgentOfflineAfter: time.Duration(getEnvInt("SYNAPSE_AGENT_OFFLINE_AFTER_SECONDS", 300)) * time.Second,
+
+		EnableDesiredState:    getEnvDefault("SYNAPSE_ENABLE_DESIRED_STATE", "true") != "false",
+		EnableObservedState:   getEnvDefault("SYNAPSE_ENABLE_OBSERVED_STATE", "true") != "false",
+		EnableReconcileDryRun: getEnvDefault("SYNAPSE_ENABLE_RECONCILE_DRY_RUN", "true") != "false",
+		// Hard-disabled in Bloco 9. Apply is not implemented; this flag exists
+		// so the surface is explicit and defaults to false.
+		AgentApply: getEnvDefault("SYNAPSE_AGENT_APPLY", "false") == "true",
 	}, nil
 }
 

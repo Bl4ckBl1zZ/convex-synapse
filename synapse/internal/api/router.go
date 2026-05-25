@@ -144,6 +144,12 @@ type RouterDeps struct {
 	// what the test harness uses.
 	AgentStaleAfter   time.Duration
 	AgentOfflineAfter time.Duration
+
+	// Bloco 9 — desired/observed state. Default true in the harness (zero
+	// value false there, so the harness opts in explicitly if needed). Apply
+	// is never enabled in this block.
+	EnableDesiredState  bool
+	EnableObservedState bool
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -285,6 +291,11 @@ func NewRouter(d RouterDeps) http.Handler {
 		OfflineAfter: d.AgentOfflineAfter,
 	}
 	projectsH.CellTopology = cellTopologyH
+	// Bloco 9 — desired state + operation runs.
+	desiredStateH := &DesiredStateHandler{DB: d.DB, Projects: projectsH}
+	projectsH.DesiredState = desiredStateH
+	operationsH := &OperationsHandler{DB: d.DB, Projects: projectsH}
+	projectsH.Operations = operationsH
 	hostsH := &HostsHandler{
 		DB:           d.DB,
 		PublicURL:    d.PublicURL,
@@ -295,7 +306,12 @@ func NewRouter(d RouterDeps) http.Handler {
 	// register authenticates with the adoption token in the body, heartbeat
 	// + desired_state with the agent bearer token. Mounted in the public
 	// group below (NOT under the JWT Authenticator).
-	agentsH := &AgentsHandler{DB: d.DB, PublicURL: d.PublicURL}
+	agentsH := &AgentsHandler{
+		DB:                  d.DB,
+		PublicURL:           d.PublicURL,
+		EnableObservedState: d.EnableObservedState,
+		EnableDesiredState:  d.EnableDesiredState,
+	}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -377,6 +393,9 @@ func NewRouter(d RouterDeps) http.Handler {
 			// link (loadCellLinkForRequest); discovery is the public route above.
 			r.Mount("/cell_links", cellLinksH.Routes())
 			r.Mount("/service_tokens", cellLinksH.ServiceTokenRoutes())
+			// Bloco 9 — operation run detail (read). Project-scoped list is
+			// mounted under /v1/projects/{id}/operation_runs.
+			r.Mount("/operation_runs", operationsH.Routes())
 			// /v1/admin — instance-level operations (version check + auto-
 			// upgrade). The handler's own middleware gates each route to
 			// users.is_instance_admin; we mount inside the authenticated group

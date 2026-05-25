@@ -106,8 +106,41 @@ func (h *HostsHandler) Routes() chi.Router {
 		r.Post("/drain", h.drainHost)
 		r.Post("/adoption_token", h.createAdoptionToken)
 		r.Get("/agents", h.listHostAgents)
+		// Bloco 9: host-scoped desired / observed state (instance-admin).
+		r.Get("/desired_state", h.getHostDesiredState)
+		r.Get("/observed_state", h.getHostObservedState)
 	})
 	return r
+}
+
+// ---------- GET /v1/hosts/{hostID}/desired_state | observed_state ----------
+
+func (h *HostsHandler) getHostDesiredState(w http.ResponseWriter, r *http.Request) {
+	hst, ok := h.loadHost(w, r)
+	if !ok {
+		return
+	}
+	items, err := loadActiveDesiredByHost(r.Context(), h.DB, hst.ID)
+	if err != nil {
+		logErr("host desired state", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to load desired state")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *HostsHandler) getHostObservedState(w http.ResponseWriter, r *http.Request) {
+	hst, ok := h.loadHost(w, r)
+	if !ok {
+		return
+	}
+	items, err := loadObservedByHost(r.Context(), h.DB, hst.ID)
+	if err != nil {
+		logErr("host observed state", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to load observed state")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // AgentAdminRoutes mounts the instance-admin agent-lifecycle endpoints at
@@ -555,15 +588,22 @@ func summarizeObserved(raw []byte) *agentObservedSummary {
 		return nil
 	}
 	var p struct {
-		DockerAvailable          bool     `json:"dockerAvailable"`
-		SynapseManagedContainers []string `json:"synapseManagedContainers"`
+		DockerAvailable bool `json:"dockerAvailable"`
+		// containers (Bloco 9 rich form) is preferred; synapseManagedContainers
+		// is the older names-only form, kept as a fallback.
+		Containers               []json.RawMessage `json:"containers"`
+		SynapseManagedContainers []string          `json:"synapseManagedContainers"`
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil
 	}
+	count := len(p.Containers)
+	if count == 0 {
+		count = len(p.SynapseManagedContainers)
+	}
 	return &agentObservedSummary{
 		DockerAvailable:       p.DockerAvailable,
-		ManagedContainerCount: len(p.SynapseManagedContainers),
+		ManagedContainerCount: count,
 	}
 }
 

@@ -167,3 +167,29 @@ func TestRunOnceAgainstStub(t *testing.T) {
 func srv0(r *http.Request) string {
 	return "http://" + r.Host
 }
+
+func TestParseSynapseLabelsFiltersNonSynapse(t *testing.T) {
+	got := parseSynapseLabels("synapse.managed=true,synapse.deployment_id=d1,com.secret=NOPE,maintainer=x")
+	if got["synapse.managed"] != "true" || got["synapse.deployment_id"] != "d1" {
+		t.Errorf("synapse labels missing: %+v", got)
+	}
+	if _, leaked := got["com.secret"]; leaked {
+		t.Errorf("non-synapse label leaked: %+v", got)
+	}
+	if _, leaked := got["maintainer"]; leaked {
+		t.Errorf("non-synapse label leaked: %+v", got)
+	}
+}
+
+func TestBuildObservedHasNoSecretKeys(t *testing.T) {
+	// dockerAvailable=false → no docker call, containers empty; deterministic in CI.
+	obs := buildObserved(context.Background(), SystemInfo{DockerAvailable: false})
+	for _, bad := range []string{"env", "command", "environment", "secrets"} {
+		if _, ok := obs[bad]; ok {
+			t.Errorf("buildObserved leaked top-level %q", bad)
+		}
+	}
+	if _, ok := obs["containers"]; !ok {
+		t.Errorf("buildObserved should include containers")
+	}
+}
