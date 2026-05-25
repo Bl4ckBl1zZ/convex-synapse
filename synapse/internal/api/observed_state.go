@@ -61,6 +61,7 @@ func recordObservedStates(ctx context.Context, pool *pgxpool.Pool, hostID string
 	}
 
 	// docker_container (synapse-managed only).
+	seenKeys := make([]string, 0, len(p.Containers))
 	for _, c := range p.Containers {
 		labels := safeSynapseLabels(c.Labels)
 		depID := labels["synapse.deployment_id"]
@@ -70,6 +71,8 @@ func recordObservedStates(ctx context.Context, pool *pgxpool.Pool, hostID string
 			key = depID
 			resID = &depID
 		}
+		resourceKey := models.ResourceTypeDockerContainer + ":" + key
+		seenKeys = append(seenKeys, resourceKey)
 		observed := map[string]any{
 			"id":        c.ID,
 			"name":      c.Name,
@@ -81,11 +84,36 @@ func recordObservedStates(ctx context.Context, pool *pgxpool.Pool, hostID string
 			"createdAt": c.CreatedAt,
 		}
 		if err := upsertObserved(ctx, pool, hostID, agentID, models.ResourceTypeDockerContainer, resID,
-			models.ResourceTypeDockerContainer+":"+key, observed); err != nil {
+			resourceKey, observed); err != nil {
+			return err
+		}
+	}
+
+	// Prune vanished containers so observed_states mirrors the latest snapshot
+	// instead of accumulating ghost rows (a removed container must read as
+	// "missing" in drift, not a stale state=running forever). ONLY when docker
+	// is available: if the daemon is unreachable the agent reports an empty
+	// list, and deleting everything during an outage would manufacture false
+	// "missing" drift. host_facts is never pruned.
+	if p.DockerAvailable {
+		if err := pruneObservedContainers(ctx, pool, hostID, seenKeys); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// pruneObservedContainers deletes the host's docker_container observed rows
+// whose resource_key is not in the current heartbeat snapshot. keepKeys may be
+// empty (host legitimately runs zero managed containers → drop them all).
+func pruneObservedContainers(ctx context.Context, pool *pgxpool.Pool, hostID string, keepKeys []string) error {
+	_, err := pool.Exec(ctx, `
+		DELETE FROM observed_states
+		 WHERE host_id = $1
+		   AND resource_type = $2
+		   AND NOT (resource_key = ANY($3::text[]))
+	`, hostID, models.ResourceTypeDockerContainer, keepKeys)
+	return err
 }
 
 // safeSynapseLabels keeps only synapse.* labels — never echoes arbitrary
