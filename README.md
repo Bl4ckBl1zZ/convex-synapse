@@ -130,7 +130,12 @@ get one minor cycle of dual-shipping before removal.
 For roadmap, design notes, and what's deliberately out of scope, see
 [`docs/ROADMAP.md`](docs/ROADMAP.md) and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). For more screenshots,
-see [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md).
+see [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md). The full docs index is
+[`docs/README.md`](docs/README.md).
+
+The **Cell Control Plane** (hosts, agents, cells, desired/observed/**drift** +
+dry-run — observe & plan only, never applies) is documented under
+[`docs/CELL_CONTROL_PLANE.md`](docs/CELL_CONTROL_PLANE.md).
 
 ## Quickstart
 

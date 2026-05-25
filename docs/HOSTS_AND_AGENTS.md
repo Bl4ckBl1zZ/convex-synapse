@@ -7,9 +7,53 @@ Go binary that runs on a Host and reports it as live.
 The agent is **observe-only**: it never creates, restarts, or removes
 containers or volumes, never touches Caddy/proxy, and never modifies any
 container (labelled or not). The only Docker it runs are read-only
-`docker version` / `docker ps` probes. An apply/reconcile mode is a future
-block; the `docker.allow*` flags in the config are reserved for it and are
-unused today.
+`docker version` / `docker ps -a` probes. An apply/reconcile mode is a future
+block; the `docker.allow*` flags in the config + `SYNAPSE_AGENT_APPLY` (default
+`false`) are reserved for it and are unused today.
+
+### What the agent NEVER does
+
+- create / start / restart / stop / remove a container
+- create / remove / mount a volume
+- touch Caddy or the proxy
+- read container env vars, the full command, logs, or mounts
+- report non-`synapse.*` labels
+
+It only ever reports **safe metadata** for `synapse.managed=true` containers:
+short id, name, image, state, status, `synapse.*` labels, ports summary,
+createdAt. See [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md).
+
+## Container observation (`docker ps -a` + containerScan)
+
+Each heartbeat the agent lists synapse-managed containers — **including
+stopped/exited ones** (`docker ps -a`), so the control plane can tell "stopped,
+needs restart" apart from "gone, needs create":
+
+```
+docker ps -a --filter label=synapse.managed=true --format '{{json .}}'
+```
+
+The heartbeat carries a `containerScan` object describing whether the listing
+actually worked, so the server can prune safely:
+
+| Situation | `containerScan` |
+|---|---|
+| docker up, `ps -a` succeeded | `{attempted:true, succeeded:true,  complete:true,  error:null}` |
+| docker absent | `{attempted:true, succeeded:false, complete:false, error:"docker_unavailable"}` |
+| `docker ps -a` errored / timed out | `{attempted:true, succeeded:false, complete:false, error:"docker_scan_failed"}` |
+
+### Pruning safety
+
+The server upserts the reported containers into `observed_states` and then
+**prunes** rows for containers no longer present — but **only when
+`containerScan.succeeded && containerScan.complete`**. A failed or
+docker-unavailable scan reports an empty list, and pruning then would
+manufacture a false "missing" during a transient outage. `host_facts` is never
+pruned. (Legacy agents without `containerScan` fall back to the old
+`dockerAvailable` gate.)
+
+This is why Drift treats a degraded scan as `host_unreachable`, never `missing`
+— see [DESIRED_OBSERVED_DRIFT.md](DESIRED_OBSERVED_DRIFT.md).
 
 ## Host liveness (effectiveStatus)
 
