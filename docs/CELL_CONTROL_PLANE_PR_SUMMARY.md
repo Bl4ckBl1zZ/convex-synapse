@@ -149,16 +149,35 @@ planned/no_op/skipped; hosts instance-admin, discovery requires `discovery:read`
       **no Apply button** — Playwright asserts 0 apply controls)
 - [x] CLI verified end-to-end (no `apply` command; `reconcile --apply` errors)
 - [x] Re-read [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md); none broken
-- [ ] Final review on a real **staging VPS** (this pass was a local stack)
+- [x] Final review on a real **staging VPS** (Hetzner; found + fixed one drift
+      blocker, then re-verified green — see below)
+
+## Staging verification (Bloco 12.5 / 12.6)
+
+Deployed to a clean Hetzner VPS via `setup.sh` and drove observe → compare →
+plan against **real** provisioned backends. Found one release blocker: the
+provisioner stamped `synapse.deployment=<name>` but drift correlates on
+`synapse.deployment_id=<UUID>`, so every real deployment showed
+`missing → would create` (local tests missed it — they hand-seeded the UUID
+label). Fixed in commit `deaee89`: provisioner now stamps
+`synapse.deployment_id` + `synapse.project_id` on every container-creating
+path, with a name-based drift fallback for pre-fix containers (annotated
+`legacyLabelFallback` + `recommendedLabelRefresh`, never masking a wrong
+`deployment_id`). No new migration; no apply path. Re-verified green: new
+deployment `in_sync` via primary UUID match, legacy deployment `in_sync` via
+fallback, project recompute `clean` (`missing 0`), CLI `→ no-op`, `--apply`
+still rejected, both hosts `online`, dashboard + API 200.
 
 ## Recommendation
 
-**Ready for PR → ready for merge after review.** All automated gates + the
-local migration rehearsal, end-to-end live smoke, and security review pass;
-the only code change in this pass is a CLI EPIPE clean-exit guard. No blockers.
-Remaining items are non-blocking follow-ups (eslint baseline cleanup,
-host/cell deep-dive UI, real-staging-VPS confirmation, and the deferred,
-explicitly-gated apply mode).
+**Ready for merge after review; ready for staging — hold prod for the
+maintainer's go.** All automated gates + the local migration rehearsal,
+end-to-end live smoke, security review, **and a real staging-VPS pass** are
+green. One blocker was found on staging and fixed in-band (`deaee89`), then
+re-verified on the same VPS. Remaining items are non-blocking follow-ups
+(eslint baseline cleanup, host/cell deep-dive UI, the deferred
+explicitly-gated apply mode). No RC/prod tag is cut in this pass — that is the
+maintainer's call per the release process.
 
 ## Checklist — after merge
 

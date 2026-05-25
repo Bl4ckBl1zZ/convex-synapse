@@ -1,7 +1,7 @@
 # Production release checklist — Cell Control Plane
 
 Operational deploy/rollback procedure for the `feat/cell-control-plane` branch
-(commit `a105211`, proposed `v1.12.0-rc1`). Read alongside
+(branch tip `deaee89`, staging-verified; proposed `v1.12.0-rc1`). Read alongside
 [RELEASE_NOTES_CELL_CONTROL_PLANE.md](RELEASE_NOTES_CELL_CONTROL_PLANE.md) and
 [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md).
 
@@ -75,9 +75,15 @@ up→v21, down→clean, re-up→v21.)
 
 ## 2. Staging-VPS verification runbook (REQUIRED before prod)
 
-> **Status: NOT executed in this session** (only the local stack was verified).
-> Run this on a **dedicated staging VPS** (e.g. `synapse-vps` — confirm it's free;
-> it's normally the installer test box). **Never use production as staging.**
+> **Status: EXECUTED + PASSED** on a dedicated Hetzner staging VPS (Bloco
+> 12.5 / 12.6, branch tip `deaee89`). One release blocker was found here
+> (provisioner labelled containers `synapse.deployment=<name>`, but drift
+> correlates on `synapse.deployment_id=<UUID>` → real deployments showed false
+> `missing`), fixed in-band, and re-verified green on the same VPS (new
+> deployment `in_sync` via primary UUID match; legacy container `in_sync` via
+> name fallback; project recompute `clean`/`missing 0`; CLI `→ no-op`;
+> `--apply` rejected; both hosts `online`). Re-run the steps below on your own
+> staging box before each prod promotion. **Never use production as staging.**
 
 1. Deploy the branch: `git clone -b feat/cell-control-plane … && ./setup.sh --domain=<staging-host>` (or `--upgrade` on an existing staging install).
 2. Migrations auto-run on boot → confirm `schema_migrations` = 21 / not dirty.
@@ -97,7 +103,7 @@ up→v21, down→clean, re-up→v21.)
 
 ## 3. Production deployment plan (prepare only; execute on go-ahead)
 
-- **Window:** _<TBD>_ · **Owner:** _<TBD>_ · **Commit/tag:** `a105211` / `v1.12.0` (cut after staging).
+- **Window:** _<TBD>_ · **Owner:** _<TBD>_ · **Commit/tag:** `deaee89` (branch tip, staging-verified) / `v1.12.0` (cut after the prod window).
 
 **Order:**
 - **A. Pre-prod backup** — §1a (DB + commit + image digests + `.env` + migration version).
@@ -117,7 +123,7 @@ up→v21, down→clean, re-up→v21.)
 - [ ] Current commit + image digests + migration version recorded
 - [ ] `.env` saved
 - [ ] Migrations rehearsed (up→down→up) — done pre-merge
-- [ ] **Staging-VPS verification (§2) passed**
+- [x] **Staging-VPS verification (§2) passed** (Bloco 12.5/12.6, tip `deaee89`)
 - [ ] Rollback procedure (§5) understood
 
 ### Deploy

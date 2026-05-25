@@ -65,10 +65,11 @@ tables only). Up-from-zero and up→down→up rehearsed clean.
 - CellLink endpoint can be `null` without a route/domain ("endpoint unresolved").
 - Legacy topology coexists with `cell_topology`.
 - State & Drift UI is project-level (host/cell deep-dive deferred).
-- **Real-staging-VPS verification is required before prod** (this RC was verified
-  on a local stack only).
+- **Real-staging-VPS verification: done** (Hetzner CPX, Ubuntu 24.04). One
+  release blocker was found there and fixed in-band — see *Staging verification*
+  below.
 
-## Verification matrix (commit `a105211`)
+## Verification matrix (re-run at branch tip `deaee89`)
 
 | Gate | Result |
 |---|---|
@@ -85,6 +86,46 @@ tables only). Up-from-zero and up→down→up rehearsed clean.
 | migration rehearsal up → down → up | v21 → dropped → v21 |
 | `git diff --check` (branch) | clean |
 | secret scan (manual; gitleaks not installed) | clean |
+
+## Staging verification (real VPS — Bloco 12.5 / 12.6)
+
+Deployed `feat/cell-control-plane` to a clean Hetzner VPS via `setup.sh`
+(`--non-interactive --no-tls`, Docker bootstrapped via `get.docker.com`),
+joined an agent, and drove the full observe → compare → plan loop against
+**real** provisioned Convex backends.
+
+**Blocker found (Bloco 12.5):** drift reported every real deployment as
+`missing → would create`. Root cause — the provisioner labelled containers
+`synapse.deployment=<name>` but the drift engine correlates on
+`synapse.deployment_id=<UUID>` (the key the desired side carries). The
+provisioner predated the Cell Control Plane and never stamped the UUID. Local
+tests missed it because they hand-seeded observed rows *with* the UUID label;
+only a real provisioner-built container surfaced the gap. Observe/dry-run only,
+so never a safety bug — but drift accuracy was wrong.
+
+**Fix (Bloco 12.6, commit `deaee89`):** provisioner now stamps
+`synapse.deployment_id` + `synapse.project_id` (legacy `synapse.deployment`
+kept) on every container-creating path; the IDs are threaded through create,
+the async worker, HA provision/upgrade, CORS-rebuild, and deploy-key rotation.
+A drift backward-compat fallback correlates pre-fix containers by name when
+unambiguous and the project label is absent/matching (annotated
+`legacyLabelFallback` + `recommendedLabelRefresh`); a present-but-wrong
+`deployment_id` is never masked, and an ambiguous name stays `unmanaged`. No
+new migration; no apply path added.
+
+**Re-verified GREEN on the same VPS** after rebuild:
+
+| Check | Result |
+|---|---|
+| New deployment (provisioner-built) drift | `in_sync` via **primary** UUID correlation |
+| Legacy deployment (pre-fix container) drift | `in_sync` via `legacyLabelFallback` + `recommendedLabelRefresh` |
+| Project-scoped recompute summary | `clean` — `inSync 2 · missing 0 · unmanaged 0` |
+| Operator CLI `drift recompute --project` | `clean`, both `→ no-op` |
+| `drift recompute --apply` (CLI) | rejected (`Unexpected argument`) — apply does not exist |
+| Operation run type recorded | `compute_drift` (diagnose/plan only; no apply op type) |
+| Dashboard `:6790` · API `/health` | 200 · 200 |
+| Hosts (control-plane + agent) | both `effectiveStatus=online` |
+| Stale-host case (heartbeat aged out) | `host_unreachable`, never false `missing` |
 
 ## Release artifacts
 
