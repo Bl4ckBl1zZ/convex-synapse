@@ -3,11 +3,14 @@
 **Proposed version:** `v1.12.0-rc1` (minor bump from the de-facto installer line
 `1.11.7`; the feature set is additive + backward-compatible. Alternative label:
 `cell-control-plane-rc1`.) · **Branch:** `feat/cell-control-plane` ·
-**Commit:** `a105211` · **Migrations:** `000017`–`000021` (additive).
+**Staging-verified code commit:** `deaee89` (the Bloco 12.6 hotfix; the commits
+after it are docs + a comment-only gofmt) · **Migrations:** `000017`–`000021`
+(additive).
 
 > **No git tag is created yet** — per the release process, the RC tag is cut
-> only after real-staging-VPS verification passes. Production tag (`v1.12.0`)
-> after the prod deploy window.
+> only after real-staging-VPS verification passes. Staging verification **has
+> passed** (Bloco 12.5/12.6, code commit `deaee89`); the RC/prod tag is still
+> the maintainer's call. Production tag (`v1.12.0`) after the prod deploy window.
 
 Turns Synapse from a per-deployment panel into a **Cell Control Plane**:
 observe → compare → plan. **Diagnosis + dry-run only — it never applies changes
@@ -69,7 +72,7 @@ tables only). Up-from-zero and up→down→up rehearsed clean.
   release blocker was found there and fixed in-band — see *Staging verification*
   below.
 
-## Verification matrix (re-run at branch tip `deaee89`)
+## Verification matrix (re-run at staging-verified code commit `deaee89`)
 
 | Gate | Result |
 |---|---|

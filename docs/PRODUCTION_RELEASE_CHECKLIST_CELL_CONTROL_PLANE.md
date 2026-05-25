@@ -1,7 +1,8 @@
 # Production release checklist — Cell Control Plane
 
 Operational deploy/rollback procedure for the `feat/cell-control-plane` branch
-(branch tip `deaee89`, staging-verified; proposed `v1.12.0-rc1`). Read alongside
+(staging-verified code commit `deaee89`; later commits are docs + comment-only
+gofmt; proposed `v1.12.0-rc1`). Read alongside
 [RELEASE_NOTES_CELL_CONTROL_PLANE.md](RELEASE_NOTES_CELL_CONTROL_PLANE.md) and
 [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md).
 
@@ -76,7 +77,7 @@ up→v21, down→clean, re-up→v21.)
 ## 2. Staging-VPS verification runbook (REQUIRED before prod)
 
 > **Status: EXECUTED + PASSED** on a dedicated Hetzner staging VPS (Bloco
-> 12.5 / 12.6, branch tip `deaee89`). One release blocker was found here
+> 12.5 / 12.6, code commit `deaee89`). One release blocker was found here
 > (provisioner labelled containers `synapse.deployment=<name>`, but drift
 > correlates on `synapse.deployment_id=<UUID>` → real deployments showed false
 > `missing`), fixed in-band, and re-verified green on the same VPS (new
@@ -103,7 +104,7 @@ up→v21, down→clean, re-up→v21.)
 
 ## 3. Production deployment plan (prepare only; execute on go-ahead)
 
-- **Window:** _<TBD>_ · **Owner:** _<TBD>_ · **Commit/tag:** `deaee89` (branch tip, staging-verified) / `v1.12.0` (cut after the prod window).
+- **Window:** _<TBD>_ · **Owner:** _<TBD>_ · **Commit/tag:** `deaee89` (staging-verified code commit; deploy the branch tip, which adds only docs + gofmt on top) / `v1.12.0` (cut after the prod window).
 
 **Order:**
 - **A. Pre-prod backup** — §1a (DB + commit + image digests + `.env` + migration version).
@@ -123,7 +124,7 @@ up→v21, down→clean, re-up→v21.)
 - [ ] Current commit + image digests + migration version recorded
 - [ ] `.env` saved
 - [ ] Migrations rehearsed (up→down→up) — done pre-merge
-- [x] **Staging-VPS verification (§2) passed** (Bloco 12.5/12.6, tip `deaee89`)
+- [x] **Staging-VPS verification (§2) passed** (Bloco 12.5/12.6, code commit `deaee89`)
 - [ ] Rollback procedure (§5) understood
 
 ### Deploy

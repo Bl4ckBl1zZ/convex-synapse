@@ -502,17 +502,17 @@ func postgresURLRequiresSSL(url string) bool {
 //   - PublicURL set, ProxyEnabled false→ "<PublicURL>:<host_port>"
 //
 // The custom-domain branch matters for two reasons:
-//   1. Brand: operators who registered `api.<client>.com` (role=api,
-//      status=active) intend that URL to be THE public face of the
-//      deployment. The dashboard's deployment row should display it,
-//      "Copy URL" should copy it, the iframe's Convex Dashboard
-//      should call it for queries/mutations/files — everything.
-//   2. Consistency with cliDeploymentURL: that helper already picks
-//      the custom domain since v1.6.3. Pre-v1.6.13 the dashboard UI
-//      (publicDeploymentURL) and the CLI (cliDeploymentURL) returned
-//      DIFFERENT URLs for the same deployment, which surprised
-//      operators who copied one place and pasted into another. They
-//      now agree.
+//  1. Brand: operators who registered `api.<client>.com` (role=api,
+//     status=active) intend that URL to be THE public face of the
+//     deployment. The dashboard's deployment row should display it,
+//     "Copy URL" should copy it, the iframe's Convex Dashboard
+//     should call it for queries/mutations/files — everything.
+//  2. Consistency with cliDeploymentURL: that helper already picks
+//     the custom domain since v1.6.3. Pre-v1.6.13 the dashboard UI
+//     (publicDeploymentURL) and the CLI (cliDeploymentURL) returned
+//     DIFFERENT URLs for the same deployment, which surprised
+//     operators who copied one place and pasted into another. They
+//     now agree.
 //
 // BaseDomain still wins over the path-based shape when no custom
 // domain is configured: if the operator took the trouble to wire
@@ -547,12 +547,12 @@ func (h *DeploymentsHandler) urlComputer() deploymenturl.Computer {
 // Decision matrix (first match wins):
 //   - Adopted                    → d.DeploymentURL (operator-supplied)
 //   - active custom domain api   → "https://<custom_domain>" (preferred — no port,
-//                                  Caddy handles TLS, CLI-OK)
+//     Caddy handles TLS, CLI-OK)
 //   - BaseDomain set             → "https://<name>.<BaseDomain>" (CLI-OK)
 //   - PublicURL set + HostPort>0 → "<PublicURL_host>:<HostPort>" (CLI-OK,
-//                                  needs the dynamic host port reachable
-//                                  from outside — Hetzner default-deny
-//                                  would block it)
+//     needs the dynamic host port reachable
+//     from outside — Hetzner default-deny
+//     would block it)
 //   - everything else            → d.DeploymentURL fallback
 //
 // The custom-domain branch matters most when the operator runs Synapse
