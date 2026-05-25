@@ -18,6 +18,8 @@ import { ActivityFeed } from "@/components/ActivityFeed";
 import { CellsPanel } from "@/components/CellsPanel";
 import { CellLinksPanel } from "@/components/CellLinksPanel";
 import { CellTopologyPanel } from "@/components/CellTopologyPanel";
+import { StateDriftPanel } from "@/components/StateDriftPanel";
+import { OperationRunsPanel } from "@/components/OperationRunsPanel";
 import { HostsPanel } from "@/components/HostsPanel";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
@@ -651,6 +653,15 @@ await Promise.all([
         legacy synthetic TopologyPanel below covers the no-cells case.
       */}
       <CellTopologyPanel projectId={projectId} />
+
+      {/*
+        Bloco 9c: State & Drift + Operations. Sits next to the topology so the
+        operator reads "what is desired vs observed" + the recent operation
+        history right where they see the host→cell→deployment tree. Both are
+        diagnosis + dry-run planning only — no host change is ever applied.
+      */}
+      <StateDriftPanel projectId={projectId} />
+      <OperationRunsPanel projectId={projectId} />
 
       <TopologyPanel projectId={projectId} />
 

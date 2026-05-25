@@ -848,6 +848,163 @@ export type ServiceToken = {
   updatedAt: string;
 };
 
+// ---- State, Drift & Operations (Bloco 9a / 9b / 9b.5) ----
+// The control plane COMPARES desired vs observed and PLANS — it never applies.
+// Every dry-run carries applyAllowed=false; the dashboard never sends apply:true.
+
+export type DesiredState = {
+  id: string;
+  teamId?: string;
+  projectId?: string;
+  cellId?: string;
+  hostId: string;
+  resourceType: string;
+  resourceId?: string;
+  desired: Record<string, unknown>;
+  desiredHash: string;
+  version: number;
+  status: string;
+  source: string;
+  resourceKey: string;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ObservedState = {
+  id: string;
+  hostId: string;
+  agentId?: string;
+  resourceType: string;
+  resourceId?: string;
+  resourceKey: string;
+  observed: Record<string, unknown>;
+  observedHash: string;
+  observedAt: string;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DriftStatus =
+  | "in_sync"
+  | "missing"
+  | "drifted"
+  | "unmanaged"
+  | "orphaned"
+  | "host_unreachable"
+  | "ignored";
+export type DriftSeverity = "info" | "warning" | "critical";
+export type RecommendedAction =
+  | "none"
+  | "create"
+  | "update"
+  | "restart"
+  | "stop"
+  | "remove"
+  | "investigate";
+
+// Per-status / per-severity counts. All optional — a missing key means 0.
+export type DriftSummary = {
+  total?: number;
+  inSync?: number;
+  missing?: number;
+  drifted?: number;
+  unmanaged?: number;
+  orphaned?: number;
+  hostUnreachable?: number;
+  ignored?: number;
+  critical?: number;
+  warning?: number;
+  info?: number;
+};
+
+export type DriftReport = {
+  id: string;
+  hostId?: string;
+  cellId?: string;
+  projectId?: string;
+  operationRunId?: string;
+  status: "clean" | "drifted" | "warning" | "failed" | string;
+  summary?: DriftSummary;
+  createdAt: string;
+};
+
+export type DriftItem = {
+  id: string;
+  driftReportId?: string;
+  hostId?: string;
+  cellId?: string;
+  resourceType: string;
+  resourceKey: string;
+  desiredStateId?: string;
+  observedStateId?: string;
+  driftStatus: DriftStatus | string;
+  severity: DriftSeverity | string;
+  diff?: Record<string, unknown>;
+  recommendedAction: RecommendedAction | string;
+  createdAt: string;
+};
+
+// GET /drift/latest + POST /drift/recompute. report is null when nothing has
+// been computed yet for the scope.
+export type DriftResponse = { report: DriftReport | null; items: DriftItem[] };
+
+export type OperationRun = {
+  id: string;
+  type: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | string;
+  teamId?: string;
+  projectId?: string;
+  cellId?: string;
+  hostId?: string;
+  deploymentId?: string;
+  input?: Record<string, unknown>;
+  plan?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  createdBy?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// operation_runs/{id} detail step (operationStepView). In Bloco 9 status is
+// only planned / no_op / skipped — nothing is ever executed.
+export type OperationStep = {
+  id: string;
+  stepIndex: number;
+  action: string;
+  resourceType: string;
+  resourceKey: string;
+  status: "planned" | "skipped" | "no_op" | "succeeded" | "failed" | string;
+  reason?: string;
+  input?: Record<string, unknown>;
+};
+
+// dry_run response step (planStepView). willApply is ALWAYS false in this release.
+export type PlanStep = {
+  action: string;
+  resourceType: string;
+  resourceKey: string;
+  status: string;
+  reason?: string;
+  willApply: boolean;
+};
+
+export type OperationRunDetail = { operationRun: OperationRun; steps: OperationStep[] };
+export type DryRunResponse = { operationRun: OperationRun; steps: PlanStep[] };
+
+export type SyncDesiredResult = {
+  created: number;
+  updated: number;
+  unchanged: number;
+  superseded: number;
+  total: number;
+  operationRunId?: string;
+};
+
 class ApiError extends Error {
   status: number;
   code?: string;
@@ -1843,6 +2000,114 @@ export const api = {
         { method: "POST", body: {} },
       );
     },
+  },
+
+  // ---- Desired / Observed state (Bloco 9a). Derive intent + read what the
+  // agent observed. Sync derives desired from placements; it does NOT apply
+  // anything to a host. ----
+  desired: {
+    async project(projectId: string): Promise<DesiredState[]> {
+      const r = await request<{ items: DesiredState[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/desired_state`,
+      );
+      return r.items ?? [];
+    },
+    projectSyncFromPlacements(projectId: string): Promise<SyncDesiredResult> {
+      return request<SyncDesiredResult>(
+        `/v1/projects/${encodeURIComponent(projectId)}/desired_state/sync_from_placements`,
+        { method: "POST", body: {} },
+      );
+    },
+    async host(hostId: string): Promise<DesiredState[]> {
+      const r = await request<{ items: DesiredState[] }>(
+        `/v1/hosts/${encodeURIComponent(hostId)}/desired_state`,
+      );
+      return r.items ?? [];
+    },
+  },
+
+  observed: {
+    async host(hostId: string): Promise<ObservedState[]> {
+      const r = await request<{ items: ObservedState[] }>(
+        `/v1/hosts/${encodeURIComponent(hostId)}/observed_state`,
+      );
+      return r.items ?? [];
+    },
+  },
+
+  // ---- Drift Engine (Bloco 9b). recompute persists a DriftReport + items and
+  // an OperationRun; latest reads the most recent report for the scope. Both
+  // are diagnosis only — no host is touched. ----
+  drift: {
+    project: {
+      recompute: (projectId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/projects/${encodeURIComponent(projectId)}/drift/recompute`,
+          { method: "POST", body: {} },
+        ),
+      latest: (projectId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/projects/${encodeURIComponent(projectId)}/drift/latest`,
+        ),
+    },
+    cell: {
+      recompute: (cellId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/cells/${encodeURIComponent(cellId)}/drift/recompute`,
+          { method: "POST", body: {} },
+        ),
+      latest: (cellId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/cells/${encodeURIComponent(cellId)}/drift/latest`,
+        ),
+    },
+    host: {
+      recompute: (hostId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/hosts/${encodeURIComponent(hostId)}/drift/recompute`,
+          { method: "POST", body: {} },
+        ),
+      latest: (hostId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/hosts/${encodeURIComponent(hostId)}/drift/latest`,
+        ),
+    },
+  },
+
+  // ---- Reconcile DRY-RUN ONLY (Bloco 9b). The body is intentionally empty:
+  // the dashboard never sends apply:true (the backend 400s it anyway). Returns
+  // a planned OperationRun + steps; willApply is always false. ----
+  reconcile: {
+    projectDryRun: (projectId: string): Promise<DryRunResponse> =>
+      request<DryRunResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/reconcile/dry_run`,
+        { method: "POST", body: {} },
+      ),
+    cellDryRun: (cellId: string): Promise<DryRunResponse> =>
+      request<DryRunResponse>(
+        `/v1/cells/${encodeURIComponent(cellId)}/reconcile/dry_run`,
+        { method: "POST", body: {} },
+      ),
+    hostDryRun: (hostId: string): Promise<DryRunResponse> =>
+      request<DryRunResponse>(
+        `/v1/hosts/${encodeURIComponent(hostId)}/reconcile/dry_run`,
+        { method: "POST", body: {} },
+      ),
+  },
+
+  // ---- Operation runs (Bloco 9a/9b). Audit-grade tracking of sync / drift /
+  // dry-run. Read-only. ----
+  operationRuns: {
+    async project(projectId: string): Promise<OperationRun[]> {
+      const r = await request<{ items: OperationRun[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/operation_runs`,
+      );
+      return r.items ?? [];
+    },
+    get: (operationRunId: string): Promise<OperationRunDetail> =>
+      request<OperationRunDetail>(
+        `/v1/operation_runs/${encodeURIComponent(operationRunId)}`,
+      ),
   },
 
   // First-run wizard probe. Public — no auth, hit pre-login. firstRun
