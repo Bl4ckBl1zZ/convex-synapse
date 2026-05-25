@@ -31,10 +31,13 @@ Scoped to the [Cell Control Plane](CELL_CONTROL_PLANE.md) (branch
 - **9c** — StateDriftPanel + OperationRunsPanel + JsonDetails/redactJson;
   dry-run-only UI, no Apply button (`30e3671`).
 - **10a** — this documentation set.
+- **5** — operator **CLI** (`synapse` npm `@iann29/synapse`): hosts / agents /
+  cells / cell-links / service-tokens / topology / desired / observed / drift /
+  reconcile dry-run / operations. HTTP-only, `--json`, redacted output, no
+  `apply` command (`reconcile --apply` errors).
 
 ## Next (incremental, still observe/plan only)
 
-- A small operator **CLI** for the control plane (beyond `synapse-agent`).
 - **Host/cell deep-dive** in StateDriftPanel (scope selector) — today it's
   project-level + adjacency to topology.
 - **Drift badges per cell** inside CellTopologyPanel.

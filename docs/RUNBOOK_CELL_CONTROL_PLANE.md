@@ -16,6 +16,46 @@ synapse-agent
                 GET  /v1/agents/desired_state  (applyAllowed=false — observe only)
 ```
 
+## CLI quick reference (`synapse`, Bloco 5)
+
+The flows below show dashboard + curl; the `synapse` CLI (npm `@iann29/synapse`)
+wraps the same HTTP endpoints — diagnose + plan only, **no apply** (there is no
+`apply` command and `reconcile --apply` errors). `synapse login <url>` first.
+Add `--json` to any command for machine output.
+
+```
+# Hosts + agents (flow A / E)
+synapse hosts list | show <id> | create --name <n> [--provider --region --label k=v]
+synapse hosts adoption-token <id>        # token + join command, shown once
+synapse hosts drain <id> | hosts agents <id>
+synapse agents revoke <id> | agents rotate-token <id>
+
+# Cells (flow B)
+synapse cells list --project <id> | cells create --project <id> --name <n> --kind <k> --env <e>
+synapse cells attach-deployment <cell> <deployment> | cells attach-host <cell> <host>
+synapse cells resources <cell> | cells drain <cell>
+
+# Cell links + service tokens (flow C)
+synapse cell-links list --project <id>
+synapse cell-links create --project <id> --from <cell> --to <cell> --protocol outbox --auth service_token \
+  --allow-command <cmd> --allow-event <evt>
+synapse cell-links disable <link-id>
+synapse service-tokens create <link-id> --scope discovery:read    # token shown once
+synapse service-tokens list <link-id> | service-tokens revoke <token-id>
+
+# Topology (between B and C)
+synapse topology show --project <id>
+
+# Desired / observed / drift / dry-run (flow D)
+synapse desired sync --project <id> | desired list (--project <id> | --host <id>)
+synapse observed list --host <id>
+synapse drift recompute (--project|--cell|--host <id>) | drift latest (--project|--cell|--host <id>)
+synapse reconcile dry-run (--project|--cell|--host <id>)   # applyAllowed=false; no apply
+
+# Operation runs
+synapse operations list --project <id> | operations show <run-id>
+```
+
 ## A. Create a Host and connect an Agent
 
 1. **Create the host** (instance-admin): dashboard **Hosts → New host**, or

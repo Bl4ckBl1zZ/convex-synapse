@@ -185,6 +185,137 @@ class SynapseAPI {
       changes,
     });
   }
+
+  // ---- Cell Control Plane (Bloco 5) ------------------------------
+  // Thin wrappers over the existing endpoints (see
+  // docs/API_CELL_CONTROL_PLANE.md). NONE of these apply changes to a host:
+  // recompute/dry-run only diagnose + plan, and no method sends apply:true.
+
+  // Hosts (instance-admin).
+  hostsList() {
+    return this.request("GET", "/v1/hosts").then(itemsOf);
+  }
+  hostGet(id) {
+    return this.request("GET", `/v1/hosts/${encodeURIComponent(id)}`);
+  }
+  hostCreate(body) {
+    return this.request("POST", "/v1/hosts", body);
+  }
+  // Mints a single-use adoption token; the plaintext + joinCommand come
+  // back ONCE in this response (never returned again).
+  hostAdoptionToken(id, body = {}) {
+    return this.request("POST", `/v1/hosts/${encodeURIComponent(id)}/adoption_token`, body);
+  }
+  hostDrain(id) {
+    return this.request("POST", `/v1/hosts/${encodeURIComponent(id)}/drain`, {});
+  }
+  // { agentVersion?, items: [...] } — no-secrets agent summaries.
+  hostAgents(id) {
+    return this.request("GET", `/v1/hosts/${encodeURIComponent(id)}/agents`);
+  }
+  hostDesiredState(id) {
+    return this.request("GET", `/v1/hosts/${encodeURIComponent(id)}/desired_state`).then(itemsOf);
+  }
+  hostObservedState(id) {
+    return this.request("GET", `/v1/hosts/${encodeURIComponent(id)}/observed_state`).then(itemsOf);
+  }
+
+  // Agent lifecycle (instance-admin).
+  agentRevoke(agentId) {
+    return this.request("POST", `/v1/host_agents/${encodeURIComponent(agentId)}/revoke`, {});
+  }
+  // New agent token returned ONCE.
+  agentRotateToken(agentId) {
+    return this.request("POST", `/v1/host_agents/${encodeURIComponent(agentId)}/rotate_token`, {});
+  }
+
+  // Cells (project-RBAC).
+  cellsList(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/cells`).then(itemsOf);
+  }
+  cellCreate(projectId, body) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/cells`, body);
+  }
+  cellGet(id) {
+    return this.request("GET", `/v1/cells/${encodeURIComponent(id)}`);
+  }
+  cellAttachDeployment(id, deploymentName, role) {
+    const body = role ? { deploymentName, role } : { deploymentName };
+    return this.request("POST", `/v1/cells/${encodeURIComponent(id)}/attach_deployment`, body);
+  }
+  // hostId accepts a host UUID or name (the backend resolves either).
+  cellAttachHost(id, hostId) {
+    return this.request("POST", `/v1/cells/${encodeURIComponent(id)}/attach_host`, { hostId });
+  }
+  // { resources: [...], placements: [...] }
+  cellResources(id) {
+    return this.request("GET", `/v1/cells/${encodeURIComponent(id)}/resources`);
+  }
+  cellDrain(id) {
+    return this.request("POST", `/v1/cells/${encodeURIComponent(id)}/drain`, {});
+  }
+
+  // Cell links + service tokens (project-RBAC).
+  cellLinksList(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/cell_links`).then(itemsOf);
+  }
+  cellLinkCreate(projectId, body) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/cell_links`, body);
+  }
+  cellLinkDisable(id) {
+    return this.request("POST", `/v1/cell_links/${encodeURIComponent(id)}/disable`, {});
+  }
+  serviceTokensList(linkId) {
+    return this.request("GET", `/v1/cell_links/${encodeURIComponent(linkId)}/service_tokens`).then(itemsOf);
+  }
+  // Plaintext token returned ONCE in this response.
+  serviceTokenCreate(linkId, body) {
+    return this.request("POST", `/v1/cell_links/${encodeURIComponent(linkId)}/service_tokens`, body);
+  }
+  serviceTokenRevoke(tokenId) {
+    return this.request("POST", `/v1/service_tokens/${encodeURIComponent(tokenId)}/revoke`, {});
+  }
+
+  // Topology.
+  cellTopology(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/cell_topology`);
+  }
+
+  // Desired / Observed / Drift / Reconcile (dry-run) / Operations.
+  // `scope` is the path segment: "hosts" | "cells" | "projects".
+  desiredSync(projectId) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/desired_state/sync_from_placements`, {});
+  }
+  desiredListProject(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/desired_state`).then(itemsOf);
+  }
+  driftRecompute(scope, id) {
+    return this.request("POST", `/v1/${scope}/${encodeURIComponent(id)}/drift/recompute`, {});
+  }
+  driftLatest(scope, id) {
+    return this.request("GET", `/v1/${scope}/${encodeURIComponent(id)}/drift/latest`);
+  }
+  // Dry-run only. The body is empty by contract — the CLI never sends
+  // apply:true (the backend would 400 it anyway).
+  reconcileDryRun(scope, id) {
+    return this.request("POST", `/v1/${scope}/${encodeURIComponent(id)}/reconcile/dry_run`, {});
+  }
+  operationRunsList(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/operation_runs`).then(itemsOf);
+  }
+  // { operationRun, steps }
+  operationRunGet(id) {
+    return this.request("GET", `/v1/operation_runs/${encodeURIComponent(id)}`);
+  }
+}
+
+// itemsOf unwraps a list endpoint's `{ items: [...] }` envelope to a bare
+// array (Cell Control Plane list endpoints aren't cursor-paginated). Tolerates
+// a bare array too.
+function itemsOf(data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  return [];
 }
 
 // Known envelope keys, in priority order. We try these explicitly before

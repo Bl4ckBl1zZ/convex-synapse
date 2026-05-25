@@ -16,7 +16,7 @@ no Amagejumpy/ai-agent-core integration.
 
 1–3 foundation · 4 UI · 6 agent · 6.5 liveness · 7/7.5 cell links · 8 topology ·
 9a desired/observed · 9b drift+dry-run · 9b.5 observed fidelity/pruning · 9c
-State&Drift/Operations UI · 10a docs (this set). Detail:
+State&Drift/Operations UI · 10a docs (this set) · 5 operator CLI. Detail:
 [ROADMAP_CELL_CONTROL_PLANE.md](ROADMAP_CELL_CONTROL_PLANE.md#done-blocos-19c).
 
 ## Main commits
@@ -49,6 +49,18 @@ desired_state (+sync), drift (latest/recompute), reconcile/dry_run, operation_ru
 `StateDriftPanel`, `OperationRunsPanel`, `JsonDetails` (+ `lib/redact.ts`).
 All mounted on the project page; all dry-run only.
 
+## CLI commands added (Bloco 5)
+
+`synapse` (npm `@iann29/synapse`, `cli/`) — HTTP-only, zero-dep, `--json` on
+every command, sensitive keys redacted in plan/drift/operation output:
+`hosts {list,show,create,adoption-token,drain,agents}`,
+`agents {revoke,rotate-token}`,
+`cells {list,show,create,attach-deployment,attach-host,resources,drain}`,
+`cell-links {list,create,disable}`, `service-tokens {create,list,revoke}`,
+`topology show`, `desired {sync,list}`, `observed list`,
+`drift {recompute,latest}`, `reconcile dry-run`, `operations {list,show}`.
+**No `apply` command**; `reconcile --apply` errors; no Docker/SSH/DB access.
+
 ## Test commands
 
 ```bash
@@ -63,6 +75,9 @@ cd dashboard
 npm run build              # next build
 npx playwright test state_drift_panel.spec.ts cell_topology_panel.spec.ts \
                     cells_panel.spec.ts cell_links_panel.spec.ts topology_panel.spec.ts
+
+# CLI (npm @iann29/synapse)
+cd cli && node --test      # 266 tests (zero-dep)
 
 # Migrations up/down on a scratch DB (golang-migrate via the binary on boot, or)
 #   apply, then roll back 000021→000017 and re-apply, confirming no error.
