@@ -44,6 +44,9 @@ type HostsHandler struct {
 	// wire them) and unconfigured installs behave sensibly.
 	StaleAfter   time.Duration
 	OfflineAfter time.Duration
+	// Bloco 9b — host-scoped drift recompute / latest / reconcile dry-run.
+	// Mounted inside Routes() so they inherit the instance-admin gate.
+	Drift *DriftHandler
 }
 
 func (h *HostsHandler) staleAfter() time.Duration {
@@ -109,6 +112,13 @@ func (h *HostsHandler) Routes() chi.Router {
 		// Bloco 9: host-scoped desired / observed state (instance-admin).
 		r.Get("/desired_state", h.getHostDesiredState)
 		r.Get("/observed_state", h.getHostObservedState)
+		// Bloco 9b: host-scoped drift + reconcile dry-run (instance-admin via
+		// the requireInstanceAdmin middleware on this router).
+		if h.Drift != nil {
+			r.Get("/drift/latest", h.Drift.latestHost)
+			r.Post("/drift/recompute", h.Drift.recomputeHost)
+			r.Post("/reconcile/dry_run", h.Drift.dryRunHost)
+		}
 	})
 	return r
 }

@@ -39,6 +39,8 @@ import (
 type CellsHandler struct {
 	DB       *pgxpool.Pool
 	Projects *ProjectsHandler
+	// Bloco 9b — cell-scoped drift recompute / latest / reconcile dry-run.
+	Drift *DriftHandler
 }
 
 func (h *CellsHandler) Routes() chi.Router {
@@ -50,6 +52,13 @@ func (h *CellsHandler) Routes() chi.Router {
 		r.Post("/attach_deployment", h.attachDeployment)
 		r.Post("/attach_host", h.attachHost)
 		r.Get("/resources", h.listCellResources)
+		// Bloco 9b — cell-scoped drift + reconcile dry-run. latest is
+		// project-member; recompute + dry_run are project-admin.
+		if h.Drift != nil {
+			r.Get("/drift/latest", h.Drift.latestCell)
+			r.Post("/drift/recompute", h.Drift.recomputeCell)
+			r.Post("/reconcile/dry_run", h.Drift.dryRunCell)
+		}
 	})
 	return r
 }

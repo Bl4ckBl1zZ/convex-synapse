@@ -690,3 +690,82 @@ type OperationRun struct {
 	CreatedAt    time.Time      `json:"createdAt"`
 	UpdatedAt    time.Time      `json:"updatedAt"`
 }
+
+// Drift vocabulary (Bloco 9b). The Drift Engine COMPARES DesiredState against
+// ObservedState and CLASSIFIES the divergence; the dry-run planner turns each
+// classification into a *planned* operation step. Nothing here applies.
+const (
+	// DriftStatus* — how a desired/observed pair relates. Mirrors the
+	// drift_items.drift_status CHECK in migration 000021.
+	DriftStatusInSync          = "in_sync"          // desired + compatible observed both exist
+	DriftStatusMissing         = "missing"          // desired exists, no observed (host trusted)
+	DriftStatusDrifted         = "drifted"          // both exist but diverge (state / labels)
+	DriftStatusUnmanaged       = "unmanaged"        // observed synapse-managed, no active desired
+	DriftStatusOrphaned        = "orphaned"         // control-plane row points at a gone resource
+	DriftStatusHostUnreachable = "host_unreachable" // observation can't be trusted (stale/offline/no agent)
+	DriftStatusIgnored         = "ignored"          // observed resource that shouldn't be considered
+
+	// Severity* — drift_items.severity CHECK.
+	SeverityInfo     = "info"
+	SeverityWarning  = "warning"
+	SeverityCritical = "critical"
+
+	// RecommendedAction* — drift_items.recommended_action CHECK. A
+	// RECOMMENDATION only; the dry-run planner never executes it.
+	RecommendedActionNone        = "none"
+	RecommendedActionCreate      = "create"
+	RecommendedActionUpdate      = "update"
+	RecommendedActionRestart     = "restart"
+	RecommendedActionStop        = "stop"
+	RecommendedActionRemove      = "remove"
+	RecommendedActionInvestigate = "investigate"
+
+	// DriftReportStatus* — drift_reports.status CHECK (the rolled-up verdict).
+	DriftReportStatusClean   = "clean"
+	DriftReportStatusDrifted = "drifted"
+	DriftReportStatusWarning = "warning"
+	DriftReportStatusFailed  = "failed"
+
+	// OperationStepStatus* — operation_steps.status CHECK. In Bloco 9 only
+	// planned / skipped / no_op are ever written (nothing is executed).
+	OperationStepStatusPlanned   = "planned"
+	OperationStepStatusSkipped   = "skipped"
+	OperationStepStatusNoOp      = "no_op"
+	OperationStepStatusSucceeded = "succeeded"
+	OperationStepStatusFailed    = "failed"
+
+	// StepActionNoOp is the only step action that isn't a RecommendedAction*
+	// value (create/restart/stop/remove/investigate are reused verbatim).
+	StepActionNoOp = "no_op"
+)
+
+// DriftReport is one desired-vs-observed comparison run, scoped to a host,
+// cell, or project. Summary holds the per-status / per-severity counts.
+type DriftReport struct {
+	ID             string         `json:"id"`
+	HostID         *string        `json:"hostId,omitempty"`
+	ProjectID      *string        `json:"projectId,omitempty"`
+	CellID         *string        `json:"cellId,omitempty"`
+	OperationRunID *string        `json:"operationRunId,omitempty"`
+	Status         string         `json:"status"`
+	Summary        map[string]any `json:"summary,omitempty"`
+	CreatedAt      time.Time      `json:"createdAt"`
+}
+
+// DriftItem is one classified divergence inside a DriftReport. Diff carries
+// only safe, redacted metadata (never env / secrets / tokens / private IPs).
+type DriftItem struct {
+	ID                string         `json:"id"`
+	DriftReportID     string         `json:"driftReportId,omitempty"`
+	HostID            *string        `json:"hostId,omitempty"`
+	CellID            *string        `json:"cellId,omitempty"`
+	ResourceType      string         `json:"resourceType"`
+	ResourceKey       string         `json:"resourceKey"`
+	DesiredStateID    *string        `json:"desiredStateId,omitempty"`
+	ObservedStateID   *string        `json:"observedStateId,omitempty"`
+	DriftStatus       string         `json:"driftStatus"`
+	Severity          string         `json:"severity"`
+	Diff              map[string]any `json:"diff,omitempty"`
+	RecommendedAction string         `json:"recommendedAction"`
+	CreatedAt         time.Time      `json:"createdAt"`
+}

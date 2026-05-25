@@ -42,6 +42,8 @@ type ProjectsHandler struct {
 	// Bloco 9 — desired state + operation runs (project-scoped surfaces).
 	DesiredState *DesiredStateHandler
 	Operations   *OperationsHandler
+	// Bloco 9b — drift recompute / latest / reconcile dry-run.
+	Drift *DriftHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -168,6 +170,13 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		}
 		if h.Operations != nil {
 			r.Get("/operation_runs", h.Operations.listProjectOperationRuns)
+		}
+		// Bloco 9b — drift + reconcile dry-run. latest is project-member;
+		// recompute + dry_run are project-admin (enforced inside the handler).
+		if h.Drift != nil {
+			r.Get("/drift/latest", h.Drift.latestProject)
+			r.Post("/drift/recompute", h.Drift.recomputeProject)
+			r.Post("/reconcile/dry_run", h.Drift.dryRunProject)
 		}
 	})
 

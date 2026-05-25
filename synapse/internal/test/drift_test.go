@@ -1,0 +1,596 @@
+package synapsetest
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"testing"
+
+	"github.com/Iann29/synapse/internal/models"
+)
+
+// Bloco 9b — Drift Engine + dry-run planner. The engine COMPARES DesiredState
+// against ObservedState and CLASSIFIES the divergence; the planner turns each
+// classification into a *planned* step. Nothing applies — these tests assert
+// that too (FakeDocker stays untouched, desired/observed unchanged).
+
+// ---------- response shapes (reuse the real models for strict decoding) ----------
+
+type driftResult struct {
+	Report *models.DriftReport `json:"report"`
+	Items  []models.DriftItem  `json:"items"`
+}
+
+type planStepLike struct {
+	Action       string `json:"action"`
+	ResourceType string `json:"resourceType"`
+	ResourceKey  string `json:"resourceKey"`
+	Status       string `json:"status"`
+	Reason       string `json:"reason,omitempty"`
+	WillApply    bool   `json:"willApply"`
+}
+
+type dryRunResult struct {
+	OperationRun models.OperationRun `json:"operationRun"`
+	Steps        []planStepLike      `json:"steps"`
+}
+
+// ---------- seeding helpers ----------
+
+// seedObservedContainer inserts a docker_container observed_states row directly
+// (simulating what an agent would have reported). depID empty → an unmanaged
+// container with no synapse.deployment_id label.
+func seedObservedContainer(t *testing.T, h *Harness, hostID, depID, cellID, projectID, state string) {
+	t.Helper()
+	labels := map[string]string{"synapse.managed": "true"}
+	if depID != "" {
+		labels["synapse.deployment_id"] = depID
+	}
+	if cellID != "" {
+		labels["synapse.cell_id"] = cellID
+	}
+	if projectID != "" {
+		labels["synapse.project_id"] = projectID
+	}
+	key := depID
+	if key == "" {
+		key = "anon-" + randHex(4)
+	}
+	observed := map[string]any{
+		"id": "c" + randHex(6), "name": "convex-" + key,
+		"image": "ghcr.io/get-convex/convex-backend", "state": state, "status": "Up 2 minutes",
+		"labels": labels, "ports": "3210/tcp", "createdAt": "2026-01-01T00:00:00Z",
+	}
+	raw, _ := json.Marshal(observed)
+	var resID any
+	if depID != "" {
+		resID = depID
+	}
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO observed_states (host_id, resource_type, resource_id, resource_key, observed_json, observed_hash, source)
+		VALUES ($1, 'docker_container', $2, $3, $4, $5, 'agent')
+	`, hostID, resID, "docker_container:"+key, raw, "hash-"+randHex(6)); err != nil {
+		t.Fatalf("seed observed container: %v", err)
+	}
+}
+
+// setHeartbeatAgo backdates the host's last_heartbeat_at so its computed
+// effectiveStatus is online (≤60s) / stale (≤300s) / offline (>300s).
+func setHeartbeatAgo(t *testing.T, h *Harness, hostID string, secsAgo int) {
+	t.Helper()
+	if _, err := h.DB.Exec(h.rootCtx,
+		`UPDATE hosts SET last_heartbeat_at = now() - make_interval(secs => $2), status = 'online' WHERE id::text = $1`,
+		hostID, secsAgo); err != nil {
+		t.Fatalf("set heartbeat: %v", err)
+	}
+}
+
+func trustHost(t *testing.T, h *Harness, hostID string)   { setHeartbeatAgo(t, h, hostID, 1) }
+func offlineHost(t *testing.T, h *Harness, hostID string) { setHeartbeatAgo(t, h, hostID, 600) }
+
+func setPlacementDesired(t *testing.T, h *Harness, depID, status string) {
+	t.Helper()
+	if _, err := h.DB.Exec(h.rootCtx,
+		`UPDATE deployment_placements SET desired_status = $2 WHERE deployment_id::text = $1`, depID, status); err != nil {
+		t.Fatalf("set placement desired_status: %v", err)
+	}
+}
+
+func syncDrift(t *testing.T, h *Harness, bearer, projectID string) {
+	t.Helper()
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/desired_state/sync_from_placements",
+		bearer, map[string]any{}, http.StatusOK, &syncResult{})
+}
+
+func recomputeDrift(t *testing.T, h *Harness, bearer, scopePath string) driftResult {
+	t.Helper()
+	var res driftResult
+	h.DoJSON(http.MethodPost, scopePath+"/drift/recompute", bearer, map[string]any{}, http.StatusOK, &res)
+	return res
+}
+
+func findDriftItem(items []models.DriftItem, status string) *models.DriftItem {
+	for i := range items {
+		if items[i].DriftStatus == status {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func summaryCount(t *testing.T, m map[string]any, key string) int {
+	t.Helper()
+	v, ok := m[key]
+	if !ok {
+		t.Fatalf("summary missing key %q (have %+v)", key, m)
+	}
+	f, ok := v.(float64)
+	if !ok {
+		t.Fatalf("summary[%q] is %T, want number", key, v)
+	}
+	return int(f)
+}
+
+// ---------- A. in_sync ----------
+
+func TestDrift_CleanInSync(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, depID, cellID, projectID, "running")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if res.Report == nil || res.Report.Status != models.DriftReportStatusClean {
+		t.Fatalf("expected clean report, got %+v", res.Report)
+	}
+	it := findDriftItem(res.Items, models.DriftStatusInSync)
+	if it == nil || it.Severity != models.SeverityInfo || it.RecommendedAction != models.RecommendedActionNone {
+		t.Fatalf("expected in_sync/info/none, got %+v", res.Items)
+	}
+	if it.ResourceKey != "convex_deployment:"+depID {
+		t.Errorf("resourceKey = %q", it.ResourceKey)
+	}
+	if summaryCount(t, res.Report.Summary, "inSync") != 1 {
+		t.Errorf("summary inSync != 1: %+v", res.Report.Summary)
+	}
+}
+
+// ---------- B. missing ----------
+
+func TestDrift_MissingContainer(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID) // online — so absence is real, not "unreachable"
+	// no observed container seeded.
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	it := findDriftItem(res.Items, models.DriftStatusMissing)
+	if it == nil {
+		t.Fatalf("expected a missing item, got %+v", res.Items)
+	}
+	if it.Severity != models.SeverityCritical || it.RecommendedAction != models.RecommendedActionCreate {
+		t.Errorf("missing should be critical/create, got %s/%s", it.Severity, it.RecommendedAction)
+	}
+	if it.ResourceKey != "convex_deployment:"+depID {
+		t.Errorf("resourceKey = %q", it.ResourceKey)
+	}
+	if res.Report.Status != models.DriftReportStatusDrifted {
+		t.Errorf("report status = %q, want drifted", res.Report.Status)
+	}
+}
+
+// ---------- C. desired running, observed exited ----------
+
+func TestDrift_RunningButExited(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, depID, cellID, projectID, "exited")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	it := findDriftItem(res.Items, models.DriftStatusDrifted)
+	if it == nil || it.RecommendedAction != models.RecommendedActionRestart || it.Severity != models.SeverityCritical {
+		t.Fatalf("expected drifted/critical/restart, got %+v", res.Items)
+	}
+}
+
+// ---------- D. desired stopped, observed running ----------
+
+func TestDrift_StoppedButRunning(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, depID := desiredFixture(t, h)
+	setPlacementDesired(t, h, depID, models.PlacementDesiredStopped)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, depID, cellID, projectID, "running")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	it := findDriftItem(res.Items, models.DriftStatusDrifted)
+	if it == nil || it.RecommendedAction != models.RecommendedActionStop || it.Severity != models.SeverityWarning {
+		t.Fatalf("expected drifted/warning/stop, got %+v", res.Items)
+	}
+}
+
+// ---------- E. desired absent, observed exists ----------
+
+func TestDrift_AbsentButExists(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, depID := desiredFixture(t, h)
+	setPlacementDesired(t, h, depID, models.PlacementDesiredAbsent)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, depID, cellID, projectID, "running")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	it := findDriftItem(res.Items, models.DriftStatusDrifted)
+	if it == nil || it.RecommendedAction != models.RecommendedActionRemove {
+		t.Fatalf("expected drifted/remove, got %+v", res.Items)
+	}
+}
+
+// ---------- F. unmanaged ----------
+
+func TestDrift_UnmanagedContainer(t *testing.T) {
+	h := Setup(t)
+	owner, _, cellID, hostID, _ := desiredFixture(t, h)
+	trustHost(t, h, hostID)
+	// No sync → no active desired. A synapse-managed container with a
+	// deployment id that has no desired state → unmanaged.
+	seedObservedContainer(t, h, hostID, "ghost-dep-"+randHex(4), cellID, "", "running")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	it := findDriftItem(res.Items, models.DriftStatusUnmanaged)
+	if it == nil || it.RecommendedAction != models.RecommendedActionInvestigate || it.Severity != models.SeverityWarning {
+		t.Fatalf("expected unmanaged/warning/investigate, got %+v", res.Items)
+	}
+	// v0 policy: never recommend remove for unmanaged.
+	if it.RecommendedAction == models.RecommendedActionRemove {
+		t.Errorf("unmanaged must not recommend remove in v0")
+	}
+}
+
+// ---------- G. host offline → host_unreachable, NOT missing ----------
+
+func TestDrift_HostOfflineNotMissing(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	offlineHost(t, h, hostID) // heartbeat 10 min ago → offline
+	// no observed — but because the host is offline we can't trust that.
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if findDriftItem(res.Items, models.DriftStatusMissing) != nil {
+		t.Fatalf("offline host must NOT produce a misleading 'missing' — %+v", res.Items)
+	}
+	it := findDriftItem(res.Items, models.DriftStatusHostUnreachable)
+	if it == nil || it.RecommendedAction != models.RecommendedActionInvestigate {
+		t.Fatalf("expected host_unreachable/investigate, got %+v", res.Items)
+	}
+	if it.Severity != models.SeverityCritical { // offline → critical
+		t.Errorf("offline host_unreachable should be critical, got %s", it.Severity)
+	}
+}
+
+// ---------- H. label mismatch ----------
+
+func TestDrift_LabelMismatch(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	// Same deployment id, but the container claims a different cell.
+	seedObservedContainer(t, h, hostID, depID, "00000000-0000-0000-0000-000000000999", projectID, "running")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	it := findDriftItem(res.Items, models.DriftStatusDrifted)
+	if it == nil || it.Severity != models.SeverityCritical || it.RecommendedAction != models.RecommendedActionInvestigate {
+		t.Fatalf("expected drifted/critical/investigate for label mismatch, got %+v", res.Items)
+	}
+	if _, ok := it.Diff["labelMismatch"]; !ok {
+		t.Errorf("diff should carry labelMismatch: %+v", it.Diff)
+	}
+}
+
+// ---------- I. summary counts ----------
+
+func TestDrift_SummaryCounts(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, dep1 := desiredFixture(t, h)
+	_ = h.SeedDeployment(projectID, "calm-otter-1234", "prod", "running", false, owner.ID, 3602, "")
+	h.DoJSON(http.MethodPost, "/v1/cells/"+cellID+"/attach_deployment", owner.AccessToken,
+		map[string]any{"deploymentName": "calm-otter-1234"}, http.StatusOK, &attachResp{})
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, dep1, cellID, projectID, "running") // in_sync
+	// dep2 → no observed → missing
+	seedObservedContainer(t, h, hostID, "ghost-"+randHex(4), cellID, "", "running") // unmanaged
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	s := res.Report.Summary
+	if summaryCount(t, s, "total") != 3 || summaryCount(t, s, "inSync") != 1 ||
+		summaryCount(t, s, "missing") != 1 || summaryCount(t, s, "unmanaged") != 1 {
+		t.Fatalf("summary counts wrong: %+v", s)
+	}
+	if summaryCount(t, s, "critical") != 1 || summaryCount(t, s, "warning") != 1 || summaryCount(t, s, "info") != 1 {
+		t.Fatalf("severity counts wrong: %+v", s)
+	}
+	if res.Report.Status != models.DriftReportStatusDrifted {
+		t.Errorf("report status = %q, want drifted", res.Report.Status)
+	}
+}
+
+// ---------- J. compute_drift OperationRun + latest + scopes ----------
+
+func TestDrift_OperationRunAndLatest(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, depID, cellID, projectID, "running")
+
+	// Project-scoped recompute creates a compute_drift OperationRun.
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/projects/"+projectID)
+	if res.Report == nil || res.Report.OperationRunID == nil {
+		t.Fatalf("project recompute should link an operation run: %+v", res.Report)
+	}
+	if res.Report.ProjectID == nil || *res.Report.ProjectID != projectID {
+		t.Errorf("project report should carry projectId")
+	}
+	var run struct {
+		OperationRun models.OperationRun `json:"operationRun"`
+		Steps        []any               `json:"steps"`
+	}
+	h.DoJSON(http.MethodGet, "/v1/operation_runs/"+*res.Report.OperationRunID, owner.AccessToken, nil, http.StatusOK, &run)
+	if run.OperationRun.Type != models.OperationTypeComputeDrift || run.OperationRun.Status != models.OperationStatusSucceeded {
+		t.Errorf("operation run = %+v, want compute_drift/succeeded", run.OperationRun)
+	}
+
+	// latest returns the freshly-computed report.
+	var latest driftResult
+	h.DoJSON(http.MethodGet, "/v1/projects/"+projectID+"/drift/latest", owner.AccessToken, nil, http.StatusOK, &latest)
+	if latest.Report == nil || latest.Report.ID != res.Report.ID {
+		t.Errorf("latest should return the recomputed report")
+	}
+
+	// Cell-scoped recompute works too and carries cellId.
+	cellRes := recomputeDrift(t, h, owner.AccessToken, "/v1/cells/"+cellID)
+	if cellRes.Report == nil || cellRes.Report.CellID == nil || *cellRes.Report.CellID != cellID {
+		t.Errorf("cell report should carry cellId: %+v", cellRes.Report)
+	}
+}
+
+// latest with nothing computed yet → 200 + null report.
+func TestDrift_LatestEmpty(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, _, _ := desiredFixture(t, h)
+	var latest driftResult
+	h.DoJSON(http.MethodGet, "/v1/projects/"+projectID+"/drift/latest", owner.AccessToken, nil, http.StatusOK, &latest)
+	if latest.Report != nil {
+		t.Fatalf("expected nil report before any compute, got %+v", latest.Report)
+	}
+	if len(latest.Items) != 0 {
+		t.Errorf("expected no items, got %d", len(latest.Items))
+	}
+}
+
+// ---------- K. dry-run: plans steps, applies NOTHING ----------
+
+func TestDrift_DryRunPlansNothingApplied(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, depID, cellID, projectID, "exited") // → restart
+
+	// Snapshot the world before the dry-run.
+	desiredBefore := countRows(t, h, `SELECT count(*) FROM desired_states`)
+	observedBefore := countRows(t, h, `SELECT count(*) FROM observed_states`)
+	stateBefore := observedState(t, h, hostID, depID)
+	provBefore := len(h.Docker.ProvisionedSpecs())
+	destroyBefore := len(h.Docker.DestroyedNames())
+	stopBefore := len(h.Docker.StoppedNames())
+	recreateBefore := len(h.Docker.RecreatedSpecs())
+
+	var res dryRunResult
+	h.DoJSON(http.MethodPost, "/v1/hosts/"+hostID+"/reconcile/dry_run", owner.AccessToken, map[string]any{}, http.StatusOK, &res)
+
+	// OperationRun + plan shape.
+	if res.OperationRun.Type != models.OperationTypeReconcileDryRun || res.OperationRun.Status != models.OperationStatusSucceeded {
+		t.Fatalf("operation run = %+v", res.OperationRun)
+	}
+	if res.OperationRun.PlanJSON["applyAllowed"] != false {
+		t.Fatalf("plan.applyAllowed MUST be false, got %v", res.OperationRun.PlanJSON["applyAllowed"])
+	}
+	if res.OperationRun.PlanJSON["mode"] != "dry-run" {
+		t.Errorf("plan.mode = %v, want dry-run", res.OperationRun.PlanJSON["mode"])
+	}
+	// A planned restart step, never applying.
+	var restart *planStepLike
+	for i := range res.Steps {
+		if res.Steps[i].Action == models.RecommendedActionRestart {
+			restart = &res.Steps[i]
+		}
+		if res.Steps[i].WillApply {
+			t.Errorf("no step may have willApply=true: %+v", res.Steps[i])
+		}
+	}
+	if restart == nil || restart.Status != models.OperationStepStatusPlanned {
+		t.Fatalf("expected a planned restart step, got %+v", res.Steps)
+	}
+
+	// NOTHING changed: no docker calls, desired/observed untouched.
+	if got := len(h.Docker.ProvisionedSpecs()); got != provBefore {
+		t.Errorf("dry-run provisioned containers: %d → %d", provBefore, got)
+	}
+	if got := len(h.Docker.DestroyedNames()); got != destroyBefore {
+		t.Errorf("dry-run destroyed containers: %d → %d", destroyBefore, got)
+	}
+	if got := len(h.Docker.StoppedNames()); got != stopBefore {
+		t.Errorf("dry-run stopped containers: %d → %d", stopBefore, got)
+	}
+	if got := len(h.Docker.RecreatedSpecs()); got != recreateBefore {
+		t.Errorf("dry-run recreated containers: %d → %d", recreateBefore, got)
+	}
+	if got := countRows(t, h, `SELECT count(*) FROM desired_states`); got != desiredBefore {
+		t.Errorf("dry-run mutated desired_states: %d → %d", desiredBefore, got)
+	}
+	if got := countRows(t, h, `SELECT count(*) FROM observed_states`); got != observedBefore {
+		t.Errorf("dry-run mutated observed_states: %d → %d", observedBefore, got)
+	}
+	if got := observedState(t, h, hostID, depID); got != stateBefore {
+		t.Errorf("dry-run mutated observed state: %q → %q", stateBefore, got)
+	}
+
+	// The persisted steps + plan are also visible via the operation-run detail.
+	var detail struct {
+		OperationRun models.OperationRun `json:"operationRun"`
+		Steps        []map[string]any    `json:"steps"`
+	}
+	h.DoJSON(http.MethodGet, "/v1/operation_runs/"+res.OperationRun.ID, owner.AccessToken, nil, http.StatusOK, &detail)
+	if len(detail.Steps) == 0 {
+		t.Errorf("operation run detail should expose persisted steps")
+	}
+	if detail.OperationRun.PlanJSON["applyAllowed"] != false {
+		t.Errorf("operation run detail plan.applyAllowed must be false")
+	}
+}
+
+// apply:true is rejected on both recompute and dry-run.
+func TestDrift_ApplyRejected(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+
+	for _, path := range []string{
+		"/v1/projects/" + projectID + "/drift/recompute",
+		"/v1/projects/" + projectID + "/reconcile/dry_run",
+		"/v1/hosts/" + hostID + "/reconcile/dry_run",
+	} {
+		env := h.AssertStatus(http.MethodPost, path, owner.AccessToken, map[string]any{"apply": true}, http.StatusBadRequest)
+		if env.Code != "apply_not_supported" {
+			t.Errorf("%s: code = %q, want apply_not_supported", path, env.Code)
+		}
+	}
+}
+
+// ---------- L. RBAC ----------
+
+func TestDrift_RBAC(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedObservedContainer(t, h, hostID, depID, "", projectID, "running")
+	// Admin (owner) computes first, so there's a latest report to view.
+	recomputeDrift(t, h, owner.AccessToken, "/v1/projects/"+projectID)
+
+	// A project member (non-admin) can VIEW but not recompute / dry-run.
+	member := h.RegisterRandomUser()
+	var teamID string
+	if err := h.DB.QueryRow(context.Background(), `SELECT team_id FROM projects WHERE id = $1`, projectID).Scan(&teamID); err != nil {
+		t.Fatalf("resolve team: %v", err)
+	}
+	seedTeamMember(t, h, teamID, member.ID, "member")
+
+	h.DoJSON(http.MethodGet, "/v1/projects/"+projectID+"/drift/latest", member.AccessToken, nil, http.StatusOK, &driftResult{})
+	h.AssertStatus(http.MethodPost, "/v1/projects/"+projectID+"/drift/recompute", member.AccessToken, map[string]any{}, http.StatusForbidden)
+	h.AssertStatus(http.MethodPost, "/v1/projects/"+projectID+"/reconcile/dry_run", member.AccessToken, map[string]any{}, http.StatusForbidden)
+
+	// Host-level drift requires instance-admin — a plain member is rejected.
+	h.AssertStatus(http.MethodGet, "/v1/hosts/"+hostID+"/drift/latest", member.AccessToken, nil, http.StatusForbidden)
+	h.AssertStatus(http.MethodPost, "/v1/hosts/"+hostID+"/drift/recompute", member.AccessToken, map[string]any{}, http.StatusForbidden)
+
+	// A stranger (no membership) can't even view project drift.
+	stranger := h.RegisterRandomUser()
+	h.AssertStatus(http.MethodGet, "/v1/projects/"+projectID+"/drift/latest", stranger.AccessToken, nil, http.StatusForbidden)
+}
+
+// ---------- RODADA 1 foundation fix: prune vanished observed containers ----------
+
+func TestObservedState_PrunesVanishedContainers(t *testing.T) {
+	h := Setup(t)
+	_, hostID, tok := mintHostToken(t, h, "vps-prune")
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &reg)
+
+	heartbeat := func(containers []map[string]any, dockerAvailable bool) {
+		hb := map[string]any{
+			"hostname": "vps-prune", "os": "linux", "arch": "amd64",
+			"observed": map[string]any{
+				"dockerAvailable": dockerAvailable, "dockerVersion": "27.0", "containers": containers,
+			},
+		}
+		h.DoJSON(http.MethodPost, "/v1/agents/heartbeat", reg.AgentToken, hb, http.StatusOK, &map[string]any{})
+	}
+	mkContainer := func(dep string) map[string]any {
+		return map[string]any{
+			"id": "id-" + dep, "name": "convex-" + dep, "image": "img", "state": "running", "status": "Up",
+			"labels": map[string]string{"synapse.managed": "true", "synapse.deployment_id": dep},
+			"ports":  "", "createdAt": "",
+		}
+	}
+
+	// Two managed containers reported.
+	heartbeat([]map[string]any{mkContainer("dep-a"), mkContainer("dep-b")}, true)
+	if got := countObservedContainers(t, h, hostID); got != 2 {
+		t.Fatalf("expected 2 observed containers, got %d", got)
+	}
+	// dep-b vanishes (docker available) → pruned, so it can read as "missing".
+	heartbeat([]map[string]any{mkContainer("dep-a")}, true)
+	if got := countObservedContainers(t, h, hostID); got != 1 {
+		t.Fatalf("expected 1 observed container after prune, got %d", got)
+	}
+	// Docker goes UNAVAILABLE, agent reports empty → must NOT prune (outage,
+	// not removal — pruning here would manufacture false "missing").
+	heartbeat([]map[string]any{}, false)
+	if got := countObservedContainers(t, h, hostID); got != 1 {
+		t.Fatalf("docker-unavailable heartbeat must not prune; got %d", got)
+	}
+	// Docker back with zero containers → dep-a legitimately gone → pruned to 0.
+	heartbeat([]map[string]any{}, true)
+	if got := countObservedContainers(t, h, hostID); got != 0 {
+		t.Fatalf("expected 0 observed containers, got %d", got)
+	}
+	// host_facts is never pruned.
+	if got := countRows(t, h, `SELECT count(*) FROM observed_states WHERE resource_type = 'host_facts'`); got != 1 {
+		t.Errorf("host_facts must survive pruning, got %d", got)
+	}
+}
+
+func countObservedContainers(t *testing.T, h *Harness, hostID string) int {
+	t.Helper()
+	var n int
+	if err := h.DB.QueryRow(h.rootCtx,
+		`SELECT count(*) FROM observed_states WHERE host_id::text = $1 AND resource_type = 'docker_container'`,
+		hostID).Scan(&n); err != nil {
+		t.Fatalf("count observed containers: %v", err)
+	}
+	return n
+}
+
+// ---------- shared small helpers ----------
+
+func countRows(t *testing.T, h *Harness, query string) int {
+	t.Helper()
+	var n int
+	if err := h.DB.QueryRow(h.rootCtx, query).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	return n
+}
+
+func observedState(t *testing.T, h *Harness, hostID, depID string) string {
+	t.Helper()
+	var state string
+	err := h.DB.QueryRow(h.rootCtx, `
+		SELECT COALESCE(observed_json->>'state', '') FROM observed_states
+		 WHERE host_id::text = $1 AND resource_key = $2
+	`, hostID, "docker_container:"+depID).Scan(&state)
+	if err != nil {
+		return "" // row gone is itself a change the caller will catch
+	}
+	return state
+}

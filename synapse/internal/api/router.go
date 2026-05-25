@@ -302,6 +302,22 @@ func NewRouter(d RouterDeps) http.Handler {
 		StaleAfter:   d.AgentStaleAfter,
 		OfflineAfter: d.AgentOfflineAfter,
 	}
+	// Bloco 9b — Drift Engine + dry-run planner. Shares the host-liveness
+	// thresholds (they decide whether observed state can be trusted) and reuses
+	// the project / cell / host load+RBAC helpers via the references below.
+	// Routes are mounted on each scope's handler (instance-admin for host,
+	// project-RBAC for cell/project). Compares + plans only; never applies.
+	driftH := &DriftHandler{
+		DB:           d.DB,
+		Projects:     projectsH,
+		Cells:        cellsH,
+		Hosts:        hostsH,
+		StaleAfter:   d.AgentStaleAfter,
+		OfflineAfter: d.AgentOfflineAfter,
+	}
+	projectsH.Drift = driftH
+	cellsH.Drift = driftH
+	hostsH.Drift = driftH
 	// Agent contact points (feat/cell-control-plane, Bloco 6). Public —
 	// register authenticates with the adoption token in the body, heartbeat
 	// + desired_state with the agent bearer token. Mounted in the public
