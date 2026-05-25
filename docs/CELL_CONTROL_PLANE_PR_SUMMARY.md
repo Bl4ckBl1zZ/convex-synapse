@@ -28,6 +28,8 @@ bf3737a CellLinks + ServiceTokens                 f1762f5 link-scoped discovery
 3906b95 real topology                             46c8399 DesiredState/ObservedState
 8925fce observed prune fix                        08d4f9a Drift Engine + dry-run
 84139d8 observed fidelity + pruning safety        30e3671 State & Drift + Operations UI
+a1b0840 docs consolidation (Bloco 10a)            583cfcd CLI commands (Bloco 5)
+<Bloco 11> CLI EPIPE clean-exit fix + this verification pass
 ```
 
 ## Migrations added
@@ -83,15 +85,52 @@ cd cli && node --test      # 266 tests (zero-dep)
 #   apply, then roll back 000021→000017 and re-apply, confirming no error.
 ```
 
+## Bloco 11 — verification results (pre-merge)
+
+Run at HEAD `583cfcd` + the EPIPE fix. Full matrix green:
+
+| Check | Result |
+|---|---|
+| `gofmt -l` (changed Go) · `go vet ./...` | clean · exit 0 |
+| `go test ./... -count=1` | all `ok` (integration ~69s) |
+| `go build ./cmd/synapse-agent` | OK |
+| CLI `node --test` | 266 pass / 0 fail · no `apply` command |
+| dashboard `tsc --noEmit` · `npm run build` | exit 0 · build OK |
+| Playwright (cells / cell-links / topology / state-drift / project regression) | 19/19 |
+| `git diff --check` (whole branch) | clean |
+| eslint | 23 err/5 warn — **all pre-existing** baseline; branch CCP files clean |
+
+**Migration rehearsal** (scratch DB, golang-migrate over the embedded FS):
+up → version 21, down → all tables dropped (correct order, no FK errors),
+re-up → version 21. Constraints verified on the live DB: one-cell-per-deployment
+(`cell_resources_convex_deployment_idx`, partial unique), `cell_links_check`
+(`source_cell_id <> target_cell_id`), `cell_links_active_uniq`,
+`service_tokens_token_hash_key`, `desired_states_active_uniq`,
+`observed_states_*_key`, adoption/agent token-hash uniques.
+
+**Live smoke** (local stack): host created → adoption token → `synapse-agent
+join` + `run --once` → host **online**; core+runtime cells → attach host → cell
+link → service token → discovery active **200** / revoked **401**; desired sync
+→ drift recompute (clean) → reconcile dry-run (`applyAllowed=false`) →
+operation runs recorded; CLI `hosts list` / `topology show` / `drift latest` /
+`reconcile dry-run` all render; dry-run UI has no Apply button (Playwright).
+
+**Security review:** `applyAllowed` only ever `false`; `apply:true` → 400
+`apply_not_supported`; `AgentApply` defaults false; drift.go has zero docker/
+provisioner calls; agent runs only read-only `docker version` + `ps -a`; no
+`token_hash` in UI/CLI; `redactJson` in both dashboard + CLI; ObservedState is
+`synapse.*` labels only (no env/command/logs/mounts); dry-run steps only
+planned/no_op/skipped; hosts instance-admin, discovery requires `discovery:read`.
+
 ## Known risks
 
-- **eslint baseline is already red** on ~10 pre-existing dashboard files
-  (`react-hooks/set-state-in-effect` from a newer plugin) — **not** introduced
-  by this branch; the new 9c files are eslint-clean. Don't block on it; fix in a
-  separate cleanup.
-- **Real apply does not exist.** Operators must act out-of-band on drift; the
-  control plane only plans.
-- **No control-plane CLI yet** (the `synapse-agent` binary aside).
+- **eslint baseline is already red** on ~18 pre-existing files
+  (`react-hooks/set-state-in-effect` + a `prefer-const` in `invites.spec.ts`,
+  from a newer plugin) — **not** introduced by this branch (0 branch commits
+  touch them); every branch Cell-Control-Plane file is eslint-clean. Don't block
+  on it; fix in a separate cleanup pass.
+- **Real apply does not exist** (by design). Operators act out-of-band on drift;
+  the control plane only plans. The CLI has no `apply`; `reconcile --apply` errors.
 - **CellLink endpoint resolution can be `null`** when the target has no active
   custom domain and no deployment URL ("endpoint unresolved").
 - **Legacy topology coexists** with `cell_topology` (intentional fallback).
@@ -99,16 +138,27 @@ cd cli && node --test      # 266 tests (zero-dep)
 
 ## Checklist — before merge
 
-- [ ] `go test ./... -count=1` green
-- [ ] `go vet ./...` clean
-- [ ] `gofmt -l .` clean (on changed Go files)
-- [ ] `npm run build` (dashboard) green
-- [ ] Relevant Playwright specs green
-- [ ] Migrations `up` then `down` then `up` on a scratch DB without error
-- [ ] Agent `join` + heartbeat verified on staging (host flips `online`)
-- [ ] State & Drift verified on a project with Cells (sync → recompute →
-      dry-run → operation run detail; **no Apply button**)
-- [ ] Re-read [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md); confirm none broken
+- [x] `go test ./... -count=1` green (Bloco 11)
+- [x] `go vet ./...` clean
+- [x] `gofmt -l .` clean (on changed Go files)
+- [x] `npm run build` (dashboard) green
+- [x] Relevant Playwright specs green (19/19)
+- [x] Migrations `up` then `down` then `up` on a scratch DB without error
+- [x] Agent `join` + `run --once` verified locally (host flips `online`)
+- [x] State & Drift verified (sync → recompute → dry-run → operation run;
+      **no Apply button** — Playwright asserts 0 apply controls)
+- [x] CLI verified end-to-end (no `apply` command; `reconcile --apply` errors)
+- [x] Re-read [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md); none broken
+- [ ] Final review on a real **staging VPS** (this pass was a local stack)
+
+## Recommendation
+
+**Ready for PR → ready for merge after review.** All automated gates + the
+local migration rehearsal, end-to-end live smoke, and security review pass;
+the only code change in this pass is a CLI EPIPE clean-exit guard. No blockers.
+Remaining items are non-blocking follow-ups (eslint baseline cleanup,
+host/cell deep-dive UI, real-staging-VPS confirmation, and the deferred,
+explicitly-gated apply mode).
 
 ## Checklist — after merge
 
