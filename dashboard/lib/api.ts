@@ -723,6 +723,11 @@ export type CellLink = {
   allowedEvents: string[];
   status: "active" | "disabled" | string;
   serviceTokenCount: number;
+  // Computed best-effort reachable URL of the target cell (Bloco 7.5),
+  // resolved from an active custom domain or the deployment URL. Absent when
+  // nothing safe is known. endpointSource: "route" | "deployment".
+  endpoint?: string;
+  endpointSource?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -747,6 +752,9 @@ export type ServiceToken = {
   token?: string;
   scopes: string[];
   status: "active" | "revoked" | "expired" | string;
+  // effectiveStatus (Bloco 7.5): "expired" once past expiresAt even if the
+  // stored status is still "active". Prefer it for display.
+  effectiveStatus?: "active" | "revoked" | "expired" | string;
   expiresAt?: string;
   lastUsedAt?: string;
   createdAt: string;

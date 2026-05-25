@@ -116,6 +116,7 @@ func (h *CellLinksHandler) listCellLinksByProject(w http.ResponseWriter, r *http
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to read cell links")
 			return
 		}
+		h.decorateLink(r.Context(), &l)
 		items = append(items, l)
 	}
 	if err := rows.Err(); err != nil {
@@ -219,6 +220,7 @@ func (h *CellLinksHandler) createCellLink(w http.ResponseWriter, r *http.Request
 		TargetID:   l.ID,
 		Metadata:   map[string]any{"sourceCellId": l.SourceCellID, "targetCellId": l.TargetCellID, "protocol": l.Protocol},
 	})
+	h.decorateLink(r.Context(), &l)
 	writeJSON(w, http.StatusCreated, l)
 }
 
@@ -235,6 +237,7 @@ func (h *CellLinksHandler) getCellLink(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.decorateLink(r.Context(), &l)
 	writeJSON(w, http.StatusOK, l)
 }
 
@@ -364,6 +367,7 @@ func (h *CellLinksHandler) listServiceTokens(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to read service tokens")
 			return
 		}
+		t.EffectiveStatus = serviceTokenEffectiveStatus(t)
 		items = append(items, t)
 	}
 	if err := rows.Err(); err != nil {
@@ -391,6 +395,14 @@ func (h *CellLinksHandler) createServiceToken(w http.ResponseWriter, r *http.Req
 	}
 	uid, _ := auth.UserID(r.Context())
 
+	// Only service_token links can mint tokens; mtls/none are placeholders
+	// (registered but not implemented), so we refuse rather than pretend.
+	if l.AuthMode != models.CellLinkAuthServiceToken {
+		writeError(w, http.StatusBadRequest, "auth_mode_not_token",
+			"Service tokens can only be created for links with authMode=service_token")
+		return
+	}
+
 	var req createServiceTokenReq
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -399,6 +411,21 @@ func (h *CellLinksHandler) createServiceToken(w http.ResponseWriter, r *http.Req
 	if req.ExpiresAt != nil && !req.ExpiresAt.After(time.Now()) {
 		writeError(w, http.StatusBadRequest, "invalid_expires_at", "expiresAt must be in the future")
 		return
+	}
+	// Default to discovery:read so a token is at least usable for discovery.
+	scopes := cleanStrings(req.Scopes)
+	if len(scopes) == 0 {
+		scopes = []string{models.ServiceScopeDiscoveryRead}
+	}
+	if len(scopes) > 20 {
+		writeError(w, http.StatusBadRequest, "too_many_scopes", "A service token may have at most 20 scopes")
+		return
+	}
+	for _, s := range scopes {
+		if len(s) > 64 {
+			writeError(w, http.StatusBadRequest, "invalid_scope", "Each scope must be at most 64 characters")
+			return
+		}
 	}
 
 	plain, hash, err := auth.GenerateTokenWithPrefix(auth.ServiceTokenPrefix)
@@ -414,7 +441,7 @@ func (h *CellLinksHandler) createServiceToken(w http.ResponseWriter, r *http.Req
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+serviceTokenColumns,
 		l.ID, l.SourceCellID, l.TargetCellID, strings.TrimSpace(req.Name), hash,
-		cleanStrings(req.Scopes), req.ExpiresAt,
+		scopes, req.ExpiresAt,
 	))
 	if err != nil {
 		logErr("insert service token", err)
@@ -422,6 +449,7 @@ func (h *CellLinksHandler) createServiceToken(w http.ResponseWriter, r *http.Req
 		return
 	}
 	tok.Token = plain // shown once
+	tok.EffectiveStatus = serviceTokenEffectiveStatus(tok)
 
 	_ = audit.Record(r.Context(), h.DB, audit.Options{
 		TeamID: l.TeamID, ActorID: uid,
@@ -504,10 +532,12 @@ type discoveryLink struct {
 	AuthMode        string              `json:"authMode"`
 	AllowedCommands []string            `json:"allowedCommands"`
 	AllowedEvents   []string            `json:"allowedEvents"`
-	// Endpoint is intentionally null for now — Synapse doesn't invent routing
-	// in this block. A later block may derive it from the target's route /
-	// deployment.
-	Endpoint *string `json:"endpoint"`
+	// Endpoint is a best-effort reachable URL for the target cell, resolved
+	// from the EXISTING Route layer (an active custom domain) or the target's
+	// deployment URL — Synapse invents no new routing. null when unknown.
+	// EndpointSource records which path produced it: route | deployment | none.
+	Endpoint       *string `json:"endpoint"`
+	EndpointSource string  `json:"endpointSource"`
 }
 
 type discoveryResp struct {
@@ -515,9 +545,11 @@ type discoveryResp struct {
 	Links        []discoveryLink `json:"links"`
 }
 
-// Discovery authenticates a service token and returns the ACTIVE links from
-// that token's source cell. Public route (no JWT); the bearer is a syn_svc_
-// service token. Revoked / expired tokens fail with 401.
+// Discovery authenticates a service token and returns ONLY the single
+// CellLink that token belongs to (link-scoped identity, Bloco 7.5): if a
+// core→runtime token leaks, it can't enumerate the source cell's other links.
+// Public route (no JWT); bearer is a syn_svc_ token. Revoked/expired tokens
+// fail 401; a token without discovery:read fails 403.
 func (h *CellLinksHandler) Discovery(w http.ResponseWriter, r *http.Request) {
 	tok := agentBearer(r) // generic "Bearer <token>" extractor (agents.go)
 	if tok == "" {
@@ -525,15 +557,16 @@ func (h *CellLinksHandler) Discovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := auth.HashToken(tok)
-	var sourceCellID string
+	var sourceCellID, linkID string
+	var scopes []string
 	err := h.DB.QueryRow(r.Context(), `
 		UPDATE service_tokens
 		   SET last_used_at = now()
 		 WHERE token_hash = $1
 		   AND status = 'active'
 		   AND (expires_at IS NULL OR expires_at > now())
-		RETURNING source_cell_id
-	`, hash).Scan(&sourceCellID)
+		RETURNING source_cell_id, cell_link_id, scopes
+	`, hash).Scan(&sourceCellID, &linkID, &scopes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Covers unknown, revoked, and expired tokens — all just "not valid".
 		writeError(w, http.StatusUnauthorized, "invalid_service_token", "Service token is not valid")
@@ -544,47 +577,116 @@ func (h *CellLinksHandler) Discovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to authenticate service token")
 		return
 	}
+	if !hasScope(scopes, models.ServiceScopeDiscoveryRead) {
+		writeError(w, http.StatusForbidden, "insufficient_scope", "Service token lacks the discovery:read scope")
+		return
+	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	resp := discoveryResp{SourceCellID: sourceCellID, Links: []discoveryLink{}}
+	// Link-scoped: just this token's link, and only while it's active.
+	var dl discoveryLink
+	err = h.DB.QueryRow(r.Context(), `
 		SELECT cl.id, cl.target_cell_id, cl.protocol, cl.auth_mode,
 		       cl.allowed_commands, cl.allowed_events,
 		       c.name, c.kind, c.environment
 		  FROM cell_links cl
 		  JOIN cells c ON c.id = cl.target_cell_id
-		 WHERE cl.source_cell_id = $1 AND cl.status = 'active'
-		 ORDER BY cl.created_at ASC
-	`, sourceCellID)
+		 WHERE cl.id = $1 AND cl.status = 'active'
+	`, linkID).Scan(&dl.LinkID, &dl.TargetCellID, &dl.Protocol, &dl.AuthMode,
+		&dl.AllowedCommands, &dl.AllowedEvents,
+		&dl.TargetCell.Name, &dl.TargetCell.Kind, &dl.TargetCell.Environment)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Token valid but its link is disabled/deleted → nothing to discover.
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	if err != nil {
-		logErr("discovery links", err)
-		writeError(w, http.StatusInternalServerError, "internal", "Failed to load links")
+		logErr("discovery link", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to load link")
 		return
 	}
-	defer rows.Close()
-	resp := discoveryResp{SourceCellID: sourceCellID, Links: []discoveryLink{}}
-	for rows.Next() {
-		var dl discoveryLink
-		if err := rows.Scan(&dl.LinkID, &dl.TargetCellID, &dl.Protocol, &dl.AuthMode,
-			&dl.AllowedCommands, &dl.AllowedEvents,
-			&dl.TargetCell.Name, &dl.TargetCell.Kind, &dl.TargetCell.Environment); err != nil {
-			logErr("scan discovery link", err)
-			writeError(w, http.StatusInternalServerError, "internal", "Failed to read links")
-			return
-		}
-		dl.TargetCell.ID = dl.TargetCellID
-		if dl.AllowedCommands == nil {
-			dl.AllowedCommands = []string{}
-		}
-		if dl.AllowedEvents == nil {
-			dl.AllowedEvents = []string{}
-		}
-		resp.Links = append(resp.Links, dl)
+	dl.TargetCell.ID = dl.TargetCellID
+	if dl.AllowedCommands == nil {
+		dl.AllowedCommands = []string{}
 	}
-	if err := rows.Err(); err != nil {
-		logErr("iterate discovery links", err)
-		writeError(w, http.StatusInternalServerError, "internal", "Failed to read links")
-		return
+	if dl.AllowedEvents == nil {
+		dl.AllowedEvents = []string{}
 	}
+	dl.Endpoint, dl.EndpointSource = h.resolveEndpoint(r.Context(), dl.TargetCellID)
+	resp.Links = append(resp.Links, dl)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// resolveEndpoint best-effort resolves a reachable URL for a target cell,
+// reusing the EXISTING Route layer (deployment_domains) and the deployment's
+// stored URL — no new routing. Returns (nil, "none") when nothing safe is
+// known (e.g. a provisioned deployment with only a loopback URL + no domain).
+func (h *CellLinksHandler) resolveEndpoint(ctx context.Context, targetCellID string) (*string, string) {
+	var depID *string
+	if err := h.DB.QueryRow(ctx, `SELECT primary_deployment_id FROM cells WHERE id = $1`, targetCellID).Scan(&depID); err != nil || depID == nil {
+		return nil, "none"
+	}
+	// 1. Route: an active 'api'-role custom domain (deployment_domains).
+	var domain string
+	err := h.DB.QueryRow(ctx, `
+		SELECT domain FROM deployment_domains
+		 WHERE deployment_id = $1 AND status = 'active' AND role = 'api'
+		 ORDER BY created_at ASC LIMIT 1
+	`, *depID).Scan(&domain)
+	if err == nil && domain != "" {
+		u := "https://" + domain
+		return &u, "route"
+	}
+	// 2. The deployment's stored URL, if it's a usable public URL (adopted
+	// deployments carry a real external URL; provisioned ones store loopback,
+	// which we skip).
+	var depURL *string
+	_ = h.DB.QueryRow(ctx, `SELECT deployment_url FROM deployments WHERE id = $1`, *depID).Scan(&depURL)
+	if depURL != nil && isPublicURL(*depURL) {
+		u := *depURL
+		return &u, "deployment"
+	}
+	return nil, "none"
+}
+
+// decorateLink stamps the computed Endpoint/EndpointSource on a link for the
+// dashboard. Omits the fields (EndpointSource="") when nothing safe is known.
+func (h *CellLinksHandler) decorateLink(ctx context.Context, l *models.CellLink) {
+	ep, src := h.resolveEndpoint(ctx, l.TargetCellID)
+	if src == "none" {
+		l.Endpoint, l.EndpointSource = nil, ""
+		return
+	}
+	l.Endpoint, l.EndpointSource = ep, src
+}
+
+func isPublicURL(u string) bool {
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return false
+	}
+	return !strings.Contains(u, "127.0.0.1") && !strings.Contains(u, "localhost")
+}
+
+func hasScope(scopes []string, want string) bool {
+	for _, s := range scopes {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// serviceTokenEffectiveStatus computes the honest status: a token past its
+// expiresAt reads "expired" even though the stored status is still "active"
+// (there's no reaper). Revoked always wins.
+func serviceTokenEffectiveStatus(t models.ServiceToken) string {
+	if t.Status == models.ServiceTokenStatusRevoked {
+		return models.ServiceTokenStatusRevoked
+	}
+	if t.ExpiresAt != nil && !t.ExpiresAt.After(time.Now()) {
+		return models.ServiceTokenStatusExpired
+	}
+	return models.ServiceTokenStatusActive
 }
 
 // ---------- helpers ----------

@@ -36,6 +36,7 @@ type discoveryResult struct {
 		AllowedCommands []string `json:"allowedCommands"`
 		AllowedEvents   []string `json:"allowedEvents"`
 		Endpoint        *string  `json:"endpoint"`
+		EndpointSource  string   `json:"endpointSource"`
 	} `json:"links"`
 }
 
@@ -231,6 +232,131 @@ func TestDiscovery_RevokedAndExpiredTokensFail(t *testing.T) {
 
 	// No bearer → 401.
 	h.AssertStatus(http.MethodGet, "/v1/internal/cell_links/discovery", "", nil, http.StatusUnauthorized)
+}
+
+func TestDiscovery_IsLinkScoped(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, core, runtime := linkFixture(t, h)
+	// A second target cell + a second link from the SAME source (core).
+	integration := createCellViaAPI(t, h, owner.AccessToken, projectID, "integration-prod-br-1", "integration")
+
+	var linkRuntime, linkIntegration models.CellLink
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/cell_links", owner.AccessToken,
+		map[string]any{"sourceCellId": core.ID, "targetCellId": runtime.ID, "protocol": "outbox"}, http.StatusCreated, &linkRuntime)
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/cell_links", owner.AccessToken,
+		map[string]any{"sourceCellId": core.ID, "targetCellId": integration.ID, "protocol": "outbox"}, http.StatusCreated, &linkIntegration)
+
+	// A token for the runtime link must ONLY discover the runtime link.
+	var tok models.ServiceToken
+	h.DoJSON(http.MethodPost, "/v1/cell_links/"+linkRuntime.ID+"/service_tokens", owner.AccessToken, map[string]any{}, http.StatusCreated, &tok)
+
+	var disc discoveryResult
+	h.DoJSON(http.MethodGet, "/v1/internal/cell_links/discovery", tok.Token, nil, http.StatusOK, &disc)
+	if len(disc.Links) != 1 {
+		t.Fatalf("link-scoped discovery should return exactly 1 link, got %d", len(disc.Links))
+	}
+	if disc.Links[0].LinkID != linkRuntime.ID || disc.Links[0].TargetCellID != runtime.ID {
+		t.Errorf("token leaked a different link: %+v", disc.Links[0])
+	}
+}
+
+func TestDiscovery_RequiresDiscoveryReadScope(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, core, runtime := linkFixture(t, h)
+	var link models.CellLink
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/cell_links", owner.AccessToken,
+		map[string]any{"sourceCellId": core.ID, "targetCellId": runtime.ID}, http.StatusCreated, &link)
+
+	// A token scoped to commands:send only (no discovery:read).
+	var tok models.ServiceToken
+	h.DoJSON(http.MethodPost, "/v1/cell_links/"+link.ID+"/service_tokens", owner.AccessToken,
+		map[string]any{"scopes": []string{"commands:send"}}, http.StatusCreated, &tok)
+
+	env := h.AssertStatus(http.MethodGet, "/v1/internal/cell_links/discovery", tok.Token, nil, http.StatusForbidden)
+	if env.Code != "insufficient_scope" {
+		t.Errorf("code = %q, want insufficient_scope", env.Code)
+	}
+}
+
+func TestServiceToken_DefaultScopeAndExpiredEffectiveStatus(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, core, runtime := linkFixture(t, h)
+	var link models.CellLink
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/cell_links", owner.AccessToken,
+		map[string]any{"sourceCellId": core.ID, "targetCellId": runtime.ID}, http.StatusCreated, &link)
+
+	// No scopes → default discovery:read.
+	var tok models.ServiceToken
+	h.DoJSON(http.MethodPost, "/v1/cell_links/"+link.ID+"/service_tokens", owner.AccessToken, map[string]any{}, http.StatusCreated, &tok)
+	if len(tok.Scopes) != 1 || tok.Scopes[0] != "discovery:read" {
+		t.Errorf("default scope should be [discovery:read], got %v", tok.Scopes)
+	}
+	if tok.EffectiveStatus != "active" {
+		t.Errorf("fresh token effectiveStatus = %q, want active", tok.EffectiveStatus)
+	}
+
+	// Force-expire it; the list must report effectiveStatus=expired even though
+	// the stored status is still active.
+	if _, err := h.DB.Exec(context.Background(),
+		`UPDATE service_tokens SET expires_at = now() - interval '1 hour' WHERE id = $1`, tok.ID); err != nil {
+		t.Fatalf("expire token: %v", err)
+	}
+	var list struct {
+		Items []models.ServiceToken `json:"items"`
+	}
+	h.DoJSON(http.MethodGet, "/v1/cell_links/"+link.ID+"/service_tokens", owner.AccessToken, nil, http.StatusOK, &list)
+	if len(list.Items) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(list.Items))
+	}
+	if list.Items[0].Status != "active" || list.Items[0].EffectiveStatus != "expired" {
+		t.Errorf("expected stored=active effective=expired, got stored=%q effective=%q",
+			list.Items[0].Status, list.Items[0].EffectiveStatus)
+	}
+}
+
+func TestServiceToken_AuthModeMustBeServiceToken(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, core, runtime := linkFixture(t, h)
+	for _, mode := range []string{"mtls", "none"} {
+		var link models.CellLink
+		h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/cell_links", owner.AccessToken,
+			map[string]any{"sourceCellId": core.ID, "targetCellId": runtime.ID, "protocol": "http", "authMode": mode},
+			http.StatusCreated, &link)
+		env := h.AssertStatus(http.MethodPost, "/v1/cell_links/"+link.ID+"/service_tokens", owner.AccessToken,
+			map[string]any{}, http.StatusBadRequest)
+		if env.Code != "auth_mode_not_token" {
+			t.Errorf("authMode=%s: code = %q, want auth_mode_not_token", mode, env.Code)
+		}
+		// Clean up so the next iteration's link doesn't hit the active-uniq
+		// constraint (different protocol per iteration avoids it anyway).
+		h.DoJSON(http.MethodPost, "/v1/cell_links/"+link.ID+"/disable", owner.AccessToken, map[string]any{}, http.StatusOK, &models.CellLink{})
+	}
+}
+
+func TestDiscovery_EndpointFromRoute(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, core, runtime := linkFixture(t, h)
+	// Give the runtime cell a primary deployment with an active custom domain.
+	depID := h.SeedDeployment(projectID, "runtime-backend", "prod", "running", true, owner.ID, 3401, "")
+	h.DoJSON(http.MethodPost, "/v1/cells/"+runtime.ID+"/attach_deployment", owner.AccessToken,
+		map[string]any{"deploymentName": "runtime-backend"}, http.StatusOK, &attachResp{})
+	seedActiveDomain(t, h, depID, "runtime.example.com", "api")
+
+	var link models.CellLink
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/cell_links", owner.AccessToken,
+		map[string]any{"sourceCellId": core.ID, "targetCellId": runtime.ID}, http.StatusCreated, &link)
+	var tok models.ServiceToken
+	h.DoJSON(http.MethodPost, "/v1/cell_links/"+link.ID+"/service_tokens", owner.AccessToken, map[string]any{}, http.StatusCreated, &tok)
+
+	var disc discoveryResult
+	h.DoJSON(http.MethodGet, "/v1/internal/cell_links/discovery", tok.Token, nil, http.StatusOK, &disc)
+	if len(disc.Links) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(disc.Links))
+	}
+	dl := disc.Links[0]
+	if dl.EndpointSource != "route" || dl.Endpoint == nil || *dl.Endpoint != "https://runtime.example.com" {
+		t.Errorf("endpoint resolution wrong: source=%q endpoint=%v", dl.EndpointSource, dl.Endpoint)
+	}
 }
 
 func TestCellLinks_RBAC(t *testing.T) {

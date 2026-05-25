@@ -117,9 +117,17 @@ export function CellLinksPanel({ projectId }: Props) {
               <tbody className="divide-y divide-neutral-900">
                 {list.map((l) => (
                   <tr key={l.id} className="text-neutral-200" data-testid="cell-link-row">
-                    <td className="px-3 py-2 font-mono">
-                      {name(l.sourceCellId)} <span className="text-neutral-600">→</span>{" "}
-                      {name(l.targetCellId)}
+                    <td className="px-3 py-2">
+                      <div className="font-mono">
+                        {name(l.sourceCellId)} <span className="text-neutral-600">→</span>{" "}
+                        {name(l.targetCellId)}
+                      </div>
+                      {l.endpoint && (
+                        <div className="text-[10px] text-neutral-600" title="Resolved target endpoint">
+                          ↳ {l.endpoint}{" "}
+                          <span className="text-neutral-700">({l.endpointSource})</span>
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2">{l.protocol}</td>
                     <td className="px-3 py-2 text-neutral-400">{l.authMode}</td>
@@ -416,14 +424,20 @@ function TokensDialog({
   return (
     <Dialog open onClose={onClose} title="Service tokens" className="max-w-lg">
       <div className="space-y-4 text-sm">
-        <p className="text-xs text-neutral-400">
-          For link{" "}
-          <span className="font-mono text-neutral-300">
-            {sourceName} → {targetName}
-          </span>
-          . A token authenticates the source cell at the discovery endpoint. The
-          plaintext is shown once.
-        </p>
+        <div className="space-y-1">
+          <p className="text-xs text-neutral-400">
+            For link{" "}
+            <span className="font-mono text-neutral-300">
+              {sourceName} → {targetName}
+            </span>
+            .
+          </p>
+          <p className="text-[11px] text-neutral-500">
+            Service tokens are link-scoped and can only discover this CellLink.
+            New tokens default to the <code className="text-neutral-400">discovery:read</code> scope.
+            The plaintext is shown once.
+          </p>
+        </div>
 
         {issued && (
           <div className="space-y-1 rounded border border-yellow-900/60 bg-yellow-900/20 px-2.5 py-2">
@@ -450,22 +464,33 @@ function TokensDialog({
           </div>
         )}
 
-        <div className="flex items-end gap-2">
-          <div className="flex-1 space-y-1">
-            <label htmlFor="token-name" className="block text-xs text-neutral-400">
-              New token name <span className="text-neutral-600">(optional)</span>
-            </label>
-            <Input
-              id="token-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="core→runtime"
-            />
+        {link.authMode === "service_token" ? (
+          <div className="flex items-end gap-2">
+            <div className="flex-1 space-y-1">
+              <label htmlFor="token-name" className="block text-xs text-neutral-400">
+                New token name <span className="text-neutral-600">(optional)</span>
+              </label>
+              <Input
+                id="token-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="core→runtime"
+              />
+            </div>
+            <Button onClick={create} disabled={pending} data-testid="generate-service-token">
+              {pending ? "Generating…" : "Generate"}
+            </Button>
           </div>
-          <Button onClick={create} disabled={pending} data-testid="generate-service-token">
-            {pending ? "Generating…" : "Generate"}
-          </Button>
-        </div>
+        ) : (
+          <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
+            This link uses authMode{" "}
+            <span className="font-mono text-neutral-400">{link.authMode}</span>, which
+            {link.authMode === "none"
+              ? " is unauthenticated (placeholder — unsafe for production)"
+              : " is a placeholder and not implemented yet"}
+            , so service tokens can&apos;t be generated for it.
+          </p>
+        )}
 
         {error instanceof ApiError && <p className="text-xs text-red-400">{error.message}</p>}
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
@@ -481,34 +506,41 @@ function TokensDialog({
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">Name</th>
                   <th className="px-3 py-2 text-left font-medium">Status</th>
+                  <th className="px-3 py-2 text-left font-medium">Scopes</th>
                   <th className="px-3 py-2 text-left font-medium">Last used</th>
                   <th className="px-3 py-2 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-900">
-                {tokens.map((t) => (
-                  <tr key={t.id} className="text-neutral-200">
-                    <td className="px-3 py-2">{t.name || "—"}</td>
-                    <td className="px-3 py-2">
-                      <Badge tone={t.status === "active" ? "green" : "red"}>{t.status}</Badge>
-                    </td>
-                    <td className="px-3 py-2 text-neutral-500">
-                      {t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : "never"}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {t.status === "active" && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={busyId === t.id}
-                          onClick={() => revoke(t.id)}
-                        >
-                          Revoke
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {tokens.map((t) => {
+                  const eff = t.effectiveStatus || t.status;
+                  return (
+                    <tr key={t.id} className="text-neutral-200">
+                      <td className="px-3 py-2">{t.name || "—"}</td>
+                      <td className="px-3 py-2">
+                        <Badge tone={tokenTone(eff)}>{eff}</Badge>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-neutral-500">
+                        {t.scopes.length ? t.scopes.join(", ") : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-neutral-500">
+                        {t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : "never"}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {eff === "active" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busyId === t.id}
+                            onClick={() => revoke(t.id)}
+                          >
+                            Revoke
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -584,6 +616,19 @@ function DisableLinkDialog({
       </div>
     </Dialog>
   );
+}
+
+function tokenTone(status: string): "green" | "yellow" | "red" | "neutral" {
+  switch (status) {
+    case "active":
+      return "green";
+    case "expired":
+      return "yellow";
+    case "revoked":
+      return "red";
+    default:
+      return "neutral";
+  }
 }
 
 function splitLines(s: string): string[] {

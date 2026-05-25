@@ -516,32 +516,50 @@ type CellLink struct {
 	Status          string   `json:"status"`
 	// ServiceTokenCount is a computed convenience (active tokens for this
 	// link) for the dashboard table — not a stored column.
-	ServiceTokenCount int       `json:"serviceTokenCount"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	ServiceTokenCount int `json:"serviceTokenCount"`
+	// Endpoint / EndpointSource (Bloco 7.5) are computed at read time — the
+	// best-effort reachable URL of the target cell, resolved from the existing
+	// Route layer (active custom domain) or the deployment URL. Omitted when
+	// nothing safe is known. Same resolution the discovery endpoint uses.
+	Endpoint       *string   `json:"endpoint,omitempty"`
+	EndpointSource string    `json:"endpointSource,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 const (
 	ServiceTokenStatusActive  = "active"
 	ServiceTokenStatusRevoked = "revoked"
 	ServiceTokenStatusExpired = "expired"
+
+	// ServiceScopeDiscoveryRead is required to call the discovery endpoint and
+	// is the default scope minted when none is supplied (Bloco 7.5).
+	ServiceScopeDiscoveryRead = "discovery:read"
+	// ServiceScopeCommandsSend is RESERVED for a future command-transport
+	// block. Synapse does not transport commands today; the scope name is
+	// fixed now so tokens minted today stay forward-compatible.
+	ServiceScopeCommandsSend = "commands:send"
 )
 
 // ServiceToken is a credential for one CellLink. Stored as a sha256 hash; the
 // plaintext (Token, syn_svc_…) is populated ONLY on the create response.
 type ServiceToken struct {
-	ID           string     `json:"id"`
-	CellLinkID   string     `json:"cellLinkId"`
-	SourceCellID string     `json:"sourceCellId"`
-	TargetCellID string     `json:"targetCellId"`
-	Name         string     `json:"name"`
-	Token        string     `json:"token,omitempty"`
-	Scopes       []string   `json:"scopes"`
-	Status       string     `json:"status"`
-	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
-	LastUsedAt   *time.Time `json:"lastUsedAt,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	ID           string   `json:"id"`
+	CellLinkID   string   `json:"cellLinkId"`
+	SourceCellID string   `json:"sourceCellId"`
+	TargetCellID string   `json:"targetCellId"`
+	Name         string   `json:"name"`
+	Token        string   `json:"token,omitempty"`
+	Scopes       []string `json:"scopes"`
+	Status       string   `json:"status"`
+	// EffectiveStatus (Bloco 7.5) is computed at read time: a token past its
+	// expiresAt reads "expired" even though the stored status is still
+	// "active" (there's no reaper). Clients should display EffectiveStatus.
+	EffectiveStatus string     `json:"effectiveStatus,omitempty"`
+	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
+	LastUsedAt      *time.Time `json:"lastUsedAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
 
 // DeploymentPlacement is the physical placement of a deployment: the Cell it
