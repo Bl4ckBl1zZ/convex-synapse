@@ -61,18 +61,32 @@ func dockerVersion(ctx context.Context) (string, bool) {
 }
 
 // buildObserved is the observe-only payload sent on every heartbeat. The only
-// Docker call is a READ-ONLY `docker ps` filtered to synapse-managed
-// containers — the agent never mutates anything.
+// Docker call is a READ-ONLY `docker ps -a` filtered to synapse-managed
+// containers — the agent never mutates anything. containerScan tells the
+// control plane whether the listing actually succeeded, so it can prune stale
+// observed state safely (a failed scan must NOT be read as "everything gone").
 func buildObserved(ctx context.Context, info SystemInfo) map[string]any {
+	containers, scan := scanContainers(ctx, info.DockerAvailable, realDockerRunner)
 	return map[string]any{
 		"dockerAvailable": info.DockerAvailable,
 		"dockerVersion":   info.DockerVersion,
-		"containers":      observeContainers(ctx, info.DockerAvailable),
+		"containers":      containers,
+		"containerScan":   scan,
 	}
 }
 
+// dockerRunner runs a READ-ONLY docker command and returns its stdout. Injected
+// so tests can exercise the scan/parse without a docker daemon.
+type dockerRunner func(ctx context.Context, args ...string) ([]byte, error)
+
+func realDockerRunner(ctx context.Context, args ...string) ([]byte, error) {
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return exec.CommandContext(cctx, "docker", args...).Output()
+}
+
 // dockerPSLine is the subset of `docker ps --format {{json .}}` we parse. We
-// deliberately do NOT read Command (can carry secrets) or any env.
+// deliberately do NOT read Command (can carry secrets), env, or mounts.
 type dockerPSLine struct {
 	ID        string `json:"ID"`
 	Names     string `json:"Names"`
@@ -84,43 +98,68 @@ type dockerPSLine struct {
 	CreatedAt string `json:"CreatedAt"`
 }
 
-// observeContainers returns SAFE metadata for containers labelled
-// synapse.managed=true. READ-ONLY (`docker ps`). Never env, command, or
-// non-synapse labels. Empty slice when docker is unavailable / the probe
-// fails. Never an action.
-func observeContainers(ctx context.Context, dockerAvailable bool) []map[string]any {
+// scanContainers returns SAFE metadata for ALL synapse.managed=true containers
+// — running AND exited/created/stopped (`docker ps -a`) — so the Drift Engine
+// can tell "stopped, needs restart" from "gone, needs create". READ-ONLY.
+// Never env, command, mounts, or non-synapse labels.
+//
+// The second return value is the scan outcome:
+//   - docker absent          → {attempted, !succeeded, !complete, "docker_unavailable"}
+//   - `docker ps -a` errored  → {attempted, !succeeded, !complete, "docker_scan_failed"}
+//   - listing succeeded       → {attempted, succeeded, complete, ""}
+//
+// Only a succeeded+complete scan authorises the server to prune vanished
+// containers; a failed scan keeps the previous observation.
+func scanContainers(ctx context.Context, dockerAvailable bool, run dockerRunner) ([]map[string]any, map[string]any) {
 	out := []map[string]any{}
 	if !dockerAvailable {
-		return out
+		return out, scanResult(false, false, "docker_unavailable")
 	}
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	raw, err := exec.CommandContext(cctx, "docker", "ps",
-		"--filter", "label=synapse.managed=true", "--format", "{{json .}}").Output()
+	raw, err := run(ctx, "ps", "-a", "--filter", "label=synapse.managed=true", "--format", "{{json .}}")
 	if err != nil {
-		return out
+		return out, scanResult(false, false, "docker_scan_failed")
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		var p dockerPSLine
-		if json.Unmarshal([]byte(line), &p) != nil {
-			continue
+		if c, ok := parseContainerLine(line); ok {
+			out = append(out, c)
 		}
-		out = append(out, map[string]any{
-			"id":        shortDockerID(p.ID),
-			"name":      p.Names,
-			"image":     p.Image,
-			"state":     p.State,
-			"status":    p.Status,
-			"labels":    parseSynapseLabels(p.Labels),
-			"ports":     p.Ports,
-			"createdAt": p.CreatedAt,
-		})
 	}
-	return out
+	return out, scanResult(true, true, "")
+}
+
+// parseContainerLine turns one `docker ps --format {{json .}}` line into the
+// SAFE observed shape (synapse.* labels only; never command/env/mounts).
+func parseContainerLine(line string) (map[string]any, bool) {
+	var p dockerPSLine
+	if json.Unmarshal([]byte(line), &p) != nil {
+		return nil, false
+	}
+	return map[string]any{
+		"id":        shortDockerID(p.ID),
+		"name":      p.Names,
+		"image":     p.Image,
+		"state":     p.State,
+		"status":    p.Status,
+		"labels":    parseSynapseLabels(p.Labels),
+		"ports":     p.Ports,
+		"createdAt": p.CreatedAt,
+	}, true
+}
+
+// scanResult builds the containerScan object. attempted is always true (the
+// agent always tries when it runs a heartbeat); error is null on success.
+func scanResult(succeeded, complete bool, errCode string) map[string]any {
+	m := map[string]any{"attempted": true, "succeeded": succeeded, "complete": complete}
+	if errCode == "" {
+		m["error"] = nil
+	} else {
+		m["error"] = errCode
+	}
+	return m
 }
 
 // parseSynapseLabels parses docker's "k=v,k2=v2" label string and keeps ONLY

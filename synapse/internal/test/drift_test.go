@@ -571,6 +571,158 @@ func countObservedContainers(t *testing.T, h *Harness, hostID string) int {
 	return n
 }
 
+// ---------- 9b.5: scan fidelity + pruning safety ----------
+
+// seedHostFacts upserts a host_facts observed row carrying the docker + scan
+// outcome the Drift Engine reads to decide host trust.
+func seedHostFacts(t *testing.T, h *Harness, hostID string, dockerAvailable, scanSucceeded, scanComplete bool) {
+	t.Helper()
+	facts := map[string]any{
+		"hostname": "h", "os": "linux", "arch": "amd64",
+		"dockerAvailable": dockerAvailable, "dockerVersion": "27.0",
+		"containerScan": map[string]any{
+			"attempted": true, "succeeded": scanSucceeded, "complete": scanComplete, "error": nil,
+		},
+	}
+	raw, _ := json.Marshal(facts)
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO observed_states (host_id, resource_type, resource_key, observed_json, observed_hash, source)
+		VALUES ($1, 'host_facts', $2, $3, $4, 'agent')
+		ON CONFLICT (host_id, resource_type, resource_key)
+		DO UPDATE SET observed_json = EXCLUDED.observed_json, observed_at = now()
+	`, hostID, "host:"+hostID, raw, "hash-"+randHex(6)); err != nil {
+		t.Fatalf("seed host_facts: %v", err)
+	}
+}
+
+// Pruning is gated on the agent's reported scan outcome, not a guessed empty list.
+func TestObservedState_PruningRespectsScan(t *testing.T) {
+	h := Setup(t)
+	_, hostID, tok := mintHostToken(t, h, "vps-scan")
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &reg)
+
+	beat := func(containers []map[string]any, dockerAvailable, succeeded, complete bool, scanErr any) {
+		hb := map[string]any{
+			"hostname": "vps-scan", "os": "linux", "arch": "amd64",
+			"observed": map[string]any{
+				"dockerAvailable": dockerAvailable, "dockerVersion": "27.0", "containers": containers,
+				"containerScan": map[string]any{
+					"attempted": true, "succeeded": succeeded, "complete": complete, "error": scanErr,
+				},
+			},
+		}
+		h.DoJSON(http.MethodPost, "/v1/agents/heartbeat", reg.AgentToken, hb, http.StatusOK, &map[string]any{})
+	}
+	mk := func(dep, state string) map[string]any {
+		return map[string]any{
+			"id": "id-" + dep, "name": "convex-" + dep, "image": "img", "state": state, "status": "x",
+			"labels": map[string]string{"synapse.managed": "true", "synapse.deployment_id": dep},
+			"ports":  "", "createdAt": "",
+		}
+	}
+
+	// Scan succeeded+complete with two containers (one running, one exited).
+	beat([]map[string]any{mk("dep-a", "running"), mk("dep-b", "exited")}, true, true, true, nil)
+	if got := countObservedContainers(t, h, hostID); got != 2 {
+		t.Fatalf("expected 2 observed containers, got %d", got)
+	}
+	// Scan FAILED with an empty list → must NOT prune (transient docker error).
+	beat([]map[string]any{}, true, false, false, "docker_scan_failed")
+	if got := countObservedContainers(t, h, hostID); got != 2 {
+		t.Fatalf("scan-failed heartbeat must not prune; got %d", got)
+	}
+	// Docker UNAVAILABLE with an empty list → must NOT prune.
+	beat([]map[string]any{}, false, false, false, "docker_unavailable")
+	if got := countObservedContainers(t, h, hostID); got != 2 {
+		t.Fatalf("docker-unavailable heartbeat must not prune; got %d", got)
+	}
+	// Scan succeeded+complete, dep-b gone → prune just dep-b.
+	beat([]map[string]any{mk("dep-a", "running")}, true, true, true, nil)
+	if got := countObservedContainers(t, h, hostID); got != 1 {
+		t.Fatalf("expected 1 after scan-clean prune, got %d", got)
+	}
+	// Scan succeeded+complete, empty → legitimately zero containers → prune all.
+	beat([]map[string]any{}, true, true, true, nil)
+	if got := countObservedContainers(t, h, hostID); got != 0 {
+		t.Fatalf("expected 0 observed containers, got %d", got)
+	}
+	// host_facts persists and records the latest scan outcome.
+	if got := countRows(t, h, `SELECT count(*) FROM observed_states WHERE resource_type = 'host_facts'`); got != 1 {
+		t.Errorf("host_facts must survive pruning, got %d", got)
+	}
+	var scanOK string
+	if err := h.DB.QueryRow(h.rootCtx,
+		`SELECT observed_json->'containerScan'->>'succeeded' FROM observed_states WHERE host_id::text = $1 AND resource_type = 'host_facts'`,
+		hostID).Scan(&scanOK); err != nil {
+		t.Fatalf("read host_facts scan: %v", err)
+	}
+	if scanOK != "true" {
+		t.Errorf("host_facts should record scan succeeded=true, got %q", scanOK)
+	}
+}
+
+// Scan failed/incomplete on an online host → host_unreachable, never a
+// misleading "missing" (the container might still be there; we just couldn't list it).
+func TestDrift_ScanFailedNotMissing(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)                         // heartbeat fresh → online liveness
+	seedHostFacts(t, h, hostID, true, false, false) // docker up, but scan failed
+	// no observed container.
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if findDriftItem(res.Items, models.DriftStatusMissing) != nil {
+		t.Fatalf("scan-failed must NOT yield missing: %+v", res.Items)
+	}
+	it := findDriftItem(res.Items, models.DriftStatusHostUnreachable)
+	if it == nil || it.RecommendedAction != models.RecommendedActionInvestigate || it.Severity != models.SeverityWarning {
+		t.Fatalf("expected host_unreachable/warning/investigate, got %+v", res.Items)
+	}
+}
+
+// Scan succeeded+complete + no container → a real missing (create).
+func TestDrift_ScanSucceededMissing(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, _, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	trustHost(t, h, hostID)
+	seedHostFacts(t, h, hostID, true, true, true) // scan succeeded + complete
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	it := findDriftItem(res.Items, models.DriftStatusMissing)
+	if it == nil || it.RecommendedAction != models.RecommendedActionCreate {
+		t.Fatalf("scan succeeded + no container → missing/create, got %+v", res.Items)
+	}
+}
+
+// Draining is lifecycle, not liveness: a draining-but-online host with a good
+// scan still gets its real drift diagnosed (NOT masked as host_unreachable).
+func TestDrift_DrainingOnlineStillDiagnoses(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, depID := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+	if _, err := h.DB.Exec(h.rootCtx,
+		`UPDATE hosts SET status = 'draining', last_heartbeat_at = now() WHERE id::text = $1`, hostID); err != nil {
+		t.Fatalf("set draining: %v", err)
+	}
+	seedHostFacts(t, h, hostID, true, true, true)
+	seedObservedContainer(t, h, hostID, depID, cellID, projectID, "exited")
+
+	res := recomputeDrift(t, h, owner.AccessToken, "/v1/hosts/"+hostID)
+	if findDriftItem(res.Items, models.DriftStatusHostUnreachable) != nil {
+		t.Fatalf("draining+online+scan-ok must NOT be host_unreachable: %+v", res.Items)
+	}
+	it := findDriftItem(res.Items, models.DriftStatusDrifted)
+	if it == nil || it.RecommendedAction != models.RecommendedActionRestart {
+		t.Fatalf("expected drifted/restart even while draining, got %+v", res.Items)
+	}
+	if it.Diff["lifecycle"] != models.HostStatusDraining {
+		t.Errorf("draining should be annotated on the item diff, got %+v", it.Diff)
+	}
+}
+
 // ---------- shared small helpers ----------
 
 func countRows(t *testing.T, h *Harness, query string) int {

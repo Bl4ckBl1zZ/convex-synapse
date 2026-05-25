@@ -469,7 +469,7 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 	if err != nil {
 		return nil, nil, err
 	}
-	facts, err := loadHostDockerAvailable(ctx, h.DB, keysOf(hostSet))
+	facts, err := loadHostFacts(ctx, h.DB, keysOf(hostSet))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -519,13 +519,13 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 			if o != nil {
 				matched[o.id] = true
 			}
-			items = append(items, driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, observedID(o),
+			items = append(items, annotateDraining(driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, observedID(o),
 				models.DriftStatusHostUnreachable, tr.severity, models.RecommendedActionInvestigate,
 				map[string]any{
 					"reason":        tr.reason,
 					"hostStatus":    tr.status,
 					"desiredStatus": d.desiredStatus,
-				}))
+				}), tr.draining))
 			continue
 		}
 
@@ -533,18 +533,18 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 		if o == nil {
 			switch d.desiredStatus {
 			case models.PlacementDesiredRunning:
-				items = append(items, driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, nil,
+				items = append(items, annotateDraining(driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, nil,
 					models.DriftStatusMissing, models.SeverityCritical, models.RecommendedActionCreate,
 					map[string]any{
 						"reason":        "desired running but no matching container observed on the host",
 						"desiredStatus": d.desiredStatus,
 						"deploymentId":  d.depID,
-					}))
+					}), tr.draining))
 			default:
 				// stopped / absent + no container = the goal (not running) is met.
-				items = append(items, driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, nil,
+				items = append(items, annotateDraining(driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, nil,
 					models.DriftStatusInSync, models.SeverityInfo, models.RecommendedActionNone,
-					map[string]any{"desiredStatus": d.desiredStatus, "observed": "absent"}))
+					map[string]any{"desiredStatus": d.desiredStatus, "observed": "absent"}), tr.draining))
 			}
 			continue
 		}
@@ -552,13 +552,13 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 
 		// 4. Label mismatch — same deployment id, different cell/project label.
 		if mm := labelMismatch(d, o); mm != nil {
-			items = append(items, driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, observedID(o),
-				models.DriftStatusDrifted, models.SeverityCritical, models.RecommendedActionInvestigate, mm))
+			items = append(items, annotateDraining(driftItem(d.hostID, d.cellID, d.resourceKey, &dsID, observedID(o),
+				models.DriftStatusDrifted, models.SeverityCritical, models.RecommendedActionInvestigate, mm), tr.draining))
 			continue
 		}
 
 		// 5. State comparison.
-		items = append(items, compareState(d, o, dsID))
+		items = append(items, annotateDraining(compareState(d, o, dsID), tr.draining))
 	}
 
 	// 6. Unmanaged: observed synapse-managed containers with no active desired,
@@ -590,11 +590,24 @@ func (h *DriftHandler) computeDrift(ctx context.Context, scope driftScope) ([]mo
 		} else {
 			diff["deploymentId"] = o.depID
 		}
-		items = append(items, driftItem(o.hostID, observedCellPtr(o), o.resourceKey, nil, &o.id,
-			models.DriftStatusUnmanaged, models.SeverityWarning, models.RecommendedActionInvestigate, diff))
+		items = append(items, annotateDraining(driftItem(o.hostID, observedCellPtr(o), o.resourceKey, nil, &o.id,
+			models.DriftStatusUnmanaged, models.SeverityWarning, models.RecommendedActionInvestigate, diff), tr.draining))
 	}
 
 	return items, summarize(items), nil
+}
+
+// annotateDraining records the host's lifecycle on an item WITHOUT changing its
+// drift classification — a draining host's real drift must still surface, just
+// flagged so operators know the host is being wound down.
+func annotateDraining(it models.DriftItem, draining bool) models.DriftItem {
+	if draining {
+		if it.Diff == nil {
+			it.Diff = map[string]any{}
+		}
+		it.Diff["lifecycle"] = models.HostStatusDraining
+	}
+	return it
 }
 
 // compareState classifies a matched desired/observed pair by container state.
@@ -657,36 +670,80 @@ func labelMismatch(d desiredCmp, o *observedCmp) map[string]any {
 	}
 }
 
-// hostTrust decides whether a host's observed state can be believed.
-type trustResult struct {
-	ok       bool
-	status   string
-	reason   string
-	severity string
+// hostObsFacts is the slice of the latest host_facts the Drift Engine needs to
+// decide whether the host's observed containers can be trusted. nil pointers
+// mean "unknown" (a legacy agent that didn't report the field, or no host_facts
+// row yet) and are NOT held against the host — liveness still gates it.
+type hostObsFacts struct {
+	dockerAvailable *bool
+	scanSucceeded   *bool
+	scanComplete    *bool
 }
 
-func hostTrust(hst models.Host, dockerAvailable *bool, staleAfter, offlineAfter time.Duration, now time.Time) trustResult {
-	eff := effectiveHostStatus(hst, staleAfter, offlineAfter, now)
+// scanDegraded is true only when the agent EXPLICITLY reported a `docker ps -a`
+// that failed or was incomplete (9b.5). Unknown (nil) is not degraded.
+func (f hostObsFacts) scanDegraded() bool {
+	return (f.scanSucceeded != nil && !*f.scanSucceeded) ||
+		(f.scanComplete != nil && !*f.scanComplete)
+}
+
+// trustResult is whether a host's observed state can be believed. draining is
+// surfaced separately (lifecycle, not liveness) so it can annotate items
+// WITHOUT masking real drift.
+type trustResult struct {
+	ok       bool
+	status   string // the liveness verdict (online/stale/offline) — NOT lifecycle
+	reason   string
+	severity string
+	draining bool
+}
+
+// liveness is the heartbeat-only health of a host (online/stale/offline),
+// deliberately IGNORING the operator lifecycle (draining) so a drained-but-live
+// host's real drift is still diagnosed. The no-heartbeat case is handled by the
+// caller (hostTrust).
+func liveness(hst models.Host, staleAfter, offlineAfter time.Duration, now time.Time) string {
+	if hst.LastHeartbeatAt == nil {
+		return models.HostStatusOffline
+	}
+	age := now.Sub(*hst.LastHeartbeatAt)
+	switch {
+	case age <= staleAfter:
+		return models.HostStatusOnline
+	case age <= offlineAfter:
+		return models.HostStatusStale
+	default:
+		return models.HostStatusOffline
+	}
+}
+
+// hostTrust decides whether a host's observed state can be believed. It splits
+// LIVENESS (online/stale/offline, from the heartbeat) from LIFECYCLE (draining,
+// operator intent): only liveness + docker/scan health gate trust. A host that
+// is draining but still online with a successful scan IS trusted — its real
+// drift must be diagnosed, not hidden behind a blanket "unreachable".
+func hostTrust(hst models.Host, facts hostObsFacts, staleAfter, offlineAfter time.Duration, now time.Time) trustResult {
+	draining := hst.Status == models.HostStatusDraining
 	// A host that never sent a heartbeat has no observation to trust — even the
 	// synapse self-host (which reads "online") hasn't reported containers.
 	if hst.LastHeartbeatAt == nil {
-		return trustResult{false, eff, "no agent has reported observed state for this host yet", models.SeverityWarning}
+		return trustResult{false, models.HostStatusOffline, "no agent has reported observed state for this host yet", models.SeverityWarning, draining}
 	}
-	switch eff {
-	case models.HostStatusOnline:
-		if dockerAvailable != nil && !*dockerAvailable {
-			return trustResult{false, eff, "docker daemon is unavailable on this host", models.SeverityWarning}
-		}
-		return trustResult{true, eff, "", models.SeverityInfo}
+	switch liveness(hst, staleAfter, offlineAfter, now) {
 	case models.HostStatusStale:
-		return trustResult{false, eff, "host agent heartbeat is stale", models.SeverityWarning}
-	case models.HostStatusDraining:
-		return trustResult{false, eff, "host is draining", models.SeverityWarning}
+		return trustResult{false, models.HostStatusStale, "host agent heartbeat is stale", models.SeverityWarning, draining}
 	case models.HostStatusOffline:
-		return trustResult{false, eff, "host agent is offline", models.SeverityCritical}
-	default:
-		return trustResult{false, eff, "host status is unknown", models.SeverityWarning}
+		return trustResult{false, models.HostStatusOffline, "host agent is offline", models.SeverityCritical, draining}
 	}
+	// Online liveness — but the container observation is only trustworthy if
+	// docker is up AND the agent's scan succeeded and was complete.
+	if facts.dockerAvailable != nil && !*facts.dockerAvailable {
+		return trustResult{false, models.HostStatusOnline, "docker daemon is unavailable on this host", models.SeverityWarning, draining}
+	}
+	if facts.scanDegraded() {
+		return trustResult{false, models.HostStatusOnline, "container scan failed or was incomplete; observation can't be trusted", models.SeverityWarning, draining}
+	}
+	return trustResult{true, models.HostStatusOnline, "", models.SeverityInfo, draining}
 }
 
 // driftItem builds a DriftItem with a redacted diff.
@@ -987,15 +1044,19 @@ func loadHostsByID(ctx context.Context, pool *pgxpool.Pool, ids []string) (map[s
 	return out, rows.Err()
 }
 
-// loadHostDockerAvailable reads the latest host_facts dockerAvailable per host.
-// Absent host_facts → no entry (nil → "unknown", not "false").
-func loadHostDockerAvailable(ctx context.Context, pool *pgxpool.Pool, ids []string) (map[string]*bool, error) {
-	out := map[string]*bool{}
+// loadHostFacts reads the latest host_facts dockerAvailable + container-scan
+// outcome per host (9b.5). Absent fields → nil ("unknown", not "false") so a
+// legacy agent or a host with no host_facts row isn't penalised.
+func loadHostFacts(ctx context.Context, pool *pgxpool.Pool, ids []string) (map[string]hostObsFacts, error) {
+	out := map[string]hostObsFacts{}
 	if len(ids) == 0 {
 		return out, nil
 	}
 	rows, err := pool.Query(ctx, `
-		SELECT host_id::text, observed_json->>'dockerAvailable'
+		SELECT host_id::text,
+		       observed_json->>'dockerAvailable',
+		       observed_json->'containerScan'->>'succeeded',
+		       observed_json->'containerScan'->>'complete'
 		  FROM observed_states
 		 WHERE resource_type = $1 AND host_id::text = ANY($2::text[])
 	`, models.ResourceTypeHostFacts, ids)
@@ -1005,22 +1066,35 @@ func loadHostDockerAvailable(ctx context.Context, pool *pgxpool.Pool, ids []stri
 	defer rows.Close()
 	for rows.Next() {
 		var hostID string
-		var avail *string
-		if err := rows.Scan(&hostID, &avail); err != nil {
+		var dockerAvail, scanOK, scanDone *string
+		if err := rows.Scan(&hostID, &dockerAvail, &scanOK, &scanDone); err != nil {
 			return nil, err
 		}
-		switch {
-		case avail == nil:
-			out[hostID] = nil
-		case *avail == "true":
-			b := true
-			out[hostID] = &b
-		case *avail == "false":
-			b := false
-			out[hostID] = &b
+		out[hostID] = hostObsFacts{
+			dockerAvailable: parseBoolText(dockerAvail),
+			scanSucceeded:   parseBoolText(scanOK),
+			scanComplete:    parseBoolText(scanDone),
 		}
 	}
 	return out, rows.Err()
+}
+
+// parseBoolText maps a JSON text value ("true"/"false"/NULL) to *bool, nil for
+// anything else (unknown).
+func parseBoolText(s *string) *bool {
+	if s == nil {
+		return nil
+	}
+	switch *s {
+	case "true":
+		b := true
+		return &b
+	case "false":
+		b := false
+		return &b
+	default:
+		return nil
+	}
 }
 
 func loadDeploymentExistence(ctx context.Context, pool *pgxpool.Pool, ids []string) (map[string]bool, error) {

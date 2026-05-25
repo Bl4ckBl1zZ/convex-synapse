@@ -13,9 +13,20 @@ import (
 // observedPayload is the SAFE subset the agent reports in heartbeat.observed.
 // No env vars, no full command, no tokens — see the agent's buildObserved.
 type observedPayload struct {
-	DockerAvailable bool                `json:"dockerAvailable"`
-	DockerVersion   string              `json:"dockerVersion"`
-	Containers      []observedContainer `json:"containers"`
+	DockerAvailable bool                  `json:"dockerAvailable"`
+	DockerVersion   string                `json:"dockerVersion"`
+	Containers      []observedContainer   `json:"containers"`
+	ContainerScan   *containerScanPayload `json:"containerScan,omitempty"`
+}
+
+// containerScanPayload tells us whether the agent's `docker ps -a` actually
+// succeeded (9b.5). Pruning + drift trust it instead of guessing from an empty
+// container list — a failed scan must never be read as "everything vanished".
+type containerScanPayload struct {
+	Attempted bool   `json:"attempted"`
+	Succeeded bool   `json:"succeeded"`
+	Complete  bool   `json:"complete"`
+	Error     string `json:"error,omitempty"`
 }
 
 type observedContainer struct {
@@ -39,13 +50,22 @@ func recordObservedStates(ctx context.Context, pool *pgxpool.Pool, hostID string
 		_ = json.Unmarshal(req.Observed, &p)
 	}
 
-	// host_facts.
+	scanSucceeded, scanComplete, scanErr := resolveContainerScan(p)
+
+	// host_facts — includes the container-scan outcome so the Drift Engine can
+	// decide whether the observed container set can be trusted.
 	facts := map[string]any{
 		"hostname":        req.Hostname,
 		"os":              req.OS,
 		"arch":            req.Arch,
 		"dockerAvailable": p.DockerAvailable,
 		"dockerVersion":   p.DockerVersion,
+		"containerScan": map[string]any{
+			"attempted": true,
+			"succeeded": scanSucceeded,
+			"complete":  scanComplete,
+			"error":     nullStr(scanErr),
+		},
 	}
 	if req.CPUCores != nil {
 		facts["cpuCores"] = *req.CPUCores
@@ -91,16 +111,31 @@ func recordObservedStates(ctx context.Context, pool *pgxpool.Pool, hostID string
 
 	// Prune vanished containers so observed_states mirrors the latest snapshot
 	// instead of accumulating ghost rows (a removed container must read as
-	// "missing" in drift, not a stale state=running forever). ONLY when docker
-	// is available: if the daemon is unreachable the agent reports an empty
-	// list, and deleting everything during an outage would manufacture false
-	// "missing" drift. host_facts is never pruned.
-	if p.DockerAvailable {
+	// "missing" in drift, not a stale state=running forever). ONLY when the
+	// agent's scan actually SUCCEEDED and was COMPLETE (9b.5): a failed or
+	// docker-unavailable scan reports an empty list, and deleting everything
+	// then would manufacture false "missing" drift during a transient outage.
+	// host_facts is never pruned.
+	if scanSucceeded && scanComplete {
 		if err := pruneObservedContainers(ctx, pool, hostID, seenKeys); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// resolveContainerScan derives the scan outcome. A 9b.5+ agent sends an
+// explicit containerScan; a legacy agent (pre-9b.5) doesn't, so we fall back to
+// dockerAvailable (its old, coarser signal) — succeeded+complete only when
+// docker was up, matching the original Bloco 9b pruning behaviour.
+func resolveContainerScan(p observedPayload) (succeeded, complete bool, errCode string) {
+	if p.ContainerScan != nil {
+		return p.ContainerScan.Succeeded, p.ContainerScan.Complete, p.ContainerScan.Error
+	}
+	if p.DockerAvailable {
+		return true, true, ""
+	}
+	return false, false, "docker_unavailable"
 }
 
 // pruneObservedContainers deletes the host's docker_container observed rows
