@@ -673,3 +673,36 @@ func TestProjects_EnvVars_MembersAllowed_ViewersBlocked(t *testing.T) {
 		"/v1/projects/"+proj.ID+"/list_default_environment_variables",
 		member.AccessToken, nil, http.StatusOK, &listResp{})
 }
+
+// Deleting a project must tear down the container of every managed deployment
+// in it — the cascade removes the rows, so without an explicit Destroy the
+// containers would be orphaned and keep squatting their host ports.
+func TestDeleteProject_TearsDownDeploymentContainers(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Teardown Team")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "teardown-proj")
+	h.SeedDeployment(proj.ID, "happy-otter-1111", "dev", "running", true, owner.ID, 3210, "")
+	h.SeedDeployment(proj.ID, "brave-lynx-2222", "prod", "running", false, owner.ID, 3211, "")
+
+	h.Docker.Destroyed = nil
+	h.DoJSON(http.MethodPost, "/v1/projects/"+proj.ID+"/delete", owner.AccessToken, map[string]any{}, http.StatusOK, &map[string]string{})
+
+	got := map[string]bool{}
+	for _, n := range h.Docker.DestroyedNames() {
+		got[n] = true
+	}
+	for _, name := range []string{"happy-otter-1111", "brave-lynx-2222"} {
+		if !got[name] {
+			t.Errorf("deleteProject must destroy the container for %q (Destroyed=%v)", name, h.Docker.DestroyedNames())
+		}
+	}
+
+	var n int
+	if err := h.DB.QueryRow(h.rootCtx, `SELECT count(*) FROM projects WHERE id::text = $1`, proj.ID).Scan(&n); err != nil {
+		t.Fatalf("count project: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("project should be deleted, %d remain", n)
+	}
+}

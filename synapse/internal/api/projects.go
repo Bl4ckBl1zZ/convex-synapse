@@ -613,9 +613,56 @@ func (h *ProjectsHandler) deleteProject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// CASCADE removes deployments + env vars + deploy_keys. The provisioner
-	// is responsible for tearing down running containers (via async janitor
-	// or a future explicit hook); for v0 we mark deployments deleted first.
+	// Tear down the container of every managed deployment in the project FIRST.
+	// Deleting the project cascade-removes the deployment rows, so without this
+	// the containers would be orphaned — left running, squatting their host
+	// ports, invisible to the port allocator (which reads the DB). Adopted
+	// deployments have no Synapse-managed container; provisioning ones are left
+	// to the provisioner, which tears down whatever it built once it sees the
+	// row marked deleted below. Destroy is idempotent.
+	rows, err := h.DB.Query(r.Context(),
+		`SELECT name, adopted, status FROM deployments WHERE project_id = $1 AND status <> 'deleted'`, p.ID)
+	if err != nil {
+		logErr("list project deployments for teardown", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to delete project")
+		return
+	}
+	type projDep struct {
+		name, status string
+		adopted      bool
+	}
+	var deps []projDep
+	for rows.Next() {
+		var d projDep
+		if err := rows.Scan(&d.name, &d.adopted, &d.status); err != nil {
+			rows.Close()
+			logErr("scan project deployment", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to delete project")
+			return
+		}
+		deps = append(deps, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		logErr("iterate project deployments", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to delete project")
+		return
+	}
+	for _, d := range deps {
+		if d.adopted || d.status == models.DeploymentStatusProvisioning {
+			continue
+		}
+		if destroyErr := h.Deployments.Docker.Destroy(r.Context(), d.name); destroyErr != nil {
+			logErr("destroy container on project delete", destroyErr)
+			writeError(w, http.StatusInternalServerError, "destroy_failed",
+				"Could not tear down deployment "+d.name+"; resolve it and retry")
+			return
+		}
+	}
+
+	// CASCADE removes the deployment rows + env vars + deploy_keys. Containers
+	// were torn down above; we mark the rows deleted first so a provisioning
+	// goroutine still in flight tears down whatever it built.
 	tx, err := h.DB.Begin(r.Context())
 	if err != nil {
 		logErr("tx begin", err)
