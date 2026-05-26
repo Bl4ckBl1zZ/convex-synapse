@@ -148,6 +148,71 @@ Endpoints at both `/v1/me/*` and at the top-level `/v1/*`. The `/v1/profile/*` a
 | `POST /v1/deployments/{name}/domains/{domainID}/verify` | member+ | Re-run preflight |
 | `POST /v1/deployments/{name}/domains/{domainID}/auto_configure` | member+ | `{credentialId?}` — UPSERT A record via stored credential |
 
+## Cell Control Plane
+
+The [Cell Control Plane](/docs/en/cell-control-plane) endpoints — diagnose / plan / manage metadata only. None apply changes to a host: every drift plan carries `applyAllowed=false`, and `apply:true` in a reconcile body returns `400 apply_not_supported`.
+
+### Hosts & agents
+
+| Method + Path | Auth | Description |
+|---|---|---|
+| `GET /v1/hosts` | instance-admin | List hosts (each with a computed `effectiveStatus`) |
+| `POST /v1/hosts` | instance-admin | Register a host (metadata only). `{name, region?, labels?}` |
+| `GET /v1/hosts/{id}` | instance-admin | Show a host |
+| `POST /v1/hosts/{id}/drain` | instance-admin | Mark draining (operator intent) |
+| `POST /v1/hosts/{id}/adoption_token` | instance-admin | Mint a single-use adoption token. `{name?, ttlSeconds?}` → `{token, joinCommand, …}` (token shown once) |
+| `GET /v1/hosts/{id}/agents` | instance-admin | List agents registered on the host |
+| `POST /v1/host_agents/{id}/revoke` · `/rotate_token` | instance-admin | Revoke / rotate an agent token |
+
+**Agent-facing** (public paths, authenticated by the agent/adoption token, not a user):
+
+| Method + Path | Auth | Description |
+|---|---|---|
+| `POST /v1/agents/register` | adoption token (single-use) | Register an agent for a host; returns the agent token + heartbeat interval |
+| `POST /v1/agents/heartbeat` | agent token | Report liveness + observed containers + `containerScan`. Host id comes from the token, not the body |
+| `GET /v1/agents/desired_state` | agent token | Host-scoped desired state; always `applyAllowed=false` |
+
+### Cells
+
+| Method + Path | Auth | Description |
+|---|---|---|
+| `GET /v1/projects/{id}/cells` | member+ | List cells |
+| `POST /v1/projects/{id}/cells` | project admin | Create a cell. `{name, kind}` |
+| `POST /v1/cells/{id}/drain` | project admin | Mark draining |
+| `POST /v1/cells/{id}/attach_deployment` | project admin | `{deploymentName}` → creates a placement |
+| `POST /v1/cells/{id}/attach_host` | project admin | `{hostId}` → set the cell's primary host |
+| `GET /v1/cells/{id}/resources` | member+ | List the cell's resources |
+
+### Cell links & service tokens
+
+| Method + Path | Auth | Description |
+|---|---|---|
+| `GET /v1/projects/{id}/cell_links` | member+ | List links |
+| `POST /v1/projects/{id}/cell_links` | project admin | Create a link. Intra-project only; one active per `(source, target, protocol)` |
+| `GET /v1/cell_links/{id}` · `PATCH …` | member+ / admin | Get / update a link |
+| `POST /v1/cell_links/{id}/service_tokens` | project admin | Mint a service token (`syn_svc_…`, shown once) — only when `authMode=service_token` |
+| `POST /v1/service_tokens/{id}/revoke` | project admin | Revoke a service token |
+| `GET /v1/internal/cell_links/discovery` | **service token** (`syn_svc_`) | Public discovery: returns only the token's own link; rejects revoked/expired |
+
+### Topology
+
+| Method + Path | Auth | Description |
+|---|---|---|
+| `GET /v1/projects/{id}/cell_topology` | member+ | Host → Cell → Deployment map + link edges + read-only warnings. Synthetic fallback when no cells exist |
+
+### State & drift
+
+Scope each by `projects/{id}`, `cells/{id}`, or `hosts/{id}`. Host scope is instance-admin; project/cell use project RBAC (`recompute` / `dry_run` need admin, reads are member+).
+
+| Method + Path | Auth | Description |
+|---|---|---|
+| `POST /v1/projects/{id}/desired_state/sync_from_placements` | project admin | Build desired state from placements; records an operation run |
+| `GET` · `POST /v1/projects/{id}/desired_state` | member+ / admin | List / set desired state |
+| `POST /v1/{scope}/drift/recompute` | admin / instance-admin | Recompute drift; writes a report |
+| `GET /v1/{scope}/drift/latest` | member+ / instance-admin | Read the most recent report |
+| `POST /v1/{scope}/reconcile/dry_run` | admin / instance-admin | The planned (never executed) steps. `apply:true` → `400 apply_not_supported` |
+| `GET /v1/projects/{id}/operation_runs` · `GET /v1/operation_runs/{id}` | member+ | Operation run history + detail |
+
 ## Audit log
 
 `GET /v1/teams/{ref}/audit_log` — admin only. Members → `403 forbidden`. Keyset pagination on `(created_at DESC, id DESC)`. No export endpoint, no retention configuration. Operators wanting long-term retention snapshot `audit_events` via Postgres.
