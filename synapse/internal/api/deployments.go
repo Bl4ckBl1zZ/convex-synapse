@@ -222,6 +222,8 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 
 	spec := dockerprov.DeploymentSpec{
 		Name:                  deploymentName,
+		DeploymentID:          deploymentID,
+		ProjectID:             projectID,
 		InstanceSecret:        instanceSecret,
 		HostPort:              *hostPort,
 		EnvVars:               envVars,
@@ -330,9 +332,16 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 		HostPort: primaryReplicaPort,
 	}, h.lookupActiveAPIDomain(ctx, deploymentID))
 
+	// Project id for the synapse.project_id container label (best-effort; the
+	// synapse.deployment_id label is the one drift correlates on).
+	var projectID string
+	_ = h.DB.QueryRow(ctx, `SELECT project_id::text FROM deployments WHERE id = $1`, deploymentID).Scan(&projectID)
+
 	for _, r := range replicas {
 		spec := dockerprov.DeploymentSpec{
 			Name:                  deploymentName,
+			DeploymentID:          deploymentID,
+			ProjectID:             projectID,
 			InstanceSecret:        instanceSecret,
 			HostPort:              *r.hostPort,
 			EnvVars:               envVars,
@@ -493,17 +502,17 @@ func postgresURLRequiresSSL(url string) bool {
 //   - PublicURL set, ProxyEnabled false→ "<PublicURL>:<host_port>"
 //
 // The custom-domain branch matters for two reasons:
-//   1. Brand: operators who registered `api.<client>.com` (role=api,
-//      status=active) intend that URL to be THE public face of the
-//      deployment. The dashboard's deployment row should display it,
-//      "Copy URL" should copy it, the iframe's Convex Dashboard
-//      should call it for queries/mutations/files — everything.
-//   2. Consistency with cliDeploymentURL: that helper already picks
-//      the custom domain since v1.6.3. Pre-v1.6.13 the dashboard UI
-//      (publicDeploymentURL) and the CLI (cliDeploymentURL) returned
-//      DIFFERENT URLs for the same deployment, which surprised
-//      operators who copied one place and pasted into another. They
-//      now agree.
+//  1. Brand: operators who registered `api.<client>.com` (role=api,
+//     status=active) intend that URL to be THE public face of the
+//     deployment. The dashboard's deployment row should display it,
+//     "Copy URL" should copy it, the iframe's Convex Dashboard
+//     should call it for queries/mutations/files — everything.
+//  2. Consistency with cliDeploymentURL: that helper already picks
+//     the custom domain since v1.6.3. Pre-v1.6.13 the dashboard UI
+//     (publicDeploymentURL) and the CLI (cliDeploymentURL) returned
+//     DIFFERENT URLs for the same deployment, which surprised
+//     operators who copied one place and pasted into another. They
+//     now agree.
 //
 // BaseDomain still wins over the path-based shape when no custom
 // domain is configured: if the operator took the trouble to wire
@@ -538,12 +547,12 @@ func (h *DeploymentsHandler) urlComputer() deploymenturl.Computer {
 // Decision matrix (first match wins):
 //   - Adopted                    → d.DeploymentURL (operator-supplied)
 //   - active custom domain api   → "https://<custom_domain>" (preferred — no port,
-//                                  Caddy handles TLS, CLI-OK)
+//     Caddy handles TLS, CLI-OK)
 //   - BaseDomain set             → "https://<name>.<BaseDomain>" (CLI-OK)
 //   - PublicURL set + HostPort>0 → "<PublicURL_host>:<HostPort>" (CLI-OK,
-//                                  needs the dynamic host port reachable
-//                                  from outside — Hetzner default-deny
-//                                  would block it)
+//     needs the dynamic host port reachable
+//     from outside — Hetzner default-deny
+//     would block it)
 //   - everything else            → d.DeploymentURL fallback
 //
 // The custom-domain branch matters most when the operator runs Synapse
@@ -1950,6 +1959,38 @@ func (h *DeploymentsHandler) upgradeToHA(w http.ResponseWriter, r *http.Request)
 
 // ---------- POST /v1/deployments/{name}/delete ----------
 
+// cleanupDeploymentCellState removes the Cell Control Plane footprint of a
+// now-deleted deployment: it supersedes the active desired state, drops the
+// placement, unlinks the cell_resource, and clears any cell.primary_deployment_id
+// pointer — so the deployment stops showing as a ghost in cells / topology /
+// drift. Best-effort — a hiccup here must never fail the user's delete (the
+// drift engine treats a deleted deployment as orphaned regardless, so a leftover
+// desired row is classified correctly, never recreated). The cell row itself is
+// left in place: an empty cell is harmless and may be reused. resource_id is
+// text; deployment_id / primary_deployment_id are uuid (hence ::text).
+func (h *DeploymentsHandler) cleanupDeploymentCellState(ctx context.Context, deploymentID string) {
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE desired_states SET status = 'superseded', updated_at = now()
+		 WHERE resource_type = 'convex_deployment' AND resource_id = $1 AND status = 'active'
+	`, deploymentID); err != nil {
+		logErr("cleanup desired_state on delete", err)
+	}
+	if _, err := h.DB.Exec(ctx, `DELETE FROM deployment_placements WHERE deployment_id::text = $1`, deploymentID); err != nil {
+		logErr("cleanup placement on delete", err)
+	}
+	if _, err := h.DB.Exec(ctx, `
+		DELETE FROM cell_resources WHERE resource_type = 'convex_deployment' AND resource_id = $1
+	`, deploymentID); err != nil {
+		logErr("cleanup cell_resource on delete", err)
+	}
+	// A backfilled core cell points its primary_deployment_id at the deployment;
+	// the FK is ON DELETE SET NULL, but a soft delete (status='deleted') doesn't
+	// fire it, so clear it explicitly or the cell keeps showing the dead dep.
+	if _, err := h.DB.Exec(ctx, `UPDATE cells SET primary_deployment_id = NULL, updated_at = now() WHERE primary_deployment_id::text = $1`, deploymentID); err != nil {
+		logErr("cleanup cell primary_deployment_id on delete", err)
+	}
+}
+
 func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Request) {
 	d, _, t, role, ok := h.loadDeploymentForRequest(w, r)
 	if !ok {
@@ -1976,6 +2017,7 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusInternalServerError, "internal", "Database error")
 			return
 		}
+		h.cleanupDeploymentCellState(r.Context(), d.ID)
 		uid, _ := auth.UserID(r.Context())
 		_ = audit.Record(r.Context(), h.DB, audit.Options{
 			TeamID:     t.ID,
@@ -2015,6 +2057,7 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "internal", "Container removed but DB update failed")
 		return
 	}
+	h.cleanupDeploymentCellState(r.Context(), d.ID)
 
 	uid, _ := auth.UserID(r.Context())
 	_ = audit.Record(r.Context(), h.DB, audit.Options{
@@ -2482,6 +2525,8 @@ func (h *DeploymentsHandler) revokeDeployKey(w http.ResponseWriter, r *http.Requ
 
 	spec := dockerprov.DeploymentSpec{
 		Name:                  d.Name,
+		DeploymentID:          d.ID,
+		ProjectID:             d.ProjectID,
 		InstanceSecret:        newSecret,
 		HostPort:              d.HostPort,
 		EnvVars:               envVars,

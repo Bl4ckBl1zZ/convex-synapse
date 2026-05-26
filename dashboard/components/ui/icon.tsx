@@ -63,3 +63,36 @@ export function IconGlobe(props: Props) {
     </Svg>
   );
 }
+
+// Server — hosts panel (a VPS / machine).
+export function IconServer(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="2" y="3" width="20" height="8" rx="2" />
+      <rect x="2" y="13" width="20" height="8" rx="2" />
+      <line x1="6" y1="7" x2="6.01" y2="7" />
+      <line x1="6" y1="17" x2="6.01" y2="17" />
+    </Svg>
+  );
+}
+
+// Layers — cells panel (operational units stacked within a project).
+export function IconLayers(props: Props) {
+  return (
+    <Svg {...props}>
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
+    </Svg>
+  );
+}
+
+// Link — cell links panel (service-to-service contracts between cells).
+export function IconLink(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </Svg>
+  );
+}

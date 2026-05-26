@@ -138,6 +138,18 @@ type RouterDeps struct {
 	// a deterministic stub so they don't burn outbound calls + so
 	// CI stays offline-friendly.
 	GeoResolver geo.Resolver
+
+	// AgentStaleAfter / AgentOfflineAfter (Bloco 6.5) tune the computed host
+	// effectiveStatus. Zero → HostsHandler defaults (60s / 300s), which is
+	// what the test harness uses.
+	AgentStaleAfter   time.Duration
+	AgentOfflineAfter time.Duration
+
+	// Bloco 9 — desired/observed state. Default true in the harness (zero
+	// value false there, so the harness opts in explicitly if needed). Apply
+	// is never enabled in this block.
+	EnableDesiredState  bool
+	EnableObservedState bool
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -258,6 +270,65 @@ func NewRouter(d RouterDeps) http.Handler {
 	activityH := &ActivityHandler{DB: d.DB, Projects: projectsH}
 	projectsH.Activity = activityH
 
+	// Cell Control Plane (feat/cell-control-plane). Cells are project-scoped
+	// and reuse loadProjectForRequest via the same Projects-reference pattern
+	// TopologyHandler uses. Hosts are instance-level (their own
+	// instance-admin gate). Both route surfaces are always mounted — they're
+	// additive + auth-gated; the SYNAPSE_ENABLE_CELLS flag only governs the
+	// startup backfill in cmd/server, not API availability.
+	cellsH := &CellsHandler{DB: d.DB, Projects: projectsH}
+	projectsH.Cells = cellsH
+	// Cell links + service tokens (Bloco 7). Project-scoped create/list reuse
+	// loadProjectForRequest via Projects; discovery is mounted publicly below.
+	cellLinksH := &CellLinksHandler{DB: d.DB, Projects: projectsH}
+	projectsH.CellLinks = cellLinksH
+	// Bloco 8: real Cell Control Plane topology. Shares the host-liveness
+	// thresholds with HostsHandler.
+	cellTopologyH := &CellTopologyHandler{
+		DB:           d.DB,
+		Projects:     projectsH,
+		StaleAfter:   d.AgentStaleAfter,
+		OfflineAfter: d.AgentOfflineAfter,
+	}
+	projectsH.CellTopology = cellTopologyH
+	// Bloco 9 — desired state + operation runs.
+	desiredStateH := &DesiredStateHandler{DB: d.DB, Projects: projectsH}
+	projectsH.DesiredState = desiredStateH
+	operationsH := &OperationsHandler{DB: d.DB, Projects: projectsH}
+	projectsH.Operations = operationsH
+	hostsH := &HostsHandler{
+		DB:           d.DB,
+		PublicURL:    d.PublicURL,
+		StaleAfter:   d.AgentStaleAfter,
+		OfflineAfter: d.AgentOfflineAfter,
+	}
+	// Bloco 9b — Drift Engine + dry-run planner. Shares the host-liveness
+	// thresholds (they decide whether observed state can be trusted) and reuses
+	// the project / cell / host load+RBAC helpers via the references below.
+	// Routes are mounted on each scope's handler (instance-admin for host,
+	// project-RBAC for cell/project). Compares + plans only; never applies.
+	driftH := &DriftHandler{
+		DB:           d.DB,
+		Projects:     projectsH,
+		Cells:        cellsH,
+		Hosts:        hostsH,
+		StaleAfter:   d.AgentStaleAfter,
+		OfflineAfter: d.AgentOfflineAfter,
+	}
+	projectsH.Drift = driftH
+	cellsH.Drift = driftH
+	hostsH.Drift = driftH
+	// Agent contact points (feat/cell-control-plane, Bloco 6). Public —
+	// register authenticates with the adoption token in the body, heartbeat
+	// + desired_state with the agent bearer token. Mounted in the public
+	// group below (NOT under the JWT Authenticator).
+	agentsH := &AgentsHandler{
+		DB:                  d.DB,
+		PublicURL:           d.PublicURL,
+		EnableObservedState: d.EnableObservedState,
+		EnableDesiredState:  d.EnableDesiredState,
+	}
+
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"name": "synapse", "api": "v1"})
@@ -305,6 +376,17 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Method(http.MethodGet, "/dns_provider", &DNSProviderHandler{Lookup: d.DNSProviderLookup})
 		})
 
+		// synapse-agent contact points (feat/cell-control-plane, Bloco 6).
+		// Public group: register uses a single-use adoption token in the
+		// body; heartbeat + desired_state use the agent bearer token
+		// (looked up in host_agents, never access_tokens).
+		r.Mount("/agents", agentsH.Routes())
+
+		// Cell-link discovery (Bloco 7). Public — authenticated by a syn_svc_
+		// service-token bearer (looked up in service_tokens, never
+		// access_tokens). Returns the active links from the token's source cell.
+		r.Get("/internal/cell_links/discovery", cellLinksH.Discovery)
+
 		// Authenticated.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Authenticator(d.JWT, d.DB))
@@ -315,6 +397,21 @@ func NewRouter(d RouterDeps) http.Handler {
 			r.Mount("/projects", projectsH.Routes())
 			r.Mount("/deployments", deploymentsH.Routes())
 			r.Mount("/team_invites", invitesH.Routes())
+			// Cell Control Plane (feat/cell-control-plane). /hosts is
+			// instance-admin gated inside its own Routes(); /cells is
+			// project-RBAC gated per cell.
+			r.Mount("/hosts", hostsH.Routes())
+			// /v1/host_agents — instance-admin agent lifecycle (revoke /
+			// rotate_token). Same gate as /hosts; separate prefix.
+			r.Mount("/host_agents", hostsH.AgentAdminRoutes())
+			r.Mount("/cells", cellsH.Routes())
+			// Cell links + service tokens (Bloco 7). Project-RBAC gated per
+			// link (loadCellLinkForRequest); discovery is the public route above.
+			r.Mount("/cell_links", cellLinksH.Routes())
+			r.Mount("/service_tokens", cellLinksH.ServiceTokenRoutes())
+			// Bloco 9 — operation run detail (read). Project-scoped list is
+			// mounted under /v1/projects/{id}/operation_runs.
+			r.Mount("/operation_runs", operationsH.Routes())
 			// /v1/admin — instance-level operations (version check + auto-
 			// upgrade). The handler's own middleware gates each route to
 			// users.is_instance_admin; we mount inside the authenticated group

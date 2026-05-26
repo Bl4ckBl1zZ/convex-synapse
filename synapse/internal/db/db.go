@@ -4,6 +4,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,7 +16,13 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
-	cfg.MaxConns = 20
+	// Default pool size is 20 for production. An explicit `pool_max_conns` in
+	// the DSN wins (ParseConfig already applied it) — the integration-test
+	// harness sets a small value so dozens of parallel per-test pools don't
+	// exhaust postgres max_connections.
+	if !strings.Contains(dsn, "pool_max_conns") {
+		cfg.MaxConns = 20
+	}
 	cfg.MinConns = 2
 	cfg.MaxConnLifetime = time.Hour
 	cfg.MaxConnIdleTime = 30 * time.Minute

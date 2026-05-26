@@ -36,17 +36,28 @@ function buildRegistry() {
     if (file.startsWith("_")) continue; // dispatcher.js, context.js, etc
     if (file === "index.js") continue;
     const mod = require(path.join(dir, file));
-    if (!mod || typeof mod.name !== "string" || typeof mod.run !== "function") {
-      throw new Error(
-        `commands/${file} does not export the { name, run } shape`,
-      );
+    // A module exports either ONE command ({ name, run }) or, for a related
+    // family (e.g. the Cell Control Plane group), an ARRAY of commands — or
+    // `{ commands: [...] }`. This keeps a 30-command family in ~6 files instead
+    // of 30 one-liners, without a nested switch.
+    const commands = Array.isArray(mod)
+      ? mod
+      : Array.isArray(mod && mod.commands)
+        ? mod.commands
+        : [mod];
+    for (const cmd of commands) {
+      if (!cmd || typeof cmd.name !== "string" || typeof cmd.run !== "function") {
+        throw new Error(
+          `commands/${file} does not export the { name, run } shape`,
+        );
+      }
+      if (map.has(cmd.name)) {
+        throw new Error(
+          `Duplicate command registered: ${cmd.name} (in ${file})`,
+        );
+      }
+      map.set(cmd.name, cmd);
     }
-    if (map.has(mod.name)) {
-      throw new Error(
-        `Duplicate command registered: ${mod.name} (in ${file})`,
-      );
-    }
-    map.set(mod.name, mod);
   }
   return map;
 }

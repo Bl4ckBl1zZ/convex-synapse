@@ -18,6 +18,7 @@ import (
 
 	"github.com/Iann29/synapse/internal/api"
 	"github.com/Iann29/synapse/internal/auth"
+	"github.com/Iann29/synapse/internal/cells"
 	"github.com/Iann29/synapse/internal/config"
 	"github.com/Iann29/synapse/internal/crypto"
 	"github.com/Iann29/synapse/internal/db"
@@ -166,6 +167,16 @@ func run() error {
 		logger.Error("orphan sweep failed", "err", err)
 	}
 
+	// Cell Control Plane backfill (feat/cell-control-plane). Turns existing
+	// deployments into core Cells + placements so the new Cells view has data
+	// on first boot. Idempotent + advisory-locked + best-effort: a failure
+	// here must never block the server from serving existing deployments.
+	if cfg.EnableCells {
+		if err := backfillCells(rootCtx, pool, cfg, logger); err != nil {
+			logger.Error("cell backfill failed", "err", err)
+		}
+	}
+
 	jwtIssuer := auth.NewJWTIssuer(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 
 	dockerClient, err := dockerprov.NewClient(cfg.DockerHost, cfg.BackendImage, cfg.DockerNetwork, logger)
@@ -257,12 +268,16 @@ func run() error {
 			BackendS3SecretKey:  cfg.BackendS3SecretKey,
 			BackendBucketPrefix: cfg.BackendS3BucketPrefix,
 		},
-		Crypto:       deploymentsCrypto,
-		UpdaterURL:   cfg.UpdaterURL,
-		UpdaterToken: cfg.UpdaterToken,
-		GitHubRepo:   cfg.GitHubRepo,
-		PublicIP:     cfg.PublicIP,
-		DomainCache:  proxyResolver,
+		Crypto:              deploymentsCrypto,
+		UpdaterURL:          cfg.UpdaterURL,
+		UpdaterToken:        cfg.UpdaterToken,
+		GitHubRepo:          cfg.GitHubRepo,
+		PublicIP:            cfg.PublicIP,
+		DomainCache:         proxyResolver,
+		AgentStaleAfter:     cfg.AgentStaleAfter,
+		AgentOfflineAfter:   cfg.AgentOfflineAfter,
+		EnableDesiredState:  cfg.EnableDesiredState,
+		EnableObservedState: cfg.EnableObservedState,
 		// DNS-provider credentials reuse the same SecretBox as the HA
 		// deployment_storage flow — both encrypt operator-supplied
 		// secrets-at-rest. Literal-nil interface when SYNAPSE_STORAGE_KEY
@@ -513,4 +528,50 @@ func sweepOrphanedProvisioning(ctx context.Context, pool *pgxpool.Pool, logger *
 		logger.Debug("orphan sweep: another node holds the lock; skipping")
 	}
 	return nil
+}
+
+// backfillCells runs the Cell Control Plane backfill under an advisory lock so
+// exactly one node does the work when several boot at once. The backfill is
+// idempotent regardless; the lock just avoids redundant inserts + log noise.
+func backfillCells(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, logger *slog.Logger) error {
+	acquired, err := db.WithTryAdvisoryLock(ctx, pool, db.LockCellBackfill,
+		func(ctx context.Context) error {
+			res, err := cells.Backfill(ctx, pool, cells.BackfillOpts{
+				HostName: hostnameFromURL(cfg.PublicURL),
+				Region:   cfg.Region,
+				Provider: "self-hosted",
+				Logger:   logger,
+			})
+			if err != nil {
+				return err
+			}
+			logger.Info("cell backfill complete",
+				"host_id", res.HostID, "host_created", res.HostCreated,
+				"cells_created", res.CellsCreated, "cells_existing", res.CellsExisting)
+			return nil
+		})
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		logger.Debug("cell backfill: another node holds the lock; skipping")
+	}
+	return nil
+}
+
+// hostnameFromURL extracts the bare hostname from a URL like
+// "https://synapse.example.com/foo" → "synapse.example.com". Empty in →
+// empty out (the backfill then names the local host "current-host").
+func hostnameFromURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if i := strings.IndexAny(s, "/:"); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }

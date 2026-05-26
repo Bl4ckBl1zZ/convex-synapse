@@ -62,6 +62,15 @@ async function main(argv) {
 }
 
 if (require.main === module) {
+  // A consumer that closes the pipe early (`synapse <cmd> | head`, quitting a
+  // pager, etc.) makes stdout emit EPIPE. Without a listener Node turns that
+  // into an unhandled 'error' event + an ugly stack trace; treat it as a clean
+  // exit instead. Installed only when run as the CLI (not when required by
+  // tests) so the handler doesn't leak across the test process.
+  process.stdout.on("error", (err) => {
+    if (err && err.code === "EPIPE") process.exit(0);
+    throw err;
+  });
   main(process.argv.slice(2)).catch((err) => {
     process.stderr.write(`${err.message}\n`);
     if (err && err.code === "network_error") {

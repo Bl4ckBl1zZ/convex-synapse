@@ -1,0 +1,2 @@
+-- Reverse 000018.
+DROP TABLE IF EXISTS cells;

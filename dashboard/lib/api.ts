@@ -548,6 +548,463 @@ export type ListAuditLogResponse = {
   nextCursor?: string;
 };
 
+// ---- Cell Control Plane (feat/cell-control-plane) ----
+// Hosts are instance-level machines (VPSs); Cells are project-scoped
+// operational units; placements tie a deployment to a Cell + Host. These
+// mirror the Go models in synapse/internal/models/models.go.
+
+export type Host = {
+  id: string;
+  name: string;
+  provider: string;
+  region: string;
+  publicIp?: string;
+  privateIp?: string;
+  labels: Record<string, string>;
+  status: "online" | "offline" | "draining" | "unknown" | string;
+  // effectiveStatus (Bloco 6.5) is the honest, computed liveness — derived
+  // from lastHeartbeatAt + the stale/offline thresholds. Prefer it over
+  // `status` for display; adds "stale". May be absent on stubbed/older
+  // payloads, so callers fall back to `status`.
+  effectiveStatus?: "online" | "offline" | "stale" | "draining" | "unknown" | string;
+  agentVersion?: string;
+  dockerVersion?: string;
+  cpuCores?: number;
+  memoryMb?: number;
+  diskGb?: number;
+  // True for the single host the control plane itself runs on (the synthetic
+  // "primary" host the backfill creates). Agent-adopted VPSs are false.
+  isSynapseHost: boolean;
+  lastHeartbeatAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// HostAgent is the no-secrets view of an agent registered on a host
+// (GET /v1/hosts/{id}/agents). The observed summary never carries the raw
+// heartbeat payload.
+export type HostAgent = {
+  id: string;
+  hostId: string;
+  status: "pending" | "online" | "offline" | "revoked" | string;
+  connectionMode: string;
+  lastSeenAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  observed?: { dockerAvailable: boolean; managedContainerCount: number };
+};
+
+export type HostAgentsResponse = {
+  // agentVersion is a host-level fact (the running agent version).
+  agentVersion?: string;
+  items: HostAgent[];
+};
+
+export type CreateHostInput = {
+  name: string;
+  provider?: string;
+  region?: string;
+  publicIp?: string;
+  privateIp?: string;
+  labels?: Record<string, string>;
+};
+
+// Returned ONCE by POST /v1/hosts/{id}/adoption_token. `token` is the
+// plaintext join secret (never returned again — backend stores only the
+// hash); `joinCommand` is the ready-to-paste `synapse-agent join …` line.
+export type HostAdoptionToken = {
+  token: string;
+  id: string;
+  hostId: string;
+  name?: string;
+  expiresAt?: string;
+  joinCommand: string;
+};
+
+export type CellKind =
+  | "core"
+  | "runtime"
+  | "integration"
+  | "preview"
+  | "enterprise-app";
+export type CellEnvironment = "dev" | "staging" | "prod" | "preview";
+export type CellIsolationTier = "shared" | "premium" | "dedicated" | "internal";
+export type CellStatus =
+  | "active"
+  | "inactive"
+  | "draining"
+  | "migrating"
+  | "maintenance";
+
+export type Cell = {
+  id: string;
+  teamId: string;
+  projectId: string;
+  name: string;
+  slug: string;
+  kind: CellKind | string;
+  environment: CellEnvironment | string;
+  region: string;
+  isolationTier: CellIsolationTier | string;
+  status: CellStatus | string;
+  primaryDeploymentId?: string;
+  primaryHostId?: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateCellInput = {
+  name: string;
+  kind?: CellKind;
+  environment?: CellEnvironment;
+  region?: string;
+  isolationTier?: CellIsolationTier;
+  description?: string;
+};
+
+export type UpdateCellInput = {
+  name?: string;
+  description?: string;
+  status?: CellStatus;
+  region?: string;
+  isolationTier?: CellIsolationTier;
+};
+
+export type CellResource = {
+  id: string;
+  cellId: string;
+  resourceType: string;
+  resourceId: string;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DeploymentPlacement = {
+  id: string;
+  deploymentId: string;
+  cellId: string;
+  hostId?: string;
+  desiredStatus: string;
+  observedStatus: string;
+  dockerContainerId?: string;
+  internalPort?: number;
+  publicUrl?: string;
+  routeId?: string;
+  volumeRef?: string;
+  lastAppliedAt?: string;
+  lastObservedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CellResourcesResponse = {
+  resources: CellResource[];
+  placements: DeploymentPlacement[];
+};
+
+export type AttachDeploymentResult = {
+  cell: Cell;
+  placement: DeploymentPlacement;
+};
+
+// CellLink (Bloco 7) — a service-to-service contract between two Cells in the
+// same project. serviceTokenCount is computed (active tokens).
+export type CellLink = {
+  id: string;
+  teamId: string;
+  projectId: string;
+  sourceCellId: string;
+  targetCellId: string;
+  protocol: "http" | "convex_action" | "outbox" | "webhook" | "polling" | string;
+  authMode: "service_token" | "mtls" | "none" | string;
+  allowedCommands: string[];
+  allowedEvents: string[];
+  status: "active" | "disabled" | string;
+  serviceTokenCount: number;
+  // Computed best-effort reachable URL of the target cell (Bloco 7.5),
+  // resolved from an active custom domain or the deployment URL. Absent when
+  // nothing safe is known. endpointSource: "route" | "deployment".
+  endpoint?: string;
+  endpointSource?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateCellLinkInput = {
+  sourceCellId: string;
+  targetCellId: string;
+  protocol?: string;
+  authMode?: string;
+  allowedCommands?: string[];
+  allowedEvents?: string[];
+};
+
+// ---- Cell topology (Bloco 8) — the real Host → Cell → Deployment view. ----
+
+export type CellTopologyRoute = { domain: string; role: string; status: string };
+
+export type CellTopologyPlacement = {
+  hostId?: string;
+  cellId: string;
+  desiredStatus: string;
+  observedStatus: string;
+};
+
+export type CellTopologyDeployment = {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  url?: string;
+  adopted: boolean;
+  placement?: CellTopologyPlacement;
+  routes: CellTopologyRoute[];
+};
+
+export type CellTopologyLinkRef = {
+  id: string;
+  sourceCellId: string;
+  targetCellId: string;
+  protocol: string;
+  status: string;
+};
+
+export type CellTopologyCell = {
+  id: string;
+  name: string;
+  slug: string;
+  kind: string;
+  environment: string;
+  region: string;
+  isolationTier: string;
+  status: string;
+  primaryDeploymentId?: string;
+  primaryHostId?: string;
+  deployments: CellTopologyDeployment[];
+  routes: CellTopologyRoute[];
+  outgoingLinks: CellTopologyLinkRef[];
+  incomingLinks: CellTopologyLinkRef[];
+  warnings: string[];
+};
+
+export type CellTopologyHost = {
+  id: string;
+  name: string;
+  provider: string;
+  region: string;
+  publicIp?: string;
+  privateIp?: string;
+  status: string;
+  effectiveStatus: string;
+  isSynapseHost: boolean;
+  lastHeartbeatAt?: string;
+  agentCount: number;
+  agentsSummary: { online: number; offline: number; revoked: number };
+};
+
+export type CellTopologyLink = {
+  id: string;
+  sourceCellId: string;
+  targetCellId: string;
+  protocol: string;
+  authMode: string;
+  status: string;
+  allowedCommandsCount: number;
+  allowedEventsCount: number;
+  activeTokenCount: number;
+  hasEndpoint: boolean;
+  endpointSource?: string;
+};
+
+export type CellTopologyResponse = {
+  mode: "cell_control_plane" | "legacy_synthetic" | string;
+  project: { id: string; name: string; slug: string };
+  hosts: CellTopologyHost[];
+  cells: CellTopologyCell[];
+  unassignedDeployments: CellTopologyDeployment[];
+  links: CellTopologyLink[];
+  warnings: string[];
+};
+
+// ServiceToken — credential for a CellLink. `token` (syn_svc_…) is populated
+// ONLY on the create response.
+export type ServiceToken = {
+  id: string;
+  cellLinkId: string;
+  sourceCellId: string;
+  targetCellId: string;
+  name: string;
+  token?: string;
+  scopes: string[];
+  status: "active" | "revoked" | "expired" | string;
+  // effectiveStatus (Bloco 7.5): "expired" once past expiresAt even if the
+  // stored status is still "active". Prefer it for display.
+  effectiveStatus?: "active" | "revoked" | "expired" | string;
+  expiresAt?: string;
+  lastUsedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// ---- State, Drift & Operations (Bloco 9a / 9b / 9b.5) ----
+// The control plane COMPARES desired vs observed and PLANS — it never applies.
+// Every dry-run carries applyAllowed=false; the dashboard never sends apply:true.
+
+export type DesiredState = {
+  id: string;
+  teamId?: string;
+  projectId?: string;
+  cellId?: string;
+  hostId: string;
+  resourceType: string;
+  resourceId?: string;
+  desired: Record<string, unknown>;
+  desiredHash: string;
+  version: number;
+  status: string;
+  source: string;
+  resourceKey: string;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ObservedState = {
+  id: string;
+  hostId: string;
+  agentId?: string;
+  resourceType: string;
+  resourceId?: string;
+  resourceKey: string;
+  observed: Record<string, unknown>;
+  observedHash: string;
+  observedAt: string;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DriftStatus =
+  | "in_sync"
+  | "missing"
+  | "drifted"
+  | "unmanaged"
+  | "orphaned"
+  | "host_unreachable"
+  | "ignored";
+export type DriftSeverity = "info" | "warning" | "critical";
+export type RecommendedAction =
+  | "none"
+  | "create"
+  | "update"
+  | "restart"
+  | "stop"
+  | "remove"
+  | "investigate";
+
+// Per-status / per-severity counts. All optional — a missing key means 0.
+export type DriftSummary = {
+  total?: number;
+  inSync?: number;
+  missing?: number;
+  drifted?: number;
+  unmanaged?: number;
+  orphaned?: number;
+  hostUnreachable?: number;
+  ignored?: number;
+  critical?: number;
+  warning?: number;
+  info?: number;
+};
+
+export type DriftReport = {
+  id: string;
+  hostId?: string;
+  cellId?: string;
+  projectId?: string;
+  operationRunId?: string;
+  status: "clean" | "drifted" | "warning" | "failed" | string;
+  summary?: DriftSummary;
+  createdAt: string;
+};
+
+export type DriftItem = {
+  id: string;
+  driftReportId?: string;
+  hostId?: string;
+  cellId?: string;
+  resourceType: string;
+  resourceKey: string;
+  desiredStateId?: string;
+  observedStateId?: string;
+  driftStatus: DriftStatus | string;
+  severity: DriftSeverity | string;
+  diff?: Record<string, unknown>;
+  recommendedAction: RecommendedAction | string;
+  createdAt: string;
+};
+
+// GET /drift/latest + POST /drift/recompute. report is null when nothing has
+// been computed yet for the scope.
+export type DriftResponse = { report: DriftReport | null; items: DriftItem[] };
+
+export type OperationRun = {
+  id: string;
+  type: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | string;
+  teamId?: string;
+  projectId?: string;
+  cellId?: string;
+  hostId?: string;
+  deploymentId?: string;
+  input?: Record<string, unknown>;
+  plan?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  createdBy?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// operation_runs/{id} detail step (operationStepView). In Bloco 9 status is
+// only planned / no_op / skipped — nothing is ever executed.
+export type OperationStep = {
+  id: string;
+  stepIndex: number;
+  action: string;
+  resourceType: string;
+  resourceKey: string;
+  status: "planned" | "skipped" | "no_op" | "succeeded" | "failed" | string;
+  reason?: string;
+  input?: Record<string, unknown>;
+};
+
+// dry_run response step (planStepView). willApply is ALWAYS false in this release.
+export type PlanStep = {
+  action: string;
+  resourceType: string;
+  resourceKey: string;
+  status: string;
+  reason?: string;
+  willApply: boolean;
+};
+
+export type OperationRunDetail = { operationRun: OperationRun; steps: OperationStep[] };
+export type DryRunResponse = { operationRun: OperationRun; steps: PlanStep[] };
+
+export type SyncDesiredResult = {
+  created: number;
+  updated: number;
+  unchanged: number;
+  superseded: number;
+  total: number;
+  operationRunId?: string;
+};
+
 class ApiError extends Error {
   status: number;
   code?: string;
@@ -1178,6 +1635,13 @@ export const api = {
         `/v1/projects/${encodeURIComponent(id)}/topology`,
       );
     },
+    // Bloco 8: the real Cell Control Plane topology (Host→Cell→Deployment +
+    // links + warnings). mode=legacy_synthetic when the project has no cells.
+    cellTopology(id: string): Promise<CellTopologyResponse> {
+      return request<CellTopologyResponse>(
+        `/v1/projects/${encodeURIComponent(id)}/cell_topology`,
+      );
+    },
     // v1.10.0+: project-scoped activity feed (audit_events filtered to
     // this project's surface). Member-visible, paginated by cursor.
     activity(id: string, opts: { limit?: number; cursor?: string } = {}): Promise<ActivityResponse> {
@@ -1367,6 +1831,283 @@ export const api = {
         { method: "POST", body: credentialId ? { credentialId } : {} },
       );
     },
+  },
+
+  // Cells (feat/cell-control-plane). Project-scoped operational units.
+  // listByProject + create are mounted under the project; the rest under
+  // /v1/cells/{id}. RBAC rides on the existing project membership.
+  cells: {
+    async listByProject(projectId: string): Promise<Cell[]> {
+      const r = await request<{ items: Cell[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cells`,
+      );
+      return r.items ?? [];
+    },
+    create(projectId: string, body: CreateCellInput): Promise<Cell> {
+      return request<Cell>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cells`,
+        { method: "POST", body },
+      );
+    },
+    get(id: string): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}`);
+    },
+    update(id: string, patch: UpdateCellInput): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: patch,
+      });
+    },
+    drain(id: string): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}/drain`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    // Attaches an existing deployment (by name) as a resource of the cell.
+    // 409 deployment_already_attached when it lives in another cell; 404
+    // when the name is unknown OR in a project the caller can't see.
+    attachDeployment(
+      id: string,
+      deploymentName: string,
+      role?: string,
+    ): Promise<AttachDeploymentResult> {
+      return request<AttachDeploymentResult>(
+        `/v1/cells/${encodeURIComponent(id)}/attach_deployment`,
+        {
+          method: "POST",
+          body: role ? { deploymentName, role } : { deploymentName },
+        },
+      );
+    },
+    // hostId accepts a host UUID or name (backend resolves either).
+    attachHost(id: string, hostId: string): Promise<Cell> {
+      return request<Cell>(`/v1/cells/${encodeURIComponent(id)}/attach_host`, {
+        method: "POST",
+        body: { hostId },
+      });
+    },
+    resources(id: string): Promise<CellResourcesResponse> {
+      return request<CellResourcesResponse>(
+        `/v1/cells/${encodeURIComponent(id)}/resources`,
+      );
+    },
+  },
+
+  // Cell links + service tokens (Bloco 7). Project-scoped create/list; the rest
+  // under /v1/cell_links + /v1/service_tokens. Discovery is server-to-server
+  // (service-token bearer) and not called from the dashboard.
+  cellLinks: {
+    async listByProject(projectId: string): Promise<CellLink[]> {
+      const r = await request<{ items: CellLink[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cell_links`,
+      );
+      return r.items ?? [];
+    },
+    create(projectId: string, body: CreateCellLinkInput): Promise<CellLink> {
+      return request<CellLink>(
+        `/v1/projects/${encodeURIComponent(projectId)}/cell_links`,
+        { method: "POST", body },
+      );
+    },
+    disable(id: string): Promise<CellLink> {
+      return request<CellLink>(`/v1/cell_links/${encodeURIComponent(id)}/disable`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    async listTokens(id: string): Promise<ServiceToken[]> {
+      const r = await request<{ items: ServiceToken[] }>(
+        `/v1/cell_links/${encodeURIComponent(id)}/service_tokens`,
+      );
+      return r.items ?? [];
+    },
+    createToken(
+      id: string,
+      body: { name?: string; scopes?: string[]; expiresAt?: string } = {},
+    ): Promise<ServiceToken> {
+      return request<ServiceToken>(
+        `/v1/cell_links/${encodeURIComponent(id)}/service_tokens`,
+        { method: "POST", body },
+      );
+    },
+    revokeToken(tokenId: string): Promise<{ id: string; status: string }> {
+      return request(
+        `/v1/service_tokens/${encodeURIComponent(tokenId)}/revoke`,
+        { method: "POST", body: {} },
+      );
+    },
+  },
+
+  // Hosts (feat/cell-control-plane). Instance-level — every endpoint is
+  // gated to instance-admin server-side, so list() can 403 for non-admin
+  // operators; the HostsPanel hides itself on 403 the same way TopologyPanel
+  // does. Adoption tokens are returned once in plaintext (hash-at-rest).
+  hosts: {
+    async list(): Promise<Host[]> {
+      const r = await request<{ items: Host[] }>("/v1/hosts");
+      return r.items ?? [];
+    },
+    create(body: CreateHostInput): Promise<Host> {
+      return request<Host>("/v1/hosts", { method: "POST", body });
+    },
+    get(id: string): Promise<Host> {
+      return request<Host>(`/v1/hosts/${encodeURIComponent(id)}`);
+    },
+    update(
+      id: string,
+      patch: Partial<CreateHostInput> & { status?: string },
+    ): Promise<Host> {
+      return request<Host>(`/v1/hosts/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: patch,
+      });
+    },
+    drain(id: string): Promise<Host> {
+      return request<Host>(`/v1/hosts/${encodeURIComponent(id)}/drain`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    createAdoptionToken(
+      id: string,
+      body: { name?: string; ttlSeconds?: number } = {},
+    ): Promise<HostAdoptionToken> {
+      return request<HostAdoptionToken>(
+        `/v1/hosts/${encodeURIComponent(id)}/adoption_token`,
+        { method: "POST", body },
+      );
+    },
+    // Agent lifecycle (Bloco 6.5), all instance-admin.
+    agents(id: string): Promise<HostAgentsResponse> {
+      return request<HostAgentsResponse>(
+        `/v1/hosts/${encodeURIComponent(id)}/agents`,
+      );
+    },
+    revokeAgent(agentId: string): Promise<{ id: string; status: string }> {
+      return request(`/v1/host_agents/${encodeURIComponent(agentId)}/revoke`, {
+        method: "POST",
+        body: {},
+      });
+    },
+    // Returns the new agent token ONCE. The operator must update the agent's
+    // config (or re-run `synapse-agent join`) with it.
+    rotateAgentToken(
+      agentId: string,
+    ): Promise<{ id: string; hostId: string; agentToken: string }> {
+      return request(
+        `/v1/host_agents/${encodeURIComponent(agentId)}/rotate_token`,
+        { method: "POST", body: {} },
+      );
+    },
+  },
+
+  // ---- Desired / Observed state (Bloco 9a). Derive intent + read what the
+  // agent observed. Sync derives desired from placements; it does NOT apply
+  // anything to a host. ----
+  desired: {
+    async project(projectId: string): Promise<DesiredState[]> {
+      const r = await request<{ items: DesiredState[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/desired_state`,
+      );
+      return r.items ?? [];
+    },
+    projectSyncFromPlacements(projectId: string): Promise<SyncDesiredResult> {
+      return request<SyncDesiredResult>(
+        `/v1/projects/${encodeURIComponent(projectId)}/desired_state/sync_from_placements`,
+        { method: "POST", body: {} },
+      );
+    },
+    async host(hostId: string): Promise<DesiredState[]> {
+      const r = await request<{ items: DesiredState[] }>(
+        `/v1/hosts/${encodeURIComponent(hostId)}/desired_state`,
+      );
+      return r.items ?? [];
+    },
+  },
+
+  observed: {
+    async host(hostId: string): Promise<ObservedState[]> {
+      const r = await request<{ items: ObservedState[] }>(
+        `/v1/hosts/${encodeURIComponent(hostId)}/observed_state`,
+      );
+      return r.items ?? [];
+    },
+  },
+
+  // ---- Drift Engine (Bloco 9b). recompute persists a DriftReport + items and
+  // an OperationRun; latest reads the most recent report for the scope. Both
+  // are diagnosis only — no host is touched. ----
+  drift: {
+    project: {
+      recompute: (projectId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/projects/${encodeURIComponent(projectId)}/drift/recompute`,
+          { method: "POST", body: {} },
+        ),
+      latest: (projectId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/projects/${encodeURIComponent(projectId)}/drift/latest`,
+        ),
+    },
+    cell: {
+      recompute: (cellId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/cells/${encodeURIComponent(cellId)}/drift/recompute`,
+          { method: "POST", body: {} },
+        ),
+      latest: (cellId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/cells/${encodeURIComponent(cellId)}/drift/latest`,
+        ),
+    },
+    host: {
+      recompute: (hostId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/hosts/${encodeURIComponent(hostId)}/drift/recompute`,
+          { method: "POST", body: {} },
+        ),
+      latest: (hostId: string): Promise<DriftResponse> =>
+        request<DriftResponse>(
+          `/v1/hosts/${encodeURIComponent(hostId)}/drift/latest`,
+        ),
+    },
+  },
+
+  // ---- Reconcile DRY-RUN ONLY (Bloco 9b). The body is intentionally empty:
+  // the dashboard never sends apply:true (the backend 400s it anyway). Returns
+  // a planned OperationRun + steps; willApply is always false. ----
+  reconcile: {
+    projectDryRun: (projectId: string): Promise<DryRunResponse> =>
+      request<DryRunResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/reconcile/dry_run`,
+        { method: "POST", body: {} },
+      ),
+    cellDryRun: (cellId: string): Promise<DryRunResponse> =>
+      request<DryRunResponse>(
+        `/v1/cells/${encodeURIComponent(cellId)}/reconcile/dry_run`,
+        { method: "POST", body: {} },
+      ),
+    hostDryRun: (hostId: string): Promise<DryRunResponse> =>
+      request<DryRunResponse>(
+        `/v1/hosts/${encodeURIComponent(hostId)}/reconcile/dry_run`,
+        { method: "POST", body: {} },
+      ),
+  },
+
+  // ---- Operation runs (Bloco 9a/9b). Audit-grade tracking of sync / drift /
+  // dry-run. Read-only. ----
+  operationRuns: {
+    async project(projectId: string): Promise<OperationRun[]> {
+      const r = await request<{ items: OperationRun[] }>(
+        `/v1/projects/${encodeURIComponent(projectId)}/operation_runs`,
+      );
+      return r.items ?? [];
+    },
+    get: (operationRunId: string): Promise<OperationRunDetail> =>
+      request<OperationRunDetail>(
+        `/v1/operation_runs/${encodeURIComponent(operationRunId)}`,
+      ),
   },
 
   // First-run wizard probe. Public — no auth, hit pre-login. firstRun

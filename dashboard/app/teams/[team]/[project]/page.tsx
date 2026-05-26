@@ -15,10 +15,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BackendVersionPill } from "@/components/BackendVersionPill";
 import { TopologyPanel } from "@/components/TopologyPanel";
 import { ActivityFeed } from "@/components/ActivityFeed";
+import { CellsPanel } from "@/components/CellsPanel";
+import { CellLinksPanel } from "@/components/CellLinksPanel";
+import { CellTopologyPanel } from "@/components/CellTopologyPanel";
+import { StateDriftPanel } from "@/components/StateDriftPanel";
+import { OperationRunsPanel } from "@/components/OperationRunsPanel";
+import { HostsPanel } from "@/components/HostsPanel";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
 import { DeployKeysPanel } from "@/components/DeployKeysPanel";
-import { ApiError, api, type Deployment, type Project } from "@/lib/api";
+import { ApiError, api, type Cell, type Deployment, type Project } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 
 type Params = { team: string; project: string };
@@ -145,6 +151,20 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
           : 0,
     },
   );
+
+  // Cells for this project — used only to badge each deployment with the
+  // cell it belongs to (feat/cell-control-plane). Shares the SWR key with
+  // <CellsPanel> below so it's a single fetch. shouldRetryOnError:false
+  // keeps a transient failure from spinning; a miss just hides the badge.
+  const { data: cells } = useSWR<Cell[]>(
+    ["/cells", projectId],
+    () => api.cells.listByProject(projectId),
+    { shouldRetryOnError: false },
+  );
+  const cellByDeploymentId = new Map<string, Cell>();
+  for (const c of cells ?? []) {
+    if (c.primaryDeploymentId) cellByDeploymentId.set(c.primaryDeploymentId, c);
+  }
 
   const [open, setOpen] = useState(false);
   const [type, setType] = useState<"dev" | "prod">("dev");
@@ -492,6 +512,14 @@ await Promise.all([
                           HA{d.replicaCount ? ` ×${d.replicaCount}` : ""}
                         </Badge>
                       )}
+                      {d.id && cellByDeploymentId.has(d.id) && (
+                        <Badge
+                          tone="violet"
+                          title="Cell this deployment belongs to"
+                        >
+                          Cell: {cellByDeploymentId.get(d.id)!.name}
+                        </Badge>
+                      )}
                     </div>
                     {(d.deploymentUrl || d.url) && (
                       <div className="mt-1 space-y-0.5">
@@ -609,6 +637,32 @@ await Promise.all([
         (with IP-derived geo metadata) — fills the same space that
         used to scroll forever with stacked settings panels.
       */}
+      {/*
+        Cell Control Plane (feat/cell-control-plane, Bloco 4). Cells are
+        project-scoped operational units; Hosts are the machines they run
+        on. Both render as self-contained sections (own SWR) below the
+        deployments list. HostsPanel hides itself for non-instance-admins.
+      */}
+      <CellsPanel projectId={projectId} />
+      <CellLinksPanel projectId={projectId} />
+      <HostsPanel />
+
+      {/*
+        Bloco 8: the real Host→Cell→Deployment topology. Renders only when the
+        project has cells (mode=cell_control_plane); otherwise it hides and the
+        legacy synthetic TopologyPanel below covers the no-cells case.
+      */}
+      <CellTopologyPanel projectId={projectId} />
+
+      {/*
+        Bloco 9c: State & Drift + Operations. Sits next to the topology so the
+        operator reads "what is desired vs observed" + the recent operation
+        history right where they see the host→cell→deployment tree. Both are
+        diagnosis + dry-run planning only — no host change is ever applied.
+      */}
+      <StateDriftPanel projectId={projectId} />
+      <OperationRunsPanel projectId={projectId} />
+
       <TopologyPanel projectId={projectId} />
 
       {/*

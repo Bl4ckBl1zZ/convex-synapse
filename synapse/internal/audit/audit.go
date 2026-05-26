@@ -132,6 +132,28 @@ const (
 	// "reconfigure succeeded". Pair with /v1/admin/host_domain/status/<id>
 	// for outcome.
 	ActionHostDomainChangeInitiated = "host_domain.change_initiated"
+
+	// Cell Control Plane (feat/cell-control-plane). Synapse-original; verbs
+	// follow the existing "<verb><Noun>" convention. Host actions are
+	// instance-level (TeamID stays empty); Cell actions carry TeamID so they
+	// surface in the owning team's audit feed.
+	ActionCreateHost              = "createHost"
+	ActionUpdateHost              = "updateHost"
+	ActionDrainHost               = "drainHost"
+	ActionCreateHostAdoptionToken = "createHostAdoptionToken"
+	ActionCreateCell              = "createCell"
+	ActionUpdateCell              = "updateCell"
+	ActionDrainCell               = "drainCell"
+	ActionAttachDeploymentToCell  = "attachDeploymentToCell"
+	// Agent lifecycle (Bloco 6.5).
+	ActionRevokeHostAgent      = "revokeHostAgent"
+	ActionRotateHostAgentToken = "rotateHostAgentToken"
+	// Cell links + service tokens (Bloco 7).
+	ActionCreateCellLink     = "createCellLink"
+	ActionUpdateCellLink     = "updateCellLink"
+	ActionDisableCellLink    = "disableCellLink"
+	ActionCreateServiceToken = "createServiceToken"
+	ActionRevokeServiceToken = "revokeServiceToken"
 )
 
 // Target type names.
@@ -150,6 +172,12 @@ const (
 	TargetSynapse = "synapse"
 	// TargetDNSCredential is a dns_credentials row.
 	TargetDNSCredential = "dnsCredential"
+	// Cell Control Plane (feat/cell-control-plane).
+	TargetHost         = "host"
+	TargetCell         = "cell"
+	TargetHostAgent    = "hostAgent"
+	TargetCellLink     = "cellLink"
+	TargetServiceToken = "serviceToken"
 )
 
 // Options collects the optional fields of an audit event. Empty strings are

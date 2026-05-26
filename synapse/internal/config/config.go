@@ -153,6 +153,36 @@ type Config struct {
 	// ("synapse-dashboard:3000"); host-mode deployments can point at
 	// "127.0.0.1:6790" (the dashboard container's published port).
 	DashboardShellAddr string
+
+	// EnableCells (feat/cell-control-plane) gates the startup backfill that
+	// turns existing deployments into core Cells + placements. Default true.
+	// The Hosts/Cells API + migrations are always present (purely additive,
+	// auth-gated); this flag only controls whether the boot sequence
+	// auto-creates Cells for deployments that don't have one yet. Set
+	// SYNAPSE_ENABLE_CELLS=false to opt out of the auto-backfill.
+	EnableCells bool
+
+	// Region (feat/cell-control-plane) is the short region code the backfill
+	// stamps onto the synthesised local Host + the core Cells it creates
+	// (e.g. "br" → core-prod-br-1). Defaults to the team's default_region at
+	// backfill time, falling back to "local" when that's the placeholder.
+	// Set SYNAPSE_REGION to make Cell names deterministic across hosts.
+	Region string
+
+	// AgentStaleAfter / AgentOfflineAfter (Bloco 6.5) drive the computed host
+	// effectiveStatus: a host whose last agent heartbeat is older than
+	// AgentStaleAfter reads "stale"; older than AgentOfflineAfter reads
+	// "offline". Defaults: 60s / 300s.
+	AgentStaleAfter   time.Duration
+	AgentOfflineAfter time.Duration
+
+	// Bloco 9 — desired/observed/drift. These gate the model/observe/compare/
+	// plan layer; NONE of them enable apply. AgentApply is the hard gate for a
+	// future apply mode and MUST stay false in this block.
+	EnableDesiredState    bool
+	EnableObservedState   bool
+	EnableReconcileDryRun bool
+	AgentApply            bool
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -203,13 +233,13 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		HTTPAddr:              getEnvDefault("SYNAPSE_HTTP_ADDR", "0.0.0.0:8080"),
-		LogLevel:              parseLogLevel(getEnvDefault("SYNAPSE_LOG_LEVEL", "info")),
-		DBURL:                 dbURL,
-		JWTSecret:             []byte(jwtSecret),
-		JWTAccessTTL:          accessTTL,
-		JWTRefreshTTL:         refreshTTL,
-		DockerHost:            getEnvDefault("SYNAPSE_DOCKER_HOST", "unix:///var/run/docker.sock"),
+		HTTPAddr:      getEnvDefault("SYNAPSE_HTTP_ADDR", "0.0.0.0:8080"),
+		LogLevel:      parseLogLevel(getEnvDefault("SYNAPSE_LOG_LEVEL", "info")),
+		DBURL:         dbURL,
+		JWTSecret:     []byte(jwtSecret),
+		JWTAccessTTL:  accessTTL,
+		JWTRefreshTTL: refreshTTL,
+		DockerHost:    getEnvDefault("SYNAPSE_DOCKER_HOST", "unix:///var/run/docker.sock"),
 		// v1.7.1+: pinned upstream tag. Bump in lock-step with the same
 		// value in docker-compose.yml, installer/templates/env.tmpl,
 		// installer/install/lifecycle.sh, setup.sh, ha_real_e2e_test.go,
@@ -234,13 +264,39 @@ func Load() (*Config, error) {
 		BackendS3SecretKey:    os.Getenv("SYNAPSE_BACKEND_S3_SECRET_KEY"),
 		BackendS3BucketPrefix: getEnvDefault("SYNAPSE_BACKEND_S3_BUCKET_PREFIX", "convex"),
 
-		UpdaterURL:    strings.TrimRight(os.Getenv("SYNAPSE_UPDATER_URL"), "/"),
-		UpdaterToken:  os.Getenv("SYNAPSE_UPDATER_TOKEN"),
-		GitHubRepo:    getEnvDefault("SYNAPSE_GITHUB_REPO", "Iann29/convex-synapse"),
-		PublicIP:      strings.TrimSpace(os.Getenv("SYNAPSE_PUBLIC_IP")),
+		UpdaterURL:         strings.TrimRight(os.Getenv("SYNAPSE_UPDATER_URL"), "/"),
+		UpdaterToken:       os.Getenv("SYNAPSE_UPDATER_TOKEN"),
+		GitHubRepo:         getEnvDefault("SYNAPSE_GITHUB_REPO", "Iann29/convex-synapse"),
+		PublicIP:           strings.TrimSpace(os.Getenv("SYNAPSE_PUBLIC_IP")),
 		DashboardAddr:      getEnvDefault("SYNAPSE_DASHBOARD_UPSTREAM", "synapse-convex-dashboard-proxy:80"),
 		DashboardShellAddr: getEnvDefault("SYNAPSE_DASHBOARD_SHELL_UPSTREAM", "synapse-dashboard:3000"),
+
+		EnableCells: getEnvDefault("SYNAPSE_ENABLE_CELLS", "true") != "false",
+		Region:      strings.TrimSpace(os.Getenv("SYNAPSE_REGION")),
+
+		AgentStaleAfter:   time.Duration(getEnvInt("SYNAPSE_AGENT_STALE_AFTER_SECONDS", 60)) * time.Second,
+		AgentOfflineAfter: time.Duration(getEnvInt("SYNAPSE_AGENT_OFFLINE_AFTER_SECONDS", 300)) * time.Second,
+
+		EnableDesiredState:    getEnvDefault("SYNAPSE_ENABLE_DESIRED_STATE", "true") != "false",
+		EnableObservedState:   getEnvDefault("SYNAPSE_ENABLE_OBSERVED_STATE", "true") != "false",
+		EnableReconcileDryRun: getEnvDefault("SYNAPSE_ENABLE_RECONCILE_DRY_RUN", "true") != "false",
+		// Hard-disabled in Bloco 9. Apply is not implemented; this flag exists
+		// so the surface is explicit and defaults to false.
+		AgentApply: getEnvDefault("SYNAPSE_AGENT_APPLY", "false") == "true",
 	}, nil
+}
+
+// getEnvInt reads an integer env var, falling back to def on unset/invalid.
+func getEnvInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 func getEnvDefault(key, def string) string {

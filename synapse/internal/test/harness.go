@@ -38,8 +38,8 @@ import (
 	"github.com/Iann29/synapse/internal/auth"
 	cryptopkg "github.com/Iann29/synapse/internal/crypto"
 	"github.com/Iann29/synapse/internal/db"
-	dockerprov "github.com/Iann29/synapse/internal/docker"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
+	dockerprov "github.com/Iann29/synapse/internal/docker"
 	"github.com/Iann29/synapse/internal/geo"
 	"github.com/Iann29/synapse/internal/provisioner"
 )
@@ -241,7 +241,16 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	pool, err := db.Connect(context.Background(), testDSN)
+	// Cap each per-test pool small: the suite runs many DBs in parallel, and
+	// a large pool × N tests exhausts postgres max_connections (manifests as
+	// flaky "Failed to create user" 500s + lost concurrent inserts). Only the
+	// pool DSN gets this — Migrate keeps the plain DSN (its driver doesn't
+	// understand pool_* params). db.Connect honors an explicit pool_max_conns.
+	poolSep := "&"
+	if !strings.Contains(testDSN, "?") {
+		poolSep = "?"
+	}
+	pool, err := db.Connect(context.Background(), testDSN+poolSep+"pool_max_conns=4")
 	if err != nil {
 		dropDatabase(rootDSN, dbName)
 		t.Fatalf("connect pool: %v", err)
@@ -288,6 +297,10 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		CloudflareFactory:     opts.CloudflareFactory,
 		DNSProviderLookup:     opts.DNSProviderLookup,
 		BackendProbe:          opts.BackendProbe,
+		// Bloco 9 — desired/observed state on by default in tests (matches the
+		// production default). Apply is never enabled.
+		EnableDesiredState:  true,
+		EnableObservedState: true,
 	}
 
 	// HA wiring (only when SetupHA was called). The crypto box is a

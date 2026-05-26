@@ -31,6 +31,19 @@ type ProjectsHandler struct {
 	DNSCredentials *DNSCredentialsHandler
 	Topology       *TopologyHandler
 	Activity       *ActivityHandler
+	// Cells (feat/cell-control-plane) — project-scoped list/create routes
+	// for the Cell Control Plane. Nil = wired without Cells support.
+	Cells *CellsHandler
+	// CellLinks (Bloco 7) — project-scoped list/create for service-to-service
+	// contracts between Cells.
+	CellLinks *CellLinksHandler
+	// CellTopology (Bloco 8) — the real Host→Cell→Deployment topology.
+	CellTopology *CellTopologyHandler
+	// Bloco 9 — desired state + operation runs (project-scoped surfaces).
+	DesiredState *DesiredStateHandler
+	Operations   *OperationsHandler
+	// Bloco 9b — drift recompute / latest / reconcile dry-run.
+	Drift *DriftHandler
 }
 
 // canAdminProject is true for full administrators of a project.
@@ -98,6 +111,12 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		if h.Topology != nil {
 			r.Get("/topology", h.Topology.ServeHTTP)
 		}
+		// Bloco 8: the real Cell Control Plane topology (Host→Cell→Deployment
+		// + links + warnings). Separate from the legacy /topology above, which
+		// stays as the synthetic fallback.
+		if h.CellTopology != nil {
+			r.Get("/cell_topology", h.CellTopology.ServeHTTP)
+		}
 		// v1.10.0+: activity feed — project-scoped audit_events for
 		// the dashboard's ActivityFeed component. Member-visible
 		// (not admin-only) so viewers can see the pulse of their
@@ -130,6 +149,34 @@ func (h *ProjectsHandler) Routes() chi.Router {
 		}
 		if h.Deployments != nil {
 			h.Deployments.MountProjectScopedRoutes(r)
+		}
+		// Cell Control Plane (feat/cell-control-plane) — project-scoped
+		// list/create. Cell-scoped operations live under /v1/cells/{cellID}
+		// (mounted separately in router.go).
+		if h.Cells != nil {
+			r.Get("/cells", h.Cells.listCellsByProject)
+			r.Post("/cells", h.Cells.createCell)
+		}
+		// Cell Links (Bloco 7) — service-to-service contracts between Cells.
+		if h.CellLinks != nil {
+			r.Get("/cell_links", h.CellLinks.listCellLinksByProject)
+			r.Post("/cell_links", h.CellLinks.createCellLink)
+		}
+		// Bloco 9 — desired state (derive from placements + list) + operation
+		// runs (read). Sync is project-admin; reads are project-member.
+		if h.DesiredState != nil {
+			r.Post("/desired_state/sync_from_placements", h.DesiredState.syncFromPlacements)
+			r.Get("/desired_state", h.DesiredState.listProjectDesired)
+		}
+		if h.Operations != nil {
+			r.Get("/operation_runs", h.Operations.listProjectOperationRuns)
+		}
+		// Bloco 9b — drift + reconcile dry-run. latest is project-member;
+		// recompute + dry_run are project-admin (enforced inside the handler).
+		if h.Drift != nil {
+			r.Get("/drift/latest", h.Drift.latestProject)
+			r.Post("/drift/recompute", h.Drift.recomputeProject)
+			r.Post("/reconcile/dry_run", h.Drift.dryRunProject)
 		}
 	})
 
@@ -396,7 +443,7 @@ func (h *ProjectsHandler) listProjectScopedTokens(w http.ResponseWriter, r *http
 
 // sqlNullableString turns a *string into the value pgx will treat as NULL
 // when nil. Helper kept private — only used by COALESCE-style updates that
-// need three-valued logic ("not present in JSON" ≠ "set to ''").
+// need three-valued logic ("not present in JSON" ≠ "set to ”").
 func sqlNullableString(s *string) any {
 	if s == nil {
 		return nil
