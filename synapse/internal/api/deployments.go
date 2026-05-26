@@ -1294,6 +1294,7 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 	// renders something the operator's browser can actually hit (PR #10
 	// added the helper but only wired it into /auth + /cli_credentials).
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), &d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), &d)
 	writeJSON(w, http.StatusCreated, d)
 }
 
@@ -1517,6 +1518,7 @@ func (h *DeploymentsHandler) adoptDeployment(w http.ResponseWriter, r *http.Requ
 	// path as the other handlers so a future change to the rewrite
 	// rules doesn't accidentally diverge here.
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), &d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), &d)
 	writeJSON(w, http.StatusCreated, d)
 }
 
@@ -1642,6 +1644,7 @@ func (h *DeploymentsHandler) getProjectDeployment(w http.ResponseWriter, r *http
 		d.CreatorUserID = *creator
 	}
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), &d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), &d)
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -1664,6 +1667,7 @@ func (h *DeploymentsHandler) getDeployment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), d)
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -2217,7 +2221,12 @@ func (h *DeploymentsHandler) deploymentAuth(w http.ResponseWriter, r *http.Reque
 type cliCredentialsResp struct {
 	DeploymentName string `json:"deploymentName"`
 	ConvexURL      string `json:"convexUrl"`
-	AdminKey       string `json:"adminKey"`
+	// SiteURL is the deployment's HTTP-actions host (Convex port 3211).
+	// The CLI writes it to NEXT_PUBLIC_CONVEX_SITE_URL. Empty when no
+	// base domain / role='site' custom domain applies — the CLI then
+	// falls back to the cloud URL (legacy behaviour).
+	SiteURL  string `json:"siteUrl,omitempty"`
+	AdminKey string `json:"adminKey"`
 	// ExportSnippet sets both env vars in a POSIX shell. Built server-side
 	// so the dashboard doesn't have to hand-roll the formatting (and so any
 	// future change to the env-var names is owned by one file).
@@ -2237,6 +2246,7 @@ func (h *DeploymentsHandler) deploymentCLICredentials(w http.ResponseWriter, r *
 	// Convex CLI's `new URL("/api/...", baseUrl)` host-anchors and
 	// would otherwise drop the path prefix.
 	cliURL := h.cliDeploymentURL(r.Context(), d)
+	siteURL := h.siteDeploymentURL(r.Context(), d)
 	exportSnippet := "export CONVEX_SELF_HOSTED_URL=" + shellQuote(cliURL) + "\n" +
 		"export CONVEX_SELF_HOSTED_ADMIN_KEY=" + shellQuote(d.AdminKey)
 	envSnippet := "CONVEX_SELF_HOSTED_URL=" + shellQuote(cliURL) + "\n" +
@@ -2244,6 +2254,7 @@ func (h *DeploymentsHandler) deploymentCLICredentials(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusOK, cliCredentialsResp{
 		DeploymentName: d.Name,
 		ConvexURL:      cliURL,
+		SiteURL:        siteURL,
 		AdminKey:       d.AdminKey,
 		ExportSnippet:  exportSnippet,
 		EnvSnippet:     envSnippet,

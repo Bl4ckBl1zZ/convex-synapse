@@ -142,13 +142,15 @@ func validateDomain(raw string) (string, string, string) {
 }
 
 // validateRole checks that role is one of the supported values.
+// 'site' (v-site-origin) routes the domain at the deployment's site
+// proxy (port 3211, HTTP actions) — see docs/CONVEX_SITE_ORIGIN.md.
 func validateRole(raw string) (string, string, string) {
 	switch raw {
-	case models.DomainRoleAPI, models.DomainRoleDashboard:
+	case models.DomainRoleAPI, models.DomainRoleDashboard, models.DomainRoleSite:
 		return raw, "", ""
 	default:
 		return "", "invalid_role",
-			`role must be "api" or "dashboard"`
+			`role must be "api", "dashboard", or "site"`
 	}
 }
 

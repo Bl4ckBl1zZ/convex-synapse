@@ -174,6 +174,28 @@ func TestDomains_Add_InvalidRole(t *testing.T) {
 	}
 }
 
+// role='site' routes a custom domain at the deployment's site proxy
+// (port 3211, HTTP actions). Must be accepted by validateRole AND
+// persist past the widened CHECK constraint (migration 000022) — if the
+// migration didn't apply, the INSERT would fail with a 500.
+func TestDomains_Add_SiteRole(t *testing.T) {
+	h := Setup(t)
+	f := newDomainsFixture(t, h, "dom-site-5555", 3517)
+
+	var got domainResp
+	h.DoJSON(http.MethodPost, "/v1/deployments/"+f.deployment+"/domains",
+		f.owner.AccessToken,
+		map[string]any{"domain": "site.mip.example.com", "role": "site"},
+		http.StatusCreated, &got)
+
+	if got.Role != "site" {
+		t.Errorf("role: got %q want site", got.Role)
+	}
+	if got.Domain != "site.mip.example.com" {
+		t.Errorf("domain: got %q want site.mip.example.com", got.Domain)
+	}
+}
+
 func TestDomains_Delete(t *testing.T) {
 	h := Setup(t)
 	f := newDomainsFixture(t, h, "dom-del-5555", 3507)

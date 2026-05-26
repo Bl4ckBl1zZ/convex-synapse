@@ -19,6 +19,7 @@ type deploymentJSON struct {
 	DeploymentType string     `json:"deploymentType"`
 	Status         string     `json:"status"`
 	DeploymentURL  string     `json:"deploymentUrl,omitempty"`
+	SiteURL        string     `json:"siteUrl,omitempty"`
 	IsDefault      bool       `json:"isDefault"`
 	Reference      string     `json:"reference,omitempty"`
 	Creator        string     `json:"creator,omitempty"`
