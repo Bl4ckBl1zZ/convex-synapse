@@ -108,6 +108,22 @@ type cacheEntry struct {
 // Unavailable) instead of 404.
 var ErrNoReplicas = errors.New("deployment has no running replicas")
 
+// ErrSiteUnsupported signals that site-proxy routing (Convex port 3211)
+// isn't available in the current mode. Host-port mode doesn't publish
+// 3211 on the host, so the site path is only reachable in network-DNS /
+// base-domain mode. Documented TODO: host-port mode could publish a 2nd
+// port to support this. See docs/CONVEX_SITE_ORIGIN.md.
+var ErrSiteUnsupported = errors.New("site routing requires network-DNS mode")
+
+// cloudPort / sitePort are the two listeners every Convex backend opens.
+// cloud (3210) serves the client API + HTTP actions under "/http/"; site
+// (3211) is the site proxy that re-exposes HTTP actions at their natural
+// paths. See docs/CONVEX_SITE_ORIGIN.md.
+const (
+	cloudPort = "3210"
+	sitePort  = "3211"
+)
+
 // Resolve returns the highest-priority address for a deployment — the
 // active replica per the picker. Callers that want the full list (e.g.
 // the proxy handler so it can retry on connection failure) should use
@@ -241,6 +257,36 @@ func (r *Resolver) ResolveAll(ctx context.Context, name string) ([]string, error
 	}
 	r.mu.Unlock()
 	return addrs, nil
+}
+
+// ResolveAllSite returns the site-proxy (port 3211) addresses for a
+// deployment, in the same preference order as ResolveAll. It reuses
+// ResolveAll for all the validation/cache/fallback work and simply
+// re-ports the result: in DNS mode "convex-<name>:3210" becomes
+// "convex-<name>:3211". The cloud path is therefore left completely
+// untouched.
+//
+// Host-port mode returns ErrSiteUnsupported — 3211 isn't published on
+// the host there, so there's no address to forward to (documented TODO).
+func (r *Resolver) ResolveAllSite(ctx context.Context, name string) ([]string, error) {
+	if !r.UseNetworkDNS {
+		return nil, ErrSiteUnsupported
+	}
+	cloud, err := r.ResolveAll(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(cloud))
+	for _, a := range cloud {
+		// DNS addresses are "<host>:<port>"; swap the cloud port for the
+		// site port. LastIndexByte tolerates (theoretical) host colons.
+		host := a
+		if i := strings.LastIndexByte(a, ':'); i >= 0 {
+			host = a[:i]
+		}
+		out = append(out, host+":"+sitePort)
+	}
+	return out, nil
 }
 
 // addressFor builds either the docker-DNS or host-port address for one
@@ -403,6 +449,11 @@ func Handler(resolver *Resolver, logger *slog.Logger, baseDomain string) http.Ha
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var name, rest, role string
+		// isSite routes to the deployment's site proxy (port 3211, where
+		// HTTP actions live at natural paths) instead of the cloud
+		// listener (3210). Set by the "<name>.site.<base>" wildcard form
+		// or a role='site' custom domain. See docs/CONVEX_SITE_ORIGIN.md.
+		var isSite bool
 
 		host := r.Host
 		if i := strings.IndexByte(host, ':'); i >= 0 {
@@ -410,12 +461,18 @@ func Handler(resolver *Resolver, logger *slog.Logger, baseDomain string) http.Ha
 		}
 
 		// (2) Wildcard subdomain dispatch wins when configured AND the
-		// Host matches. We split on the host's leftmost label so a
-		// request to "bold-fox-1234.synapse.example.com" routes to
-		// "bold-fox-1234". Empty subdomain (just `.<base>`) falls
-		// through to (3) and then (1).
+		// Host matches. The site form "<name>.site.<base>" is checked
+		// FIRST — it's also a subdomain of <base>, so matchHostSubdomain
+		// would otherwise grab "<name>.site" as a (bogus multi-label)
+		// name. The plain cloud form "<name>.<base>" falls to the else.
+		// Empty subdomain (just `.<base>`) falls through to (3) then (1).
 		if baseDomain != "" {
-			if sub := matchHostSubdomain(host, baseDomain); sub != "" {
+			if sub := matchSiteSubdomain(host, baseDomain); sub != "" {
+				name, rest, isSite = sub, r.URL.Path, true
+				if rest == "" {
+					rest = "/"
+				}
+			} else if sub := matchHostSubdomain(host, baseDomain); sub != "" {
 				name, rest = sub, r.URL.Path
 				if rest == "" {
 					rest = "/"
@@ -430,6 +487,9 @@ func Handler(resolver *Resolver, logger *slog.Logger, baseDomain string) http.Ha
 		if name == "" && host != "" {
 			if dn, dr, derr := resolver.ResolveDomain(r.Context(), host); derr == nil {
 				name, role = dn, dr
+				if role == DomainRoleSite {
+					isSite = true
+				}
 				rest = r.URL.Path
 				if rest == "" {
 					rest = "/"
@@ -478,7 +538,22 @@ func Handler(resolver *Resolver, logger *slog.Logger, baseDomain string) http.Ha
 			return
 		}
 
-		addrs, err := resolver.ResolveAll(r.Context(), name)
+		// Site requests resolve to the 3211 addresses; everything else
+		// keeps the untouched cloud (3210) path.
+		var addrs []string
+		var err error
+		if isSite {
+			addrs, err = resolver.ResolveAllSite(r.Context(), name)
+			if errors.Is(err, ErrSiteUnsupported) {
+				writeJSON(w, http.StatusNotImplemented, map[string]string{
+					"code":    "site_routing_unsupported",
+					"message": "Site routing (HTTP actions host) requires base-domain/DNS mode",
+				})
+				return
+			}
+		} else {
+			addrs, err = resolver.ResolveAll(r.Context(), name)
+		}
 		if errors.Is(err, ErrNoReplicas) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"code":    "no_replicas",
@@ -513,6 +588,7 @@ func Handler(resolver *Resolver, logger *slog.Logger, baseDomain string) http.Ha
 const (
 	DomainRoleAPI       = "api"
 	DomainRoleDashboard = "dashboard"
+	DomainRoleSite      = "site"
 )
 
 // matchHostSubdomain returns the leftmost label of `host` when it's a
@@ -536,6 +612,33 @@ func matchHostSubdomain(host, base string) string {
 		return ""
 	}
 	return host[:len(host)-len(suffix)]
+}
+
+// matchSiteSubdomain returns the deployment name when host is the site
+// form "<name>.site.<base>", or "" otherwise. The "site" level sits
+// between the deployment name and the base domain — a separate DNS level
+// that can never collide with a deployment name (a single label) by
+// construction. Mirrors the Cloud's `.convex.cloud` / `.convex.site`
+// split. The plain cloud form "<name>.<base>" returns "" here (that's
+// matchHostSubdomain's job).
+//
+//	matchSiteSubdomain("bold-fox.site.app.example.com", "app.example.com")
+//	  → "bold-fox"
+//	matchSiteSubdomain("bold-fox.app.example.com", "app.example.com") → ""
+func matchSiteSubdomain(host, base string) string {
+	sub := matchHostSubdomain(host, base)
+	if sub == "" {
+		return ""
+	}
+	name, ok := strings.CutSuffix(sub, ".site")
+	if !ok {
+		return ""
+	}
+	// What's left must be a single deployment label (no further dots).
+	if name == "" || strings.Contains(name, ".") {
+		return ""
+	}
+	return name
 }
 
 // proxyOnce serves the request via a single replica. Equivalent to the

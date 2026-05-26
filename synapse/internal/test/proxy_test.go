@@ -2,6 +2,7 @@ package synapsetest
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -246,5 +247,74 @@ func TestProxy_HostBased_PathStillWorks(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 || string(body) != "ok:/version" {
 		t.Errorf("path-based with baseDomain set: status=%d body=%q", resp.StatusCode, body)
+	}
+}
+
+// TestResolveAllSite_DNSReportsTo3211: in network-DNS mode the site
+// resolver returns the same docker-DNS host as the cloud path but on
+// port 3211. The cloud path stays on 3210, untouched. The DNS→upstream
+// happy path is exercised against real docker in staging (Phase 8).
+func TestResolveAllSite_DNSReportsTo3211(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "SiteRes Co")
+	project := createProject(t, h, owner.AccessToken, team.Slug, "SiteRes Proj")
+	h.SeedDeployment(project.ID, "site-fox-1234", "dev", "running", false, owner.ID, 3999, "k")
+
+	resolver := &proxy.Resolver{DB: h.DB, UseNetworkDNS: true, CacheTTL: time.Second}
+	site, err := resolver.ResolveAllSite(context.Background(), "site-fox-1234")
+	if err != nil {
+		t.Fatalf("ResolveAllSite: %v", err)
+	}
+	if len(site) != 1 || site[0] != "convex-site-fox-1234:3211" {
+		t.Fatalf("ResolveAllSite: got %v want [convex-site-fox-1234:3211]", site)
+	}
+	cloud, err := resolver.ResolveAll(context.Background(), "site-fox-1234")
+	if err != nil {
+		t.Fatalf("ResolveAll: %v", err)
+	}
+	if len(cloud) != 1 || cloud[0] != "convex-site-fox-1234:3210" {
+		t.Fatalf("ResolveAll (cloud must stay 3210): got %v", cloud)
+	}
+}
+
+// TestResolveAllSite_HostPortUnsupported: host-port mode doesn't publish
+// 3211, so the site resolver refuses with ErrSiteUnsupported rather than
+// returning a wrong address.
+func TestResolveAllSite_HostPortUnsupported(t *testing.T) {
+	h := Setup(t)
+	resolver := &proxy.Resolver{DB: h.DB, UseNetworkDNS: false, CacheTTL: time.Second}
+	_, err := resolver.ResolveAllSite(context.Background(), "anything")
+	if !errors.Is(err, proxy.ErrSiteUnsupported) {
+		t.Fatalf("ResolveAllSite host-port: got %v want ErrSiteUnsupported", err)
+	}
+}
+
+// TestProxy_SiteSubdomain_DispatchesToSiteResolver: a request to
+// "<name>.site.<base>" must be recognised as a site request and routed
+// through the site resolver — proven here by the host-port refusal
+// surfacing as 501 (the Handler detected the site form, called
+// ResolveAllSite, and got ErrSiteUnsupported). Confirms the cloud
+// wildcard form is NOT what handled it.
+func TestProxy_SiteSubdomain_DispatchesToSiteResolver(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "SiteDisp Co")
+	project := createProject(t, h, owner.AccessToken, team.Slug, "SiteDisp Proj")
+	h.SeedDeployment(project.ID, "sitehp-fox-1234", "dev", "running", false, owner.ID, 3998, "k")
+
+	resolver := &proxy.Resolver{DB: h.DB, UseNetworkDNS: false, CacheTTL: time.Second}
+	srv := httptest.NewServer(proxy.Handler(resolver, nil, "app.synapsepanel.com"))
+	t.Cleanup(srv.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/auth/get-session", nil)
+	req.Host = "sitehp-fox-1234.site.app.synapsepanel.com"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Errorf("site host in host-port mode: status=%d want 501", resp.StatusCode)
 	}
 }
