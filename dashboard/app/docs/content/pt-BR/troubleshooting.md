@@ -233,3 +233,35 @@ docker compose -f /opt/synapse/docker-compose.yml exec caddy \
 ```
 
 Pra recuperar de rate-limit do Let's Encrypt, espera (mínimo 1 hora).
+
+## HTTP actions dão 404 (login do Better Auth / webhooks falham)
+
+Sintoma: queries e mutations funcionam, mas `/api/auth/*` (Better Auth),
+webhooks ou callbacks `/engine/*` retornam **404** no navegador, mesmo
+com o deployment saudável.
+
+Causa: HTTP actions são servidas no **site proxy** do backend Convex
+(porta 3211), não no listener cloud (3210). Se o seu cliente aponta o
+`NEXT_PUBLIC_CONVEX_SITE_URL` pra URL cloud, essas requests de caminho
+natural batem na 3210 — onde HTTP actions só existem sob `/http/` — e
+dão 404.
+
+Correção:
+
+```bash
+# 1. O card do deployment mostra a "HTTP Actions URL" real — ela tem que
+#    ser o host *.site.<base> (ou um domínio customizado role='site'),
+#    NÃO a URL cloud. Rode `synapse select` de novo pro .env.local pegar
+#    o NEXT_PUBLIC_CONVEX_SITE_URL distinto.
+synapse select
+
+# 2. O modo base-domain precisa de um SEGUNDO registro A wildcard:
+#    *.site.<BASE_DOMAIN> -> <ip-do-vps>   (ao lado de *.<BASE_DOMAIN>)
+
+# 3. Deployments criados ANTES do release de site-origin congelaram o
+#    CONVEX_SITE_ORIGIN na URL cloud — reinicie uma vez pra reassar:
+#    dashboard → linha do deployment → Restart, ou recrie.
+```
+
+Contexto + o modelo completo (duas portas 3210/3211):
+`docs/CONVEX_SITE_ORIGIN.md` no repo.
