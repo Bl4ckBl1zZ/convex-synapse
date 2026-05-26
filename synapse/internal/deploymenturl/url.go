@@ -124,15 +124,66 @@ func (c Computer) CLI(d *models.Deployment, activeAPIDomain string) string {
 	return fmt.Sprintf("%s://%s:%d", u.Scheme, u.Hostname(), d.HostPort)
 }
 
+// Site returns the externally-reachable URL of the deployment's SITE
+// proxy — the Convex backend's port 3211, where HTTP actions are served
+// at their natural paths (Better Auth /api/auth/*, webhooks, /engine/*).
+// This is a DIFFERENT PORT from Public/CLI (which target the cloud
+// listener on 3210), not the same URL: the backend serves http actions
+// under "/http/" on 3210 and re-exposes them at natural paths via a
+// separate site proxy on 3211. Conflating the two was the historical bug
+// this fixes — see docs/CONVEX_SITE_ORIGIN.md.
+//
+// Decision matrix (first match wins):
+//
+//	d == nil                → ""
+//	d.Adopted               → ""  (operator-supplied external backend; its
+//	                           site origin isn't derivable from
+//	                           DeploymentURL, which points at the cloud
+//	                           API — the operator wires the site host)
+//	activeSiteDomain != ""  → "https://<activeSiteDomain>"  (custom domain
+//	                           role='site')
+//	BaseDomain != ""        → "https://<name>.site.<BaseDomain>"  (wildcard)
+//	everything else         → ""  (host-port mode: 3211 isn't published, so
+//	                           there's no working external site URL; the
+//	                           provisioner keeps CONVEX_SITE_ORIGIN at the
+//	                           cloud fallback — TODO, host-port Phase 2)
+func (c Computer) Site(d *models.Deployment, activeSiteDomain string) string {
+	if d == nil {
+		return ""
+	}
+	if d.Adopted {
+		return ""
+	}
+	if activeSiteDomain != "" {
+		return "https://" + activeSiteDomain
+	}
+	if c.BaseDomain != "" {
+		return "https://" + d.Name + ".site." + c.BaseDomain
+	}
+	return ""
+}
+
 // LookupActiveAPIDomain returns the first active deployment_domains row
-// for this deployment with role='api', or "" when none is configured or
-// the lookup hits a transient blip. Returning "" on error is deliberate:
+// for this deployment with role='api', or "" when none is configured.
+func LookupActiveAPIDomain(ctx context.Context, db *pgxpool.Pool, deploymentID string) string {
+	return lookupActiveDomainByRole(ctx, db, deploymentID, models.DomainRoleAPI)
+}
+
+// LookupActiveSiteDomain returns the first active deployment_domains row
+// for this deployment with role='site', or "" when none is configured.
+func LookupActiveSiteDomain(ctx context.Context, db *pgxpool.Pool, deploymentID string) string {
+	return lookupActiveDomainByRole(ctx, db, deploymentID, models.DomainRoleSite)
+}
+
+// lookupActiveDomainByRole returns the first active deployment_domains
+// row for (deploymentID, role), or "" when none is configured or the
+// lookup hits a transient blip. Returning "" on error is deliberate:
 // callers feed the value into URL helpers that must stay infallible.
 //
 // The UNIQUE(domain) constraint means at most one row matches, but the
 // ORDER BY keeps the choice deterministic if a future schema change
 // ever drops uniqueness.
-func LookupActiveAPIDomain(ctx context.Context, db *pgxpool.Pool, deploymentID string) string {
+func lookupActiveDomainByRole(ctx context.Context, db *pgxpool.Pool, deploymentID, role string) string {
 	if db == nil || deploymentID == "" {
 		return ""
 	}
@@ -145,7 +196,7 @@ func LookupActiveAPIDomain(ctx context.Context, db *pgxpool.Pool, deploymentID s
 		   AND status = $3
 		 ORDER BY created_at ASC
 		 LIMIT 1
-	`, deploymentID, models.DomainRoleAPI, models.DomainStatusActive).Scan(&domain)
+	`, deploymentID, role, models.DomainStatusActive).Scan(&domain)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		// Swallow — callers can't act on the error and must fall
 		// back to the legacy decision tree.

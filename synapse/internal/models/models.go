@@ -277,6 +277,11 @@ type ZoneInfo struct {
 const (
 	DomainRoleAPI       = "api"
 	DomainRoleDashboard = "dashboard"
+	// DomainRoleSite routes a custom domain at the deployment's SITE
+	// proxy (Convex backend port 3211) where HTTP actions live at their
+	// natural paths — distinct from 'api' (port 3210). See
+	// docs/CONVEX_SITE_ORIGIN.md.
+	DomainRoleSite = "site"
 
 	DomainStatusPending = "pending"
 	DomainStatusActive  = "active"
