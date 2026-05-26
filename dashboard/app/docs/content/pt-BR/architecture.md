@@ -118,6 +118,18 @@ O que isso te da na pratica:
 
 Active-active entre replicas nao e possivel sem mudancas no design de lease do backend upstream.
 
+## A camada Cell Control Plane
+
+Em cima do control plane por-deployment fica o **Cell Control Plane** — uma camada de nível de frota que mapeia **hosts** (máquinas) → **cells** (agrupamentos operacionais de um projeto) → **deployments**, acompanha o estado **desejado** vs **observado**, e computa **drift**.
+
+É estritamente **observar → comparar → planejar, nunca aplicar**:
+
+- Um **agent observe-only** (`synapse-agent`) roda em cada host e reporta um heartbeat + um scan `docker ps -a` read-only. Ele nunca muta nada; `SYNAPSE_AGENT_APPLY` é `false` por padrão e apply não é implementado.
+- O **desired state** é sincronizado das placements; o **observed state** vem do agent; os dois são correlacionados pelo label `synapse.deployment_id`. O **drift engine** classifica a diferença (`in_sync` / `missing` / `drifted` / `unmanaged` / `orphaned` / `host_unreachable`) atrás de um trust gate, então um host inacessível nunca produz um `missing` falso.
+- O **reconcile é dry-run apenas**: todo passo do plano é `planned` / `no_op` / `skipped`, carrega `applyAllowed=false`, e o servidor rejeita `apply:true` com `400`. Não há botão Apply nem comando apply.
+
+Nenhum segredo jamais flui pra labels, desired state ou observed state. As tabelas (`hosts`, `cells`, `cell_resources`, `deployment_placements`, `cell_links`, `service_tokens`, `desired_states`, `observed_states`, `drift_reports`, `drift_items`, `operation_runs`) são aditivas (migrations `000017`–`000021`). Veja a doc do [Cell Control Plane](/docs/pt-BR/cell-control-plane).
+
 ## "Gerenciado pelo Synapse"
 
 A definicao canonica e: um container ou volume Docker criado pelo provisioner do Synapse (`synapse/internal/docker/`). Containers provisionados sempre:

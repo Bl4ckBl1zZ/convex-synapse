@@ -1,16 +1,15 @@
-# Release notes — Cell Control Plane (RC)
+# Release notes — Cell Control Plane
 
-**Proposed version:** `v1.12.0-rc1` (minor bump from the de-facto installer line
-`1.11.7`; the feature set is additive + backward-compatible. Alternative label:
-`cell-control-plane-rc1`.) · **Branch:** `feat/cell-control-plane` ·
-**Staging-verified code commit:** `deaee89` (the Bloco 12.6 hotfix; the commits
-after it are docs + a comment-only gofmt) · **Migrations:** `000017`–`000021`
-(additive).
+**Status: SHIPPED.** Released as **`v1.12.2`** (latest GitHub Release), **merged
+to `main`** (PR #116), and **deployed to production** (synapsepanel.com) —
+smoke-verified. CLI published as **`@iann29/synapse@1.10.0`**. Migrations
+`000017`–`000021` (additive, applied on boot). The RC line (`v1.12.0-rc1`) and
+`v1.12.0` were the staging / prod-window tags; `v1.12.1` and `v1.12.2` folded in
+post-deploy fixes (deployment-delete cleanup, self-host liveness).
 
-> **No git tag is created yet** — per the release process, the RC tag is cut
-> only after real-staging-VPS verification passes. Staging verification **has
-> passed** (Bloco 12.5/12.6, code commit `deaee89`); the RC/prod tag is still
-> the maintainer's call. Production tag (`v1.12.0`) after the prod deploy window.
+> **Now the default Synapse.** Fresh installs (`curl … main/setup.sh | bash`),
+> `setup.sh --upgrade`, and `npm i -g @iann29/synapse` all ship the Cell Control
+> Plane. Staging + production both verified; observe-only / dry-run throughout.
 
 Turns Synapse from a per-deployment panel into a **Cell Control Plane**:
 observe → compare → plan. **Diagnosis + dry-run only — it never applies changes

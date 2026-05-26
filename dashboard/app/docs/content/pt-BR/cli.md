@@ -1,6 +1,6 @@
 # Referência do Synapse CLI
 
-Versão: `@iann29/synapse@1.9.2`. Requer Node >= 18.17. Use `synapse --help` pro catálogo automático e `synapse <cmd> --help` pro corpo de cada comando.
+Versão: `@iann29/synapse@1.10.0`. Requer Node >= 18.17. Use `synapse --help` pro catálogo automático e `synapse <cmd> --help` pro corpo de cada comando.
 
 Todo comando escreve resultado estruturado em **stdout**, status/progresso em **stderr** e aceita `--json` em qualquer posição.
 
@@ -177,6 +177,55 @@ Adopted: `Cannot rotate key for "<name>" — it's an adopted (external) deployme
 
 Snapshot. `--watch` polling cada 2s até terminal (`running`/`failed`/`errored`/`deleted`/`stopped`). `--watch=<n>` sobrescreve intervalo. Incompatível com `--json`.
 
+## Cell Control Plane
+
+Comandos do [Cell Control Plane](/docs/pt-BR/cell-control-plane). Todos eles **diagnosticam, planejam ou gerenciam metadados** — nenhum aplica mudança num host, e **não existe comando apply**. Escope com `--host`, `--cell` ou `--project` (ou use o projeto linkado). Adicione `--json` em qualquer lugar.
+
+### `synapse hosts <list|show|create|drain|adoption-token|agents>`
+
+Gerencia hosts (instance-admin). `create` registra só metadados — nunca toca numa máquina. `adoption-token` gera um token de uso único + imprime o comando `synapse-agent join`. `agents` lista os agents de um host.
+
+```bash
+synapse hosts list
+synapse hosts create --name vps-br-1 --region br
+synapse hosts adoption-token --host <id>
+```
+
+### `synapse cells <list|create|attach-deployment|attach-host|drain>`
+
+Agrupa deployments em cells. `attach-deployment` cria uma placement; `attach-host` define o host primário da cell; `drain` marca intenção do operador (nada é movido ou parado).
+
+```bash
+synapse cells create --project <id> --name core-prod-br-1 --kind core
+synapse cells attach-deployment --cell <id> --deployment <name>
+```
+
+### `synapse cell-links` / `synapse service-tokens`
+
+Registra e inspeciona contratos serviço-a-serviço e seus tokens de discovery. `service-tokens` lista só metadados; o texto puro de um token é mostrado uma vez na criação e nunca mais.
+
+### `synapse topology show [--project=<id>]`
+
+Renderiza o mapa Host → Cell → Deployment + avisos read-only.
+
+### `synapse desired sync` / `synapse observed`
+
+`desired sync` constrói o desired state a partir das placements (grava uma operation run). `observed` lê o que os agents reportaram.
+
+### `synapse drift <recompute|latest>` + `synapse reconcile dry-run`
+
+```bash
+synapse drift recompute   --project <id>   # classifica desejado vs observado
+synapse drift latest      --project <id>   # lê o report mais recente
+synapse reconcile dry-run --project <id>   # os passos *planejados* — nunca executados
+```
+
+Não existe **apply**: `synapse reconcile dry-run --apply` dá erro "apply is not implemented", e o servidor rejeita `apply:true` com `400`.
+
+### `synapse operations list [--project=<id>]`
+
+O histórico read-only de syncs, recomputes e dry-runs.
+
 ## Env vars
 
 Todos os subcomandos `env` operam em **project-default** env vars. Mudança afeta deployments criados **depois**, a menos que sync rode.
@@ -311,5 +360,6 @@ Re-cria symlinks de harness só. Sem SKILL.md writes. Comum após clone novo.
 | `synapse env push --prune` | Não existe. Use `synapse env unset NAME` |
 | `synapse deployment create --name=...` / `--reference=...` | Backend gera o nome; sem flag override |
 | `synapse cli upgrade` | `npm i -g @iann29/synapse` — atualize pelo seu package manager |
+| `synapse apply` / `synapse reconcile dry-run --apply` | Não existe. O Cell Control Plane é observe + dry-run apenas; nunca aplica |
 
 Pra qualquer outra coisa, cai no `synapse convex <subcommand>` (escape hatch) ou bata na API direto.

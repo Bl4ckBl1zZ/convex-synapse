@@ -91,6 +91,30 @@ export const SECTIONS: DocSection[] = [
     ],
   },
   {
+    title: { en: "Cell Control Plane", "pt-BR": "Cell Control Plane" },
+    pages: [
+      {
+        slug: "cell-control-plane",
+        title: { en: "Overview", "pt-BR": "Visão geral" },
+      },
+      {
+        slug: "hosts-and-agents",
+        title: { en: "Hosts & agents", "pt-BR": "Hosts & agents" },
+      },
+      {
+        slug: "cells-links-topology",
+        title: {
+          en: "Cells, links & topology",
+          "pt-BR": "Cells, links & topologia",
+        },
+      },
+      {
+        slug: "state-and-drift",
+        title: { en: "State & drift", "pt-BR": "State & drift" },
+      },
+    ],
+  },
+  {
     title: { en: "Operations", "pt-BR": "Operações" },
     pages: [
       {

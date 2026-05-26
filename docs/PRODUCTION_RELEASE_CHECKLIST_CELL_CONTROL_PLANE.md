@@ -1,14 +1,15 @@
 # Production release checklist — Cell Control Plane
 
-Operational deploy/rollback procedure for the `feat/cell-control-plane` branch
-(staging-verified code commit `deaee89`; later commits are docs + comment-only
-gofmt; proposed `v1.12.0-rc1`). Read alongside
+Operational deploy/rollback procedure for the Cell Control Plane. **Status:
+SHIPPED** — released as `v1.12.2`, merged to `main`, deployed to production
+(synapsepanel.com) and smoke-verified. Retained as the runbook for future
+upgrades + rollbacks. Read alongside
 [RELEASE_NOTES_CELL_CONTROL_PLANE.md](RELEASE_NOTES_CELL_CONTROL_PLANE.md) and
 [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md).
 
-> **Golden rule:** the release must be reversible, auditable, conservative.
-> Migrations are additive; the layer is observe-only (no apply). **Do not deploy
-> to production until the staging-VPS verification (§2) passes.**
+> **Golden rule:** every deploy must be reversible, auditable, conservative.
+> Migrations are additive; the layer is observe-only (no apply). Re-run the §2
+> verification on your own staging box before each prod promotion.
 
 Deploy model: single VPS, `docker compose` (postgres + synapse + dashboard),
 managed by `setup.sh`. Migrations run automatically on the synapse container's

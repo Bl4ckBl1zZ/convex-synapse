@@ -104,8 +104,12 @@ dashboard renders "Dry-run only. Removal is not implemented."
   the plan would converge it.
 - **unmanaged** — a synapse container with no matching intent. Investigate
   before doing anything (v0 never recommends `remove` here).
-- **orphaned** — the control-plane row outlived its deployment; re-running sync
-  supersedes it.
+- **orphaned** — the control-plane row outlived its deployment. Deleting a
+  deployment now cleans up its desired state, placement, cell-resource, and the
+  cell's `primary_deployment_id` automatically, so this is rare. It shows when a
+  desired row is still active for a soft-deleted deployment: `status='deleted'`
+  counts as "no longer exists" → `orphaned`, never a misleading `missing →
+  create`.
 - **host_unreachable** — don't trust the observation; check the host / agent /
   docker scan. **Not** a "create".
 - **ignored** — noise; safe to skip.

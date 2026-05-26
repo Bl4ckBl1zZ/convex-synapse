@@ -66,7 +66,7 @@ The API returns two fields on every Host:
   | Condition | effectiveStatus |
   |---|---|
   | `status == draining` (operator intent) | `draining` |
-  | no heartbeat yet, is the Synapse host | `online` |
+  | **is the Synapse self-host** (`is_synapse_host`) | `online` — always, while the control plane is up (it runs on this box), independent of any agent heartbeat |
   | no heartbeat yet, any other host | stored `status` (e.g. `unknown`) |
   | last heartbeat ≤ `STALE_AFTER` | `online` |
   | `STALE_AFTER` < last heartbeat ≤ `OFFLINE_AFTER` | `stale` |

@@ -1,13 +1,17 @@
 # Cell Control Plane — Roadmap
 
-Scoped to the [Cell Control Plane](CELL_CONTROL_PLANE.md) (branch
-`feat/cell-control-plane`). For the general Synapse roadmap see
+Scoped to the [Cell Control Plane](CELL_CONTROL_PLANE.md) — **shipped in
+`v1.12.2`, merged to `main`**. For the general Synapse roadmap see
 [ROADMAP.md](ROADMAP.md).
 
 > **Not implemented and not scheduled without explicit review:** real apply,
 > agent apply mode, Amagejumpy integration, ai-agent-core integration.
 
-## Done (Blocos 1–9c)
+## Done — SHIPPED as `v1.12.2` (Blocos 1–14.1)
+
+Merged to `main` (PR #116), released as `v1.12.2` (latest GitHub Release),
+deployed to production (synapsepanel.com) and smoke-verified, CLI published
+`@iann29/synapse@1.10.0`.
 
 - **1–3** — Hosts / HostAgents / HostAdoptionTokens / Cells / CellResources /
   DeploymentPlacements + idempotent backfill + APIs (`16cfe98`).
@@ -35,6 +39,18 @@ Scoped to the [Cell Control Plane](CELL_CONTROL_PLANE.md) (branch
   cells / cell-links / service-tokens / topology / desired / observed / drift /
   reconcile dry-run / operations. HTTP-only, `--json`, redacted output, no
   `apply` command (`reconcile --apply` errors).
+- **11** — pre-merge hardening (full test matrix, migration rehearsal, live
+  smoke, security review); CLI EPIPE fix (`a105211`).
+- **12 / 12.5 / 12.6** — release prep + real staging-VPS verification; found +
+  fixed the provisioner-label drift blocker (`deaee89`).
+- **13** — RC tag + **production deploy** to synapsepanel.com (backup → upgrade
+  → smoke); cut `v1.12.0`/`v1.12.2`, **merged to `main`** (PR #116), GitHub
+  Release latest, CLI published `@iann29/synapse@1.10.0`.
+- **14 / 14.1** — post-deploy fixes found in prod: deployment-delete cleans up
+  Cell Control Plane state (`v1.12.1`); self-host reads online, delete clears
+  `primary_deployment_id`, stale dashboard banner removed (`v1.12.2`).
+- **docs** — in-dashboard `/docs` Cell Control Plane pages (Overview, Hosts &
+  agents, Cells/links/topology, State & drift) in en + pt-BR.
 
 ## Next (incremental, still observe/plan only)
 

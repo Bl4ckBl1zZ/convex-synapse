@@ -170,14 +170,14 @@ still rejected, both hosts `online`, dashboard + API 200.
 
 ## Recommendation
 
-**Ready for merge after review; ready for staging — hold prod for the
-maintainer's go.** All automated gates + the local migration rehearsal,
-end-to-end live smoke, security review, **and a real staging-VPS pass** are
-green. One blocker was found on staging and fixed in-band (`deaee89`), then
-re-verified on the same VPS. Remaining items are non-blocking follow-ups
-(eslint baseline cleanup, host/cell deep-dive UI, the deferred
-explicitly-gated apply mode). No RC/prod tag is cut in this pass — that is the
-maintainer's call per the release process.
+**Merged + shipped.** Merged to `main` (PR #116), released as `v1.12.2` (latest
+GitHub Release), deployed to production (synapsepanel.com) and smoke-verified;
+CLI published as `@iann29/synapse@1.10.0`. All automated gates + migration
+rehearsal + a real staging-VPS pass + production smoke are green. Two
+post-deploy fixes were folded in (`v1.12.1`/`v1.12.2`: delete now cleans up the
+Cell Control Plane state; the self-host reads online). Remaining items are
+non-blocking follow-ups (eslint baseline cleanup, host/cell deep-dive UI, a
+delete-cell UI button, the deferred explicitly-gated apply mode).
 
 ## Checklist — after merge
 

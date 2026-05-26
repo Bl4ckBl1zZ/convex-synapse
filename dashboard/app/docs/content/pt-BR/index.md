@@ -9,6 +9,7 @@ Esta documentação cobre tudo — instalação, arquitetura, todo endpoint da A
 - **Novo no Synapse?** Leia [Primeiros passos](/docs/pt-BR/getting-started) e depois [Arquitetura](/docs/pt-BR/architecture).
 - **Vindo do Convex Cloud?** Dê uma olhada em [Self-hosted vs Cloud](/docs/pt-BR/self-hosted-vs-cloud) pra saber o que tem e o que não tem.
 - **Operação dia-a-dia?** Marque [Guia do operador](/docs/pt-BR/operator-playbook), [Solução de problemas](/docs/pt-BR/troubleshooting), e a [Referência da CLI](/docs/pt-BR/cli).
+- **Rodando uma frota?** Leia o [Cell Control Plane](/docs/pt-BR/cell-control-plane) — hosts, cells, drift; ele observa e planeja, mas nunca aplica.
 - **Construindo contra a API?** Vá direto pra [Referência da API](/docs/pt-BR/api).
 - **Usando agentes AI?** Configure [Skills para agentes de IA](/docs/pt-BR/ai-agent-skills) pra Claude Code / Anthropic Agent SDK acertarem o comando `synapse` de primeira.
 
@@ -30,6 +31,12 @@ Esta documentação cobre tudo — instalação, arquitetura, todo endpoint da A
 - [Domínios customizados](/docs/pt-BR/custom-domains) — wildcard + per-deployment, TLS on-demand
 - [Deploy keys](/docs/pt-BR/deploy-keys) — admin keys nomeadas para CI
 - [Integração com o Convex Dashboard](/docs/pt-BR/convex-dashboard-integration) — iframe embedado, picker de deployment
+
+### Cell Control Plane
+- [Visão geral](/docs/pt-BR/cell-control-plane) — observar → comparar → planejar, nunca aplicar
+- [Hosts & agents](/docs/pt-BR/hosts-and-agents) — registrar hosts, o agent observe-only
+- [Cells, links & topologia](/docs/pt-BR/cells-links-topology) — agrupar deployments, ligar contratos, ler o mapa
+- [State & drift](/docs/pt-BR/state-and-drift) — desejado vs observado, o planejador dry-run
 
 ### Operações
 - [Guia do operador](/docs/pt-BR/operator-playbook) — todo modo do `setup.sh`
