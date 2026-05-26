@@ -600,11 +600,17 @@ func (c *Client) RestartReplica(ctx context.Context, deploymentName string, repl
 }
 
 func (c *Client) restart(ctx context.Context, cName string) error {
-	if err := c.api.ContainerStart(ctx, cName, container.StartOptions{}); err != nil {
+	// ContainerRestart (not ContainerStart): a running container must actually
+	// bounce (stop + start). ContainerStart is a no-op on an already-running
+	// container, which silently made the operator "Restart" do nothing.
+	// ContainerRestart still starts a stopped container, so the health worker's
+	// stopped-replica recovery keeps working.
+	timeout := 10
+	if err := c.api.ContainerRestart(ctx, cName, container.StopOptions{Timeout: &timeout}); err != nil {
 		if isNotFound(err) {
 			return ErrContainerNotFound
 		}
-		return fmt.Errorf("start container %s: %w", cName, err)
+		return fmt.Errorf("restart container %s: %w", cName, err)
 	}
 	return nil
 }
