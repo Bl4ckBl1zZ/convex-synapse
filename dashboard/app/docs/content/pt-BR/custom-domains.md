@@ -88,12 +88,13 @@ curl -X DELETE -H "Authorization: Bearer $JWT" \
   https://synapsepanel.com/v1/deployments/brave-dolphin-1060/domains/<id>
 ```
 
-### Role: `api` vs `dashboard`
+### Role: `api` vs `dashboard` vs `site`
 
 A coluna `role` em `deployment_domains` seleciona pra onde o proxy encaminha (veja `proxy.go::Handler`):
 
-- **`api`** — encaminha pro container do backend Convex do deployment. Queries, mutations e HTTP actions caem aqui. Este é o role que participa da classificação de URL (`active custom domain api` ganha do `BaseDomain` em `Computer.Public` / `Computer.CLI`).
+- **`api`** — encaminha pra porta **cloud** (3210) do backend Convex do deployment. Queries, mutations, sync do cliente e HTTP actions sob `/http/` caem aqui. Este é o role que participa da classificação de URL (`active custom domain api` ganha do `BaseDomain` em `Computer.Public` / `Computer.CLI`).
 - **`dashboard`** — encaminha pra `Resolver.DashboardAddr` (sidecar `convex-dashboard-proxy`). Permite frontear a UI do Convex Dashboard embutido no seu próprio domínio de marca.
+- **`site`** — encaminha pra porta do **site proxy** (3211) do deployment, onde as HTTP actions são servidas nos caminhos naturais (Better Auth `/api/auth/*`, webhooks, `/engine/*`). É pra cá que o `NEXT_PUBLIC_CONVEX_SITE_URL` do seu app deve apontar. Veja `docs/CONVEX_SITE_ORIGIN.md` no repo. No modo base-domain a mesma superfície está em `<name>.site.<BASE_DOMAIN>` sem precisar de domínio customizado.
 
 ### Schema (`migration 000012_deployment_domains`)
 
@@ -102,7 +103,7 @@ CREATE TABLE deployment_domains (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     deployment_id UUID NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
     domain CITEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('api', 'dashboard')),
+    role TEXT NOT NULL CHECK (role IN ('api', 'dashboard', 'site')), -- 'site' adicionado na migration 000022
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'active', 'failed')),
     dns_verified_at TIMESTAMPTZ,

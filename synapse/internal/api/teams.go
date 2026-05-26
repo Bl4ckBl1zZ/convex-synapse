@@ -1072,6 +1072,7 @@ func (h *TeamsHandler) listDeployments(w http.ResponseWriter, r *http.Request) {
 		// the dashboard's browser can hit.
 		if h.Deployments != nil {
 			d.DeploymentURL = h.Deployments.publicDeploymentURL(r.Context(), &d)
+			d.SiteURL = h.Deployments.siteDeploymentURL(r.Context(), &d)
 		}
 		deployments = append(deployments, d)
 	}

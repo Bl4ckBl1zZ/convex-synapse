@@ -88,12 +88,13 @@ curl -X DELETE -H "Authorization: Bearer $JWT" \
   https://synapsepanel.com/v1/deployments/brave-dolphin-1060/domains/<id>
 ```
 
-### Role: `api` vs `dashboard`
+### Role: `api` vs `dashboard` vs `site`
 
 The `role` column on `deployment_domains` selects what the proxy forwards to (see `proxy.go::Handler`):
 
-- **`api`** — forwards to the deployment's Convex backend container. Queries, mutations, HTTP actions land here. This is the role that participates in URL classification (`active custom domain api` beats `BaseDomain` in `Computer.Public` / `Computer.CLI`).
+- **`api`** — forwards to the deployment's Convex backend **cloud** port (3210). Queries, mutations, client sync, and HTTP actions under `/http/` land here. This is the role that participates in URL classification (`active custom domain api` beats `BaseDomain` in `Computer.Public` / `Computer.CLI`).
 - **`dashboard`** — forwards to `Resolver.DashboardAddr` (the `convex-dashboard-proxy` sidecar). Lets you front the embedded Convex Dashboard UI on your own brand domain.
+- **`site`** — forwards to the deployment's **site proxy** port (3211), where HTTP actions are served at their natural paths (Better Auth `/api/auth/*`, webhooks, `/engine/*`). This is what your app's `NEXT_PUBLIC_CONVEX_SITE_URL` should point at. See [Site origin](./architecture) and the repo's `docs/CONVEX_SITE_ORIGIN.md`. In base-domain mode the same surface is available at `<name>.site.<BASE_DOMAIN>` without a custom domain.
 
 ### Schema (`migration 000012_deployment_domains`)
 
@@ -102,7 +103,7 @@ CREATE TABLE deployment_domains (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     deployment_id UUID NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
     domain CITEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('api', 'dashboard')),
+    role TEXT NOT NULL CHECK (role IN ('api', 'dashboard', 'site')), -- 'site' added in migration 000022
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'active', 'failed')),
     dns_verified_at TIMESTAMPTZ,

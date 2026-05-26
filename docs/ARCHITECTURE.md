@@ -108,6 +108,26 @@ Single Docker network: `synapse-network`. Synapse and all provisioned backends s
 
 For v0 we go with **host-port mapping** — simpler, easier to debug. Reverse proxy is a v1 thing.
 
+### Deployment URLs (cloud vs site)
+
+Every Convex backend opens **two** listeners, and they serve different
+things — this is by PORT, not by hostname:
+
+- **cloud (3210)** — `CONVEX_CLOUD_ORIGIN`. Client sync/WebSocket,
+  queries/mutations, file storage, `npx convex deploy`. HTTP actions are
+  reachable here only under the `/http/` prefix.
+- **site (3211)** — `CONVEX_SITE_ORIGIN`. The "site proxy": rewrites any
+  path to `127.0.0.1:3210/http<path>`, so HTTP actions (Better Auth
+  `/api/auth/*`, webhooks, `/engine/*`) work at their natural paths.
+
+Synapse exposes both: the cloud URL is `<name>.<BASE_DOMAIN>` (→ 3210)
+and the site URL is `<name>.site.<BASE_DOMAIN>` (→ 3211), mirroring
+Cloud's `.convex.cloud` / `.convex.site`. A per-deployment custom domain
+can carry `role='api'` (cloud) or `role='site'`. Conflating the two —
+which Synapse did until the site-origin feature — silently 404s every
+HTTP action. Full write-up + upstream evidence:
+[`CONVEX_SITE_ORIGIN.md`](./CONVEX_SITE_ORIGIN.md).
+
 ## Why Go?
 
 Three reasons:

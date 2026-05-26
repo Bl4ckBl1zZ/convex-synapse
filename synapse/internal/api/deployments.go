@@ -224,6 +224,9 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 		Name:     deploymentName,
 		HostPort: *hostPort,
 	}, h.lookupActiveAPIDomain(ctx, deploymentID))
+	siteOrigin := h.urlComputer().Site(&models.Deployment{
+		Name: deploymentName,
+	}, h.lookupActiveSiteDomain(ctx, deploymentID))
 
 	spec := dockerprov.DeploymentSpec{
 		Name:                  deploymentName,
@@ -234,6 +237,7 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 		EnvVars:               envVars,
 		HealthcheckViaNetwork: h.HealthcheckViaNetwork,
 		PublicURL:             publicOrigin,
+		SiteURL:               siteOrigin,
 	}
 
 	logger.Info("rebuild cors: recreating container",
@@ -336,6 +340,9 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 		Name:     deploymentName,
 		HostPort: primaryReplicaPort,
 	}, h.lookupActiveAPIDomain(ctx, deploymentID))
+	siteOrigin := h.urlComputer().Site(&models.Deployment{
+		Name: deploymentName,
+	}, h.lookupActiveSiteDomain(ctx, deploymentID))
 
 	// Project id for the synapse.project_id container label (best-effort; the
 	// synapse.deployment_id label is the one drift correlates on).
@@ -355,6 +362,7 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 			ReplicaIndex:          r.index,
 			Storage:               storage,
 			PublicURL:             publicOrigin,
+			SiteURL:               siteOrigin,
 		}
 		logger.Info("rebuild cors: recreating HA replica",
 			"deployment_id", deploymentID, "name", deploymentName,
@@ -573,6 +581,14 @@ func (h *DeploymentsHandler) cliDeploymentURL(ctx context.Context, d *models.Dep
 	return h.urlComputer().CLI(d, h.lookupActiveAPIDomain(ctx, d.ID))
 }
 
+// siteDeploymentURL returns the deployment's site-proxy URL (Convex port
+// 3211) — where HTTP actions are served at their natural paths. Empty
+// when no base domain and no role='site' custom domain apply (host-port
+// mode). See deploymenturl.Computer.Site + docs/CONVEX_SITE_ORIGIN.md.
+func (h *DeploymentsHandler) siteDeploymentURL(ctx context.Context, d *models.Deployment) string {
+	return h.urlComputer().Site(d, h.lookupActiveSiteDomain(ctx, d.ID))
+}
+
 // lookupActiveAPIDomain returns the first active custom domain for this
 // deployment with role='api', or "" if none exists / lookup fails. The
 // UNIQUE(domain) constraint means at most one row matches, but we ORDER
@@ -584,6 +600,12 @@ func (h *DeploymentsHandler) cliDeploymentURL(ctx context.Context, d *models.Dep
 // just because the domains lookup hit a transient db blip.
 func (h *DeploymentsHandler) lookupActiveAPIDomain(ctx context.Context, deploymentID string) string {
 	return deploymenturl.LookupActiveAPIDomain(ctx, h.DB, deploymentID)
+}
+
+// lookupActiveSiteDomain is the role='site' counterpart of
+// lookupActiveAPIDomain. Same infallible contract.
+func (h *DeploymentsHandler) lookupActiveSiteDomain(ctx context.Context, deploymentID string) string {
+	return deploymenturl.LookupActiveSiteDomain(ctx, h.DB, deploymentID)
 }
 
 // SecretEncrypter is the *crypto.SecretBox subset the handler needs.
@@ -1272,6 +1294,7 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 	// renders something the operator's browser can actually hit (PR #10
 	// added the helper but only wired it into /auth + /cli_credentials).
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), &d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), &d)
 	writeJSON(w, http.StatusCreated, d)
 }
 
@@ -1495,6 +1518,7 @@ func (h *DeploymentsHandler) adoptDeployment(w http.ResponseWriter, r *http.Requ
 	// path as the other handlers so a future change to the rewrite
 	// rules doesn't accidentally diverge here.
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), &d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), &d)
 	writeJSON(w, http.StatusCreated, d)
 }
 
@@ -1620,6 +1644,7 @@ func (h *DeploymentsHandler) getProjectDeployment(w http.ResponseWriter, r *http
 		d.CreatorUserID = *creator
 	}
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), &d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), &d)
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -1642,6 +1667,7 @@ func (h *DeploymentsHandler) getDeployment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), d)
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -2195,7 +2221,12 @@ func (h *DeploymentsHandler) deploymentAuth(w http.ResponseWriter, r *http.Reque
 type cliCredentialsResp struct {
 	DeploymentName string `json:"deploymentName"`
 	ConvexURL      string `json:"convexUrl"`
-	AdminKey       string `json:"adminKey"`
+	// SiteURL is the deployment's HTTP-actions host (Convex port 3211).
+	// The CLI writes it to NEXT_PUBLIC_CONVEX_SITE_URL. Empty when no
+	// base domain / role='site' custom domain applies — the CLI then
+	// falls back to the cloud URL (legacy behaviour).
+	SiteURL  string `json:"siteUrl,omitempty"`
+	AdminKey string `json:"adminKey"`
 	// ExportSnippet sets both env vars in a POSIX shell. Built server-side
 	// so the dashboard doesn't have to hand-roll the formatting (and so any
 	// future change to the env-var names is owned by one file).
@@ -2215,6 +2246,7 @@ func (h *DeploymentsHandler) deploymentCLICredentials(w http.ResponseWriter, r *
 	// Convex CLI's `new URL("/api/...", baseUrl)` host-anchors and
 	// would otherwise drop the path prefix.
 	cliURL := h.cliDeploymentURL(r.Context(), d)
+	siteURL := h.siteDeploymentURL(r.Context(), d)
 	exportSnippet := "export CONVEX_SELF_HOSTED_URL=" + shellQuote(cliURL) + "\n" +
 		"export CONVEX_SELF_HOSTED_ADMIN_KEY=" + shellQuote(d.AdminKey)
 	envSnippet := "CONVEX_SELF_HOSTED_URL=" + shellQuote(cliURL) + "\n" +
@@ -2222,6 +2254,7 @@ func (h *DeploymentsHandler) deploymentCLICredentials(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusOK, cliCredentialsResp{
 		DeploymentName: d.Name,
 		ConvexURL:      cliURL,
+		SiteURL:        siteURL,
 		AdminKey:       d.AdminKey,
 		ExportSnippet:  exportSnippet,
 		EnvSnippet:     envSnippet,
@@ -2594,6 +2627,12 @@ func (h *DeploymentsHandler) revokeDeployKey(w http.ResponseWriter, r *http.Requ
 		HostPort:              d.HostPort,
 		EnvVars:               envVars,
 		HealthcheckViaNetwork: h.HealthcheckViaNetwork,
+		// Bake the public + site origins so the recreated container keeps
+		// CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN pointing at the
+		// reachable host (PublicURL was previously omitted here, leaving a
+		// rotated container on the loopback origin).
+		PublicURL: h.cliDeploymentURL(r.Context(), d),
+		SiteURL:   h.siteDeploymentURL(r.Context(), d),
 	}
 	info, err := h.Docker.Recreate(r.Context(), spec)
 	if err != nil {

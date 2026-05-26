@@ -87,6 +87,58 @@ func TestConvexOrigin_NoConfigFallsBackToLoopback(t *testing.T) {
 	}
 }
 
+// TestSiteOrigin_BaseDomainProducesSiteHost: with a base domain the
+// provisioner must bake CONVEX_SITE_ORIGIN = "https://<name>.site.<base>"
+// — the deployment's dedicated site-proxy host (Convex port 3211, where
+// HTTP actions live at natural paths), distinct from the cloud origin.
+// See docs/CONVEX_SITE_ORIGIN.md.
+func TestSiteOrigin_BaseDomainProducesSiteHost(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		PublicURL:    "https://synapse.example.com",
+		ProxyEnabled: true,
+		BaseDomain:   "synapse.example.com",
+	})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Site-Origin Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "SiteOrigin")
+
+	var got deploymentResp
+	h.DoJSON(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken, map[string]string{"type": "dev"}, http.StatusCreated, &got)
+	waitForStatus(t, h, got.Name, "running", 5*time.Second)
+
+	spec := lastProvisionedSpec(t, h, got.Name)
+	want := "https://" + got.Name + ".site.synapse.example.com"
+	if spec.SiteURL != want {
+		t.Errorf("spec.SiteURL: got %q want %q", spec.SiteURL, want)
+	}
+	// Cloud and site origins must differ — that's the whole point.
+	if spec.PublicURL == spec.SiteURL {
+		t.Errorf("PublicURL and SiteURL must differ (cloud vs site); both = %q", spec.PublicURL)
+	}
+}
+
+// TestSiteOrigin_NoConfigEmpty: without a base domain or a role='site'
+// custom domain there is no externally-reachable site URL, so the worker
+// emits "" and the docker layer keeps CONVEX_SITE_ORIGIN == cloud origin
+// (host-port mode, where 3211 isn't published anyway).
+func TestSiteOrigin_NoConfigEmpty(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "NoSite Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "NoSite")
+
+	var got deploymentResp
+	h.DoJSON(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken, map[string]string{"type": "dev"}, http.StatusCreated, &got)
+	waitForStatus(t, h, got.Name, "running", 5*time.Second)
+
+	spec := lastProvisionedSpec(t, h, got.Name)
+	if spec.SiteURL != "" {
+		t.Errorf("spec.SiteURL: got %q want empty (host-port fallback)", spec.SiteURL)
+	}
+}
+
 // lastProvisionedSpec polls FakeDocker until it sees a Provision call
 // for the named deployment, then returns the recorded spec. Returns
 // after the worker has caught up so callers can assert on env shape.

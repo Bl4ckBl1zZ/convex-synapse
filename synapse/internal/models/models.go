@@ -83,6 +83,12 @@ type Deployment struct {
 	ContainerID    string `json:"-"`
 	HostPort       int    `json:"-"`
 	DeploymentURL  string `json:"deploymentUrl,omitempty"`
+	// SiteURL is the deployment's site-proxy URL (Convex port 3211),
+	// where HTTP actions are served at their natural paths (Better Auth
+	// /api/auth/*, webhooks, /engine/*). Distinct from DeploymentURL
+	// (the cloud origin, port 3210). Empty when no base domain and no
+	// role='site' custom domain apply. See docs/CONVEX_SITE_ORIGIN.md.
+	SiteURL        string `json:"siteUrl,omitempty"`
 	AdminKey       string `json:"-"`
 	InstanceSecret string `json:"-"`
 	IsDefault      bool   `json:"isDefault"`
@@ -277,6 +283,11 @@ type ZoneInfo struct {
 const (
 	DomainRoleAPI       = "api"
 	DomainRoleDashboard = "dashboard"
+	// DomainRoleSite routes a custom domain at the deployment's SITE
+	// proxy (Convex backend port 3211) where HTTP actions live at their
+	// natural paths — distinct from 'api' (port 3210). See
+	// docs/CONVEX_SITE_ORIGIN.md.
+	DomainRoleSite = "site"
 
 	DomainStatusPending = "pending"
 	DomainStatusActive  = "active"

@@ -121,3 +121,43 @@ func TestTLSAsk_CaseInsensitiveHost(t *testing.T) {
 		t.Errorf("tls_ask uppercase host: status=%d want 200", resp.StatusCode)
 	}
 }
+
+// The site-proxy host "<name>.site.<base>" must be approved for a real
+// deployment — even though it's a multi-label subdomain of <base>, the
+// site branch runs before the multi-label reject.
+func TestTLSAsk_OkForSiteSubdomain(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{BaseDomain: "synapse.example.com"})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Site TLS Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "Site TLS Proj")
+	h.SeedDeployment(proj.ID, "bold-fox-1234", "dev", "running", true, owner.ID, 3242, "")
+
+	q := url.Values{"domain": {"bold-fox-1234.site.synapse.example.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("tls_ask site subdomain: status=%d want 200", resp.StatusCode)
+	}
+}
+
+func TestTLSAsk_404ForSiteSubdomainUnknownDeployment(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{BaseDomain: "synapse.example.com"})
+	q := url.Values{"domain": {"never-existed.site.synapse.example.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("tls_ask unknown site deployment: status=%d want 404", resp.StatusCode)
+	}
+}
+
+// "a.b.site.<base>" — a multi-label name before ".site" — must still be
+// refused with 403.
+func TestTLSAsk_RejectsMultiLabelSiteSubdomain(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{BaseDomain: "synapse.example.com"})
+	q := url.Values{"domain": {"a.b.site.synapse.example.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("tls_ask multi-label site: status=%d want 403", resp.StatusCode)
+	}
+}

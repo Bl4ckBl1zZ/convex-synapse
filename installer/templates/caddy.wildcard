@@ -21,3 +21,22 @@
     }
     reverse_proxy {{CADDY_UPSTREAM_HOST}}:{{SYNAPSE_PORT}}
 }
+
+# Site-proxy wildcard (site-origin). "<name>.site.<base>" is the
+# deployment's HTTP-actions host — where Better Auth (/api/auth/*),
+# webhooks, and /engine/* are served. Caddy can't tell it apart from the
+# cloud wildcard: both terminate TLS and forward to Synapse, which routes
+# by Host header (proxy.go::matchSiteSubdomain) to the backend's port
+# 3211 instead of 3210. The same on_demand_tls { ask } global gates
+# issuance — tls_ask approves "<name>.site.<base>" for real deployments.
+#
+# No collision with the cloud "*.<base>" block: Caddy's `*` matches
+# exactly one label, and "site" is a separate DNS level, so
+# "<name>.site.<base>" only ever matches THIS block. Needs its own
+# wildcard A record (*.site.<base> -> VPS IP). See docs/CONVEX_SITE_ORIGIN.md.
+*.site.{{SYNAPSE_BASE_DOMAIN}} {
+    tls {
+        on_demand
+    }
+    reverse_proxy {{CADDY_UPSTREAM_HOST}}:{{SYNAPSE_PORT}}
+}

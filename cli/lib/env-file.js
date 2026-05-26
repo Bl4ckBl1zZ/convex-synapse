@@ -6,17 +6,21 @@
 //
 //   # Convex (Synapse self-hosted — drop-in compatible with Cloud tutorials)
 //   NEXT_PUBLIC_CONVEX_URL="https://<name>.app.synapsepanel.com"
-//   NEXT_PUBLIC_CONVEX_SITE_URL="https://<name>.app.synapsepanel.com"
+//   NEXT_PUBLIC_CONVEX_SITE_URL="https://<name>.site.app.synapsepanel.com"
 //   # CONVEX_DEPLOYMENT=dev:<name> # team: <team>, project: <project>
 //
 //   # Self-hosted auth (Synapse cannot use Cloud account session)
 //   CONVEX_SELF_HOSTED_URL="https://<name>.app.synapsepanel.com"
 //   CONVEX_SELF_HOSTED_ADMIN_KEY="<name>|..."
 //
-// In Cloud, NEXT_PUBLIC_CONVEX_URL points at `.convex.cloud` and
-// NEXT_PUBLIC_CONVEX_SITE_URL at `.convex.site` — two different
-// origins. In self-hosted both point at the same URL; the backend
-// container routes API calls and HTTP actions on the same host.
+// In Cloud, NEXT_PUBLIC_CONVEX_URL points at `.convex.cloud` (the API /
+// cloud listener, port 3210) and NEXT_PUBLIC_CONVEX_SITE_URL at
+// `.convex.site` (the site proxy where HTTP actions live, port 3211).
+// Synapse mirrors this: when the deployment has a base domain or a
+// role='site' custom domain, the site URL is a distinct host
+// (`<name>.site.<base>`) routed to port 3211. Without one (host-port
+// mode, where 3211 isn't separately published) the site URL falls back
+// to the cloud URL. See the repo's docs/CONVEX_SITE_ORIGIN.md.
 //
 // CONVEX_DEPLOYMENT stays commented in self-hosted mode. The Convex
 // CLI errors with "CONVEX_DEPLOYMENT must not be set when
@@ -147,7 +151,7 @@ function buildDeploymentLine({ deploymentName, target, teamName, projectName, te
 }
 
 function updateEnvContent(content, opts) {
-  const { convexUrl, adminKey } = opts || {};
+  const { convexUrl, siteUrl, adminKey } = opts || {};
   if (!convexUrl || !adminKey) {
     throw new Error("updateEnvContent requires convexUrl + adminKey");
   }
@@ -157,10 +161,16 @@ function updateEnvContent(content, opts) {
   // Drop trailing empty lines — we'll re-add a single newline via join.
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
+  // NEXT_PUBLIC_CONVEX_SITE_URL is the HTTP-actions host (Convex port
+  // 3211). It's distinct from the cloud URL when the backend handed us a
+  // siteUrl (base domain / role='site' custom domain); otherwise it falls
+  // back to the cloud URL (host-port mode). See docs/CONVEX_SITE_ORIGIN.md.
+  const publicSiteUrl = siteUrl || convexUrl;
+
   // Canonical assignments by key.
   const assignments = {
     [NEXT_PUBLIC_CONVEX_URL]: envAssignment(NEXT_PUBLIC_CONVEX_URL, convexUrl),
-    [NEXT_PUBLIC_CONVEX_SITE_URL]: envAssignment(NEXT_PUBLIC_CONVEX_SITE_URL, convexUrl),
+    [NEXT_PUBLIC_CONVEX_SITE_URL]: envAssignment(NEXT_PUBLIC_CONVEX_SITE_URL, publicSiteUrl),
     [SELF_HOSTED_URL]: envAssignment(SELF_HOSTED_URL, convexUrl),
     [SELF_HOSTED_ADMIN_KEY]: envAssignment(SELF_HOSTED_ADMIN_KEY, adminKey),
   };
@@ -252,6 +262,7 @@ function writeProjectEnv(projectDir, credentials, opts = {}) {
   const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   const next = updateEnvContent(existing, {
     convexUrl: credentials.convexUrl,
+    siteUrl: credentials.siteUrl,
     adminKey: credentials.adminKey,
     deploymentName: credentials.deploymentName || opts.deploymentName,
     target: opts.target,

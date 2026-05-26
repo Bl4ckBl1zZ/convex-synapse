@@ -44,6 +44,7 @@ type deploymentResp struct {
 	DeploymentType string     `json:"deploymentType"`
 	Status         string     `json:"status"`
 	DeploymentURL  string     `json:"deploymentUrl,omitempty"`
+	SiteURL        string     `json:"siteUrl,omitempty"`
 	IsDefault      bool       `json:"isDefault"`
 	Reference      string     `json:"reference,omitempty"`
 	Creator        string     `json:"creator,omitempty"`
@@ -155,6 +156,7 @@ func TestDeployments_AuthNonMember403(t *testing.T) {
 type cliCredentialsResp struct {
 	DeploymentName string `json:"deploymentName"`
 	ConvexURL      string `json:"convexUrl"`
+	SiteURL        string `json:"siteUrl,omitempty"`
 	AdminKey       string `json:"adminKey"`
 	ExportSnippet  string `json:"exportSnippet"`
 	EnvSnippet     string `json:"envSnippet"`

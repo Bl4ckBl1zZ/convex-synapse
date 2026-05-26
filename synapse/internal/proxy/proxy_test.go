@@ -58,6 +58,31 @@ func TestPathSplit(t *testing.T) {
 	}
 }
 
+// TestMatchSiteSubdomain covers the "<name>.site.<base>" extraction —
+// the site level is a separate DNS label so it never collides with a
+// deployment name, and the plain cloud form must NOT match here.
+func TestMatchSiteSubdomain(t *testing.T) {
+	const base = "app.synapsepanel.com"
+	cases := []struct {
+		host string
+		want string
+	}{
+		{"bold-fox.site.app.synapsepanel.com", "bold-fox"},
+		{"agile-cat-9412.site.app.synapsepanel.com", "agile-cat-9412"},
+		{"BOLD-FOX.SITE.APP.SYNAPSEPANEL.COM", "bold-fox"}, // case-insensitive
+		{"bold-fox.app.synapsepanel.com", ""},              // cloud form, not site
+		{"app.synapsepanel.com", ""},                       // bare base
+		{"site.app.synapsepanel.com", ""},                  // empty name before .site
+		{"a.b.site.app.synapsepanel.com", ""},              // multi-label name
+		{"bold-fox.site.other.com", ""},                    // wrong base
+	}
+	for _, tc := range cases {
+		if got := matchSiteSubdomain(tc.host, base); got != tc.want {
+			t.Errorf("matchSiteSubdomain(%q) = %q; want %q", tc.host, got, tc.want)
+		}
+	}
+}
+
 // helpers exposed only to tests — same logic as Handler above, kept inline
 // in the production handler for clarity.
 func stripDPrefix(path string) (string, bool) {

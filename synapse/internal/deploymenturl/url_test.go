@@ -147,6 +147,63 @@ func TestComputer_CLI(t *testing.T) {
 	}
 }
 
+func TestComputer_Site(t *testing.T) {
+	d := &models.Deployment{Name: "happy-cat-1234", HostPort: 3211, DeploymentURL: "http://127.0.0.1:3211"}
+	cases := []struct {
+		name       string
+		comp       Computer
+		dep        *models.Deployment
+		siteDomain string
+		want       string
+	}{
+		{
+			name:       "active site domain wins (custom domain role=site)",
+			comp:       Computer{PublicURL: "https://x.test", BaseDomain: "syn.test"},
+			dep:        d,
+			siteDomain: "site.mip.amagejumpy.com",
+			want:       "https://site.mip.amagejumpy.com",
+		},
+		{
+			name:       "BaseDomain produces the .site. wildcard host",
+			comp:       Computer{PublicURL: "https://x.test", ProxyEnabled: true, BaseDomain: "app.synapsepanel.com"},
+			dep:        d,
+			siteDomain: "",
+			want:       "https://happy-cat-1234.site.app.synapsepanel.com",
+		},
+		{
+			name: "adopted returns empty (operator wires the site host)",
+			comp: Computer{PublicURL: "https://x.test", BaseDomain: "syn.test"},
+			dep: &models.Deployment{
+				Name: "ext", Adopted: true, DeploymentURL: "https://operator.example.com", HostPort: 9999,
+			},
+			siteDomain: "",
+			want:       "",
+		},
+		{
+			name:       "host-port mode (no base, no custom domain) returns empty",
+			comp:       Computer{PublicURL: "https://x.test", ProxyEnabled: false},
+			dep:        d,
+			siteDomain: "",
+			want:       "",
+		},
+		{
+			name:       "no config at all returns empty",
+			comp:       Computer{},
+			dep:        d,
+			siteDomain: "",
+			want:       "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.comp.Site(tc.dep, tc.siteDomain)
+			if got != tc.want {
+				t.Errorf("Site: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestNilDeployment: every helper must tolerate a nil receiver argument
 // instead of panicking — callers under transient db blips can construct
 // a partial models.Deployment, and an empty pointer is safer to fail
@@ -158,5 +215,8 @@ func TestNilDeployment(t *testing.T) {
 	}
 	if got := c.CLI(nil, ""); got != "" {
 		t.Errorf("CLI(nil) = %q, want empty", got)
+	}
+	if got := c.Site(nil, ""); got != "" {
+		t.Errorf("Site(nil) = %q, want empty", got)
 	}
 }

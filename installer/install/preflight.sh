@@ -257,10 +257,34 @@ preflight::check_base_domain() {
     fi
     if [[ "$resolved" == "$my_ip" ]]; then
         ui::success "Custom domains: *.${base} wildcard → $resolved (matches this host)"
+        preflight::_check_site_wildcard "$base" "$my_ip"
         return 0
     fi
     ui::warn "Custom domains: *.${base} wildcard → $resolved, but this host is $my_ip"
     return 1
+}
+
+# preflight::_check_site_wildcard <base> <my_ip>
+# Warn-only probe of the site-origin wildcard "*.site.<base>" — the
+# HTTP-actions host (Better Auth /api/auth/*, webhooks, /engine/*) served
+# on the backend's port 3211. Does NOT affect the preflight verdict: the
+# cloud wildcard is the gating check; this is an extra heads-up so the
+# operator knows HTTP actions won't be reachable from outside until the
+# SECOND wildcard A record exists. See docs/CONVEX_SITE_ORIGIN.md.
+preflight::_check_site_wildcard() {
+    local base="${1:-}" my_ip="${2:-}"
+    [[ -n "$base" && -n "$my_ip" ]] || return 0
+    local rand probe resolved
+    rand="${RANDOM}-${RANDOM}"
+    probe="probe-${rand}.site.${base}"
+    resolved="$(dig +short "$probe" 2>/dev/null | head -n1)"
+    if [[ "$resolved" == "$my_ip" ]]; then
+        ui::success "HTTP actions: *.site.${base} wildcard → $resolved (matches this host)"
+        return 0
+    fi
+    ui::warn "HTTP actions: *.site.${base} wildcard not resolving to this host yet"
+    ui::info "  Add an A record for *.site.${base} → ${my_ip} so HTTP actions (Better Auth, webhooks) work."
+    return 0
 }
 
 # preflight::run_all [domain]
