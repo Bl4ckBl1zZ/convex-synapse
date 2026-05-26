@@ -283,3 +283,47 @@ cosmetic even though 3211 already answers. Phase 1 underpins both.
   `CONVEX_SITE_ORIGIN`.
 - Verify real app login (Better Auth) end-to-end.
 - Deploy order + rollback steps (in `docs/SITE_ORIGIN_CUTOVER.md`).
+
+## 8. Validation results
+
+**Local end-to-end with REAL containers** (docker compose, network-DNS
+mode — identical routing to the production compose stack;
+`SYNAPSE_BASE_DOMAIN=app.synapse.local`). This covers the gap the Go
+suite can't: FakeDocker never starts a real backend, so the
+3210→3211 re-port had never hit a live site proxy until now.
+
+Provisioned `patient-penguin-1661` (status `running`), then:
+
+- **Deployment JSON / create response** carries a distinct `siteUrl`:
+  `https://patient-penguin-1661.site.app.synapse.local` (vs cloud
+  `…app.synapse.local`). ✓ (Phase 5)
+- **Container env** baked correctly: `CONVEX_CLOUD_ORIGIN` = cloud host,
+  `CONVEX_SITE_ORIGIN` = site host (distinct). `ExposedPorts` =
+  {3210, 3211}. ✓ (Phase 2)
+- **Proxy routing** (Host header → `localhost:8080`), each matching the
+  direct-to-container behaviour of the target port:
+
+  | Host | Path | Proxy | Direct port |
+  |---|---|---|---|
+  | `<n>.app.synapse.local` | `/` | 200 | 3210 = 200 |
+  | `<n>.site.app.synapse.local` | `/` | **404** | 3211 = 404 |
+  | `<n>.app.synapse.local` | `/api/check_admin_key` | 403 | 3210 = 403 |
+  | `<n>.site.app.synapse.local` | `/api/check_admin_key` | 404 | 3211 = 404 |
+  | `nope-9999.site.app.synapse.local` | `/` | 404 (not found) | — |
+
+  The `/` discriminator is decisive: if the site host wrongly hit 3210
+  it would return 200; it returns 404 (the site proxy rewriting `/` →
+  `/http/` with no route), proving it reached 3211. ✓ (Phase 3)
+- **tls_ask**: site host → 200; unknown site host → 404; multi-label
+  (`a.b.site.<base>`) → 403. ✓ (Phase 4)
+
+**Not covered locally (operator/cutover, needs real DNS):** Caddy
+terminating TLS on `*.site.<base>` end-to-end. The Caddy block is a
+byte-for-byte sibling of the proven `*.<base>` cloud block (same
+upstream, same on-demand gate), and `tls_ask` already answers for the
+site host; the residual risk is the wildcard DNS record + Let's Encrypt
+issuance, which is the operator's hand. Steps in
+`docs/SITE_ORIGIN_CUTOVER.md`. The `synapse-vps` staging box adds nothing
+over this local run for the *routing* assertion (same binary, same
+compose, same real containers) — its only delta is Caddy+TLS+DNS, which
+can't run without the operator-owned `*.site.<base>` record.
