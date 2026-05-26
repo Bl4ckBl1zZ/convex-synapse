@@ -322,3 +322,26 @@ test("preserves file mode permissions on disk write (smoke via fs)", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("distinct siteUrl drives NEXT_PUBLIC_CONVEX_SITE_URL (cloud vs site host)", () => {
+  const next = updateEnvContent("", {
+    convexUrl: "https://agile-cat-9412.app.synapsepanel.com",
+    siteUrl: "https://agile-cat-9412.site.app.synapsepanel.com",
+    adminKey: "agile-cat-9412|abc",
+    deploymentName: "agile-cat-9412",
+  });
+  // Cloud URL → 3210 (client API, deploy/admin); site URL → 3211 (HTTP actions).
+  assert.match(next, /NEXT_PUBLIC_CONVEX_URL="https:\/\/agile-cat-9412\.app\.synapsepanel\.com"/);
+  assert.match(next, /NEXT_PUBLIC_CONVEX_SITE_URL="https:\/\/agile-cat-9412\.site\.app\.synapsepanel\.com"/);
+  // CONVEX_SELF_HOSTED_URL stays the cloud URL — deploy/admin hit 3210.
+  assert.match(next, /CONVEX_SELF_HOSTED_URL="https:\/\/agile-cat-9412\.app\.synapsepanel\.com"/);
+});
+
+test("siteUrl omitted falls back to convexUrl for SITE_URL (host-port mode)", () => {
+  const next = updateEnvContent("", {
+    convexUrl: "https://x.app.synapsepanel.com",
+    adminKey: "x|abc",
+    deploymentName: "x",
+  });
+  assert.match(next, /NEXT_PUBLIC_CONVEX_SITE_URL="https:\/\/x\.app\.synapsepanel\.com"/);
+});

@@ -604,16 +604,39 @@ await Promise.all([
                             {copiedName === d.name ? "Copied!" : "Copy"}
                           </Button>
                         </div>
-                        {/* Honesty note: in Convex Cloud the "HTTP
-                            Actions URL" is a separate domain
-                            (`<name>.convex.site`); in self-hosted the
-                            same container serves both surfaces, so they
-                            share the URL. Tiny hint avoids confusion
-                            when an operator coming from Cloud reads
-                            our deployment card. */}
-                        <p className="text-[10px] text-neutral-600">
-                          HTTP Actions URL: same as Cloud URL in self-hosted.
-                        </p>
+                        {/* HTTP Actions URL = the deployment's site
+                            proxy (Convex port 3211, mirrors Cloud's
+                            `<name>.convex.site`). When the backend
+                            returns a distinct siteUrl (base domain /
+                            role='site' custom domain) we show it — that's
+                            the host Better Auth / webhooks must hit.
+                            Without one (host-port mode, 3211 not
+                            separately reachable) it falls back to the
+                            cloud URL. See docs/CONVEX_SITE_ORIGIN.md. */}
+                        {d.siteUrl ? (
+                          <div className="mt-1 flex items-center gap-2">
+                            <p className="truncate text-[10px] text-neutral-500">
+                              HTTP Actions URL:{" "}
+                              <span className="font-mono text-neutral-400">
+                                {d.siteUrl}
+                              </span>
+                            </p>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                copyUrl(`${d.name}::site`, d.siteUrl as string)
+                              }
+                              aria-label="Copy HTTP Actions URL"
+                            >
+                              {copiedName === `${d.name}::site` ? "Copied!" : "Copy"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-neutral-600">
+                            HTTP Actions URL: same as Cloud URL in self-hosted.
+                          </p>
+                        )}
                       </div>
                     )}
                     {d.status === "running" && (

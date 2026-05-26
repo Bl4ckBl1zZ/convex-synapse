@@ -111,6 +111,11 @@ export type Deployment = {
   status?: string;
   url?: string;
   deploymentUrl?: string;
+  // siteUrl is the deployment's HTTP-actions host (Convex port 3211),
+  // distinct from deploymentUrl (the cloud origin). Present only when a
+  // base domain / role='site' custom domain applies. See the repo's
+  // docs/CONVEX_SITE_ORIGIN.md.
+  siteUrl?: string;
   createdAt?: string;
   isDefault?: boolean;
   // Operator-supplied label, e.g. a git ref or a CI run id. The
