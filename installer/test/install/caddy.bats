@@ -280,8 +280,12 @@ EOF
     SYNAPSE_BASE_DOMAIN=synapse.example.com \
         caddy::write_standalone "$out"
     [ -f "$out" ]
-    # Wildcard site block present
+    # Cloud wildcard site block present (and exactly one — the *.site
+    # block starts with "*.site." so it doesn't match this pattern)
     run grep -c '^\*\.synapse.example.com {' "$out"
+    assert_output "1"
+    # Site-origin wildcard block present too (HTTP actions, port 3211)
+    run grep -c '^\*\.site\.synapse.example.com {' "$out"
     assert_output "1"
     # On-demand TLS directive in the global block (matches once as
     # a directive plus once or more in template prose comments —
@@ -293,10 +297,10 @@ EOF
     run grep -E "^\s*ask\s+http://synapse-api:8080/v1/internal/tls_ask" "$out"
     assert_success
     # Wildcard reverse_proxy points at the synapse-api service.
-    # Three matches in v1.6.8+: main site's reverse_proxy +
-    # *.<base> wildcard + :443 catch-all.
+    # Four matches as of site-origin: main site's reverse_proxy +
+    # *.<base> wildcard + *.site.<base> wildcard + :443 catch-all.
     run grep -c "reverse_proxy synapse-api:8080" "$out"
-    assert_output "3"
+    assert_output "4"
 }
 
 @test "write_standalone: NO wildcard block when SYNAPSE_BASE_DOMAIN empty" {
