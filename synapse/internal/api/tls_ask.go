@@ -57,6 +57,19 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		suffix := "." + base
 		if strings.HasSuffix(host, suffix) && host != base {
 			name := host[:len(host)-len(suffix)]
+			// Site form "<dep>.site.<base>" (the HTTP-actions host): strip
+			// the ".site" level and validate the deployment exactly like
+			// the cloud form. This MUST run BEFORE the multi-label reject
+			// below — "<dep>.site" itself contains a dot and would
+			// otherwise be refused. See docs/CONVEX_SITE_ORIGIN.md.
+			if siteName, ok := strings.CutSuffix(name, ".site"); ok {
+				if siteName == "" || strings.Contains(siteName, ".") {
+					http.Error(w, "multi-label subdomain", http.StatusForbidden)
+					return
+				}
+				h.approveIfDeploymentExists(ctx, w, siteName)
+				return
+			}
 			// Refuse multi-label subdomains — Synapse only addresses a
 			// single label per deployment under the wildcard.
 			if strings.Contains(name, ".") {
@@ -67,21 +80,7 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "empty subdomain", http.StatusBadRequest)
 				return
 			}
-			var exists bool
-			err := h.DB.QueryRow(ctx, `
-				SELECT EXISTS (
-					SELECT 1 FROM deployments
-					WHERE name = $1 AND status <> 'deleted'
-				)`, name).Scan(&exists)
-			if err != nil {
-				http.Error(w, "db error", http.StatusServiceUnavailable)
-				return
-			}
-			if !exists {
-				http.Error(w, "deployment not found", http.StatusNotFound)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
+			h.approveIfDeploymentExists(ctx, w, name)
 			return
 		}
 		// Falls through to (B) when host isn't under the base.
@@ -112,4 +111,26 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// custom domain"; the wildcard branch above already covered
 	// "under base but the deployment doesn't exist".
 	http.Error(w, "domain not registered", http.StatusNotFound)
+}
+
+// approveIfDeploymentExists writes 200 when a non-deleted deployment
+// named `name` exists, 404 when it doesn't, and 503 on a db blip.
+// Shared by the cloud ("<name>.<base>") and site ("<name>.site.<base>")
+// wildcard branches so the existence check stays in one place.
+func (h *TLSAskHandler) approveIfDeploymentExists(ctx context.Context, w http.ResponseWriter, name string) {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM deployments
+			WHERE name = $1 AND status <> 'deleted'
+		)`, name).Scan(&exists)
+	if err != nil {
+		http.Error(w, "db error", http.StatusServiceUnavailable)
+		return
+	}
+	if !exists {
+		http.Error(w, "deployment not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
