@@ -132,6 +132,7 @@ Endpoints at both `/v1/me/*` and at the top-level `/v1/*`. The `/v1/profile/*` a
 | `POST /v1/projects/{id}/adopt_deployment` | project admin | `{deploymentUrl, adminKey, deploymentType?, name?, isDefault?, reference?}`. Probes `/version` + `/api/check_admin_key` first. Errors: `400 missing_url`, `400 missing_admin_key`, `400 invalid_url`, `400 invalid_admin_key`, `409 name_taken`, `502 probe_failed` |
 | `GET /v1/deployments/{name}` | viewer+ | Return the deployment |
 | `POST /v1/deployments/{name}/delete` | project admin | Tear down container + volume, mark deleted |
+| `POST /v1/deployments/{name}/restart` | member+ | Bounce the container(s) in place (keeps the volume; HA restarts all replicas). `409 cannot_restart_adopted` / `deployment_provisioning` / `deployment_deleted` |
 | `GET /v1/deployments/{name}/auth` | viewer+ | `{deploymentName, deploymentUrl, adminKey, deploymentType}` for embedded dashboard |
 | `GET /v1/deployments/{name}/cli_credentials` | viewer+ | `{deploymentName, convexUrl, adminKey, envSnippet, exportSnippet}` for `npx convex` |
 | `GET /v1/deployments/{name}/backend_version` | viewer+ | Live `{version, fetchedAt, fromCache, lastDeployAt, error?}` probe |

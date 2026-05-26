@@ -65,8 +65,9 @@ const (
 	ActionSyncEnvToDeployments = "syncEnvToDeployments"
 
 	// Deployments.
-	ActionCreateDeployment = "createDeployment"
-	ActionDeleteDeployment = "deleteDeployment"
+	ActionCreateDeployment  = "createDeployment"
+	ActionDeleteDeployment  = "deleteDeployment"
+	ActionRestartDeployment = "restartDeployment"
 	// Adopted = registered an existing external Convex backend rather than
 	// provisioning a new one. Synapse-original; no Cloud equivalent.
 	ActionAdoptDeployment = "adoptDeployment"

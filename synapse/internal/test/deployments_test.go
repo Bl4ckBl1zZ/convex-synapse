@@ -767,3 +767,38 @@ func TestDeployments_DeleteIdempotentOnDockerError(t *testing.T) {
 		t.Errorf("status: got %q want running (retry-able)", status)
 	}
 }
+
+// Restart bounces the deployment's container; refuses for adopted (no managed
+// container) and for unauthenticated callers.
+func TestRestartDeployment(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Restart Team")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "restart-proj")
+	h.SeedDeployment(proj.ID, "bright-fox-3030", "dev", "running", true, owner.ID, 3210, "")
+
+	// happy path → 200, container restarted
+	h.Docker.Restarted = nil
+	h.DoJSON(http.MethodPost, "/v1/deployments/bright-fox-3030/restart", owner.AccessToken, map[string]any{}, http.StatusOK, &map[string]string{})
+	found := false
+	for _, n := range h.Docker.RestartedNames() {
+		if n == "bright-fox-3030" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a Restart for bright-fox-3030, got %v", h.Docker.RestartedNames())
+	}
+
+	// unauthenticated → 401
+	h.AssertStatus(http.MethodPost, "/v1/deployments/bright-fox-3030/restart", "", map[string]any{}, http.StatusUnauthorized)
+
+	// adopted deployment → 409 (no Synapse-managed container)
+	if _, err := h.DB.Exec(h.rootCtx, `UPDATE deployments SET adopted = true WHERE name = $1`, "bright-fox-3030"); err != nil {
+		t.Fatalf("mark adopted: %v", err)
+	}
+	env := h.AssertStatus(http.MethodPost, "/v1/deployments/bright-fox-3030/restart", owner.AccessToken, map[string]any{}, http.StatusConflict)
+	if env.Code != "cannot_restart_adopted" {
+		t.Errorf("expected cannot_restart_adopted, got %q", env.Code)
+	}
+}

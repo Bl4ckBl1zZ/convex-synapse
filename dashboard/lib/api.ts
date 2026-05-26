@@ -1727,6 +1727,14 @@ export const api = {
         body: {},
       });
     },
+    // Bounce the deployment's container(s) in place (keeps the data volume).
+    // HA restarts every replica. 409 cannot_restart_adopted for adopted rows.
+    restart(name: string): Promise<{ name: string; status: string }> {
+      return request<{ name: string; status: string }>(
+        `/v1/deployments/${encodeURIComponent(name)}/restart`,
+        { method: "POST", body: {} },
+      );
+    },
     // Deployment-scoped tokens (scope=deployment). Strictest scope —
     // bearer can only act on this exact deployment.
     listTokens(

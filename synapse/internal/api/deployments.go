@@ -51,6 +51,11 @@ type Provisioner interface {
 	// RecreateReplica is the HA-aware variant used by custom domains to
 	// roll CORS_ALLOWED_ORIGINS across replicas one at a time.
 	RecreateReplica(ctx context.Context, spec dockerprov.DeploymentSpec) (*dockerprov.DeploymentInfo, error)
+	// Restart bounces the deployment's container in place (single-replica),
+	// keeping its data volume. Used by the operator "Restart" action.
+	Restart(ctx context.Context, deploymentName string) error
+	// RestartReplica bounces a single HA replica's container in place.
+	RestartReplica(ctx context.Context, deploymentName string, replicaIndex int) error
 }
 
 // DeploymentsHandler exposes the deployment lifecycle: create (which provisions
@@ -595,6 +600,7 @@ func (h *DeploymentsHandler) Routes() chi.Router {
 	r.Route("/{name}", func(r chi.Router) {
 		r.Get("/", h.getDeployment)
 		r.Post("/delete", h.deleteDeployment)
+		r.Post("/restart", h.restartDeployment)
 		r.Get("/auth", h.deploymentAuth)
 		r.Get("/cli_credentials", h.deploymentCLICredentials)
 		r.Get("/backend_version", h.getBackendVersion)
@@ -2069,6 +2075,63 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 		Metadata:   map[string]any{"name": d.Name},
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"name": d.Name, "status": "deleted"})
+}
+
+// ---------- POST /v1/deployments/{name}/restart ----------
+//
+// Bounces the deployment's container(s) in place, keeping the data volume — the
+// operator escape hatch for a wedged or just-deployed backend. Not a config
+// change: the DB status is untouched (the health worker reconciles). HA restarts
+// every replica. Adopted deployments have no Synapse-managed container, so this
+// 409s; a provisioning or deleted deployment has nothing live to bounce.
+func (h *DeploymentsHandler) restartDeployment(w http.ResponseWriter, r *http.Request) {
+	d, _, t, role, ok := h.loadDeploymentForRequest(w, r)
+	if !ok {
+		return
+	}
+	if !canEditProject(role) {
+		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to restart this deployment")
+		return
+	}
+	if d.Adopted {
+		writeError(w, http.StatusConflict, "cannot_restart_adopted",
+			"Adopted (external) deployments aren't managed by Synapse and can't be restarted here")
+		return
+	}
+	if d.Status == models.DeploymentStatusDeleted {
+		writeError(w, http.StatusConflict, "deployment_deleted", "This deployment has been deleted")
+		return
+	}
+	if d.Status == models.DeploymentStatusProvisioning {
+		writeError(w, http.StatusConflict, "deployment_provisioning",
+			"The deployment is still provisioning; wait for it to finish before restarting")
+		return
+	}
+
+	if d.HAEnabled && d.ReplicaCount > 0 {
+		for i := 0; i < d.ReplicaCount; i++ {
+			if err := h.Docker.RestartReplica(r.Context(), d.Name, i); err != nil {
+				logErr("restart replica", err)
+				writeError(w, http.StatusInternalServerError, "restart_failed", err.Error())
+				return
+			}
+		}
+	} else if err := h.Docker.Restart(r.Context(), d.Name); err != nil {
+		logErr("restart deployment", err)
+		writeError(w, http.StatusInternalServerError, "restart_failed", err.Error())
+		return
+	}
+
+	uid, _ := auth.UserID(r.Context())
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		TeamID:     t.ID,
+		ActorID:    uid,
+		Action:     audit.ActionRestartDeployment,
+		TargetType: audit.TargetDeployment,
+		TargetID:   d.ID,
+		Metadata:   map[string]any{"name": d.Name},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"name": d.Name, "status": "restarted"})
 }
 
 // ---------- GET /v1/deployments/{name}/auth ----------

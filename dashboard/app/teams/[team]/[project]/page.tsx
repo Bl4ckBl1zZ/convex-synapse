@@ -271,6 +271,7 @@ await Promise.all([
   };
 
   const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [restartingName, setRestartingName] = useState<string | null>(null);
   const [copiedName, setCopiedName] = useState<string | null>(null);
 
   // v1.9.4: renameOpen/transferOpen/deletingProject state + their
@@ -325,6 +326,34 @@ await Promise.all([
       throw err;
     } finally {
       setDeletingName(null);
+    }
+  };
+
+  // Restart bounces the container in place (brief downtime, no data loss), so a
+  // single native confirm is enough — unlike delete, this isn't destructive.
+  const restartDeployment = async (name: string) => {
+    if (
+      !window.confirm(
+        `Restart ${name}? Its container bounces in place — brief downtime, no data loss.`,
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setRestartingName(name);
+    try {
+      await api.deployments.restart(name);
+      await Promise.all([
+        mutate(),
+        globalMutate(["/topology", projectId]),
+        globalMutate(["/activity", projectId]),
+      ]);
+    } catch (err) {
+      setActionError(
+        err instanceof ApiError ? err.message : "Could not restart deployment",
+      );
+    } finally {
+      setRestartingName(null);
     }
   };
 
@@ -601,6 +630,15 @@ await Promise.all([
                       disabled={openingName === d.name}
                     >
                       {openingName === d.name ? "Opening..." : "Open dashboard"}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => restartDeployment(d.name)}
+                      disabled={restartingName === d.name}
+                      aria-label={`Restart deployment ${d.name}`}
+                    >
+                      {restartingName === d.name ? "Restarting..." : "Restart"}
                     </Button>
                     <Button
                       variant="danger"

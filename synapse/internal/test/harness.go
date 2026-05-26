@@ -604,6 +604,8 @@ type FakeDocker struct {
 	RecreateFn         func(ctx context.Context, spec dockerprov.DeploymentSpec) (*dockerprov.DeploymentInfo, error)
 	MigrateSnapshotFn  func(ctx context.Context, spec dockerprov.SnapshotMigrationSpec) error
 	RecreateReplicaFn  func(ctx context.Context, spec dockerprov.DeploymentSpec) (*dockerprov.DeploymentInfo, error)
+	RestartFn          func(ctx context.Context, name string) error
+	RestartReplicaFn   func(ctx context.Context, name string, replicaIndex int) error
 
 	mu                sync.Mutex
 	Provisioned       []dockerprov.DeploymentSpec
@@ -620,6 +622,9 @@ type FakeDocker struct {
 	// add/delete/verify flow. Reads + writes are mutex-guarded so tests
 	// that wait via Eventually don't race the handler goroutine.
 	Recreated []dockerprov.DeploymentSpec
+	// Restarted records each Restart / RestartReplica call. A single-replica
+	// restart records the bare name; a replica restart records "name#index".
+	Restarted []string
 }
 
 func NewFakeDocker() *FakeDocker {
@@ -662,6 +667,35 @@ func (f *FakeDocker) DestroyReplica(ctx context.Context, name string, replicaInd
 		return f.DestroyReplicaFn(ctx, name, replicaIndex, keepVolume)
 	}
 	return nil
+}
+
+func (f *FakeDocker) Restart(ctx context.Context, name string) error {
+	f.mu.Lock()
+	f.Restarted = append(f.Restarted, name)
+	f.mu.Unlock()
+	if f.RestartFn != nil {
+		return f.RestartFn(ctx, name)
+	}
+	return nil
+}
+
+func (f *FakeDocker) RestartReplica(ctx context.Context, name string, replicaIndex int) error {
+	f.mu.Lock()
+	f.Restarted = append(f.Restarted, fmt.Sprintf("%s#%d", name, replicaIndex))
+	f.mu.Unlock()
+	if f.RestartReplicaFn != nil {
+		return f.RestartReplicaFn(ctx, name, replicaIndex)
+	}
+	return nil
+}
+
+// RestartedNames returns a copy of the recorded restart calls under lock.
+func (f *FakeDocker) RestartedNames() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.Restarted))
+	copy(out, f.Restarted)
+	return out
 }
 
 func (f *FakeDocker) Stop(ctx context.Context, name string) error {

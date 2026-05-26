@@ -420,6 +420,14 @@ Without query params, returns the newest non-deleted deployment.
 
 Stops + removes the container, drops its data volume, marks the row deleted.
 
+### `POST /v1/deployments/{name}/restart` 🔧 (members+)
+
+Bounces the deployment's container(s) in place, keeping the data volume — the
+operator escape hatch for a wedged backend. HA restarts every replica. Returns
+`{name, status:"restarted"}`. Errors: `409 cannot_restart_adopted` (no managed
+container), `409 deployment_provisioning`, `409 deployment_deleted`,
+`500 restart_failed`. The DB status is untouched; the health worker reconciles.
+
 ### `GET /v1/deployments/{name}/auth` 🔧 (members only)
 
 Returns `{deploymentName, deploymentUrl, adminKey, deploymentType}`. The
