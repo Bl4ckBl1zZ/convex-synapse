@@ -254,6 +254,9 @@ class SynapseAPI {
   cellDrain(id) {
     return this.request("POST", `/v1/cells/${encodeURIComponent(id)}/drain`, {});
   }
+  cellDelete(id) {
+    return this.request("POST", `/v1/cells/${encodeURIComponent(id)}/delete`, {});
+  }
 
   // Cell links + service tokens (project-RBAC).
   cellLinksList(projectId) {

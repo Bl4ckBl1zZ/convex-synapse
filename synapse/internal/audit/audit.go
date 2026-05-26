@@ -144,6 +144,7 @@ const (
 	ActionCreateCell              = "createCell"
 	ActionUpdateCell              = "updateCell"
 	ActionDrainCell               = "drainCell"
+	ActionDeleteCell              = "deleteCell"
 	ActionAttachDeploymentToCell  = "attachDeploymentToCell"
 	// Agent lifecycle (Bloco 6.5).
 	ActionRevokeHostAgent      = "revokeHostAgent"

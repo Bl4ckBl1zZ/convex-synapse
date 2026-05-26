@@ -49,6 +49,7 @@ func (h *CellsHandler) Routes() chi.Router {
 		r.Get("/", h.getCell)
 		r.Patch("/", h.updateCell)
 		r.Post("/drain", h.drainCell)
+		r.Post("/delete", h.deleteCell)
 		r.Post("/attach_deployment", h.attachDeployment)
 		r.Post("/attach_host", h.attachHost)
 		r.Get("/resources", h.listCellResources)
@@ -357,6 +358,54 @@ func (h *CellsHandler) drainCell(w http.ResponseWriter, r *http.Request) {
 		TargetID:   updated.ID,
 	})
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// ---------- POST /v1/cells/{cellID}/delete ----------
+
+func (h *CellsHandler) deleteCell(w http.ResponseWriter, r *http.Request) {
+	cell, role, ok := h.loadCellForRequest(w, r)
+	if !ok {
+		return
+	}
+	if !canAdminProject(role) {
+		writeError(w, http.StatusForbidden, "forbidden", "Only project admins can delete a cell")
+		return
+	}
+	// Refuse if the cell has any service-to-service link — those are contracts;
+	// the FK is ON DELETE CASCADE, so deleting the cell would silently drop them
+	// (and their service tokens). Make the operator remove the links first.
+	var links int
+	if err := h.DB.QueryRow(r.Context(),
+		`SELECT count(*) FROM cell_links WHERE source_cell_id = $1 OR target_cell_id = $1`, cell.ID,
+	).Scan(&links); err != nil {
+		logErr("count cell links", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to delete cell")
+		return
+	}
+	if links > 0 {
+		writeError(w, http.StatusConflict, "cell_has_links",
+			"Remove the cell's links before deleting it")
+		return
+	}
+	// A cell is organization, not a resource. Deleting it cascade-removes its
+	// cell_resources + deployment_placements — the deployments themselves keep
+	// running, they just become unassigned. desired/observed/drift rows have
+	// their cell_id set null (ON DELETE SET NULL).
+	if _, err := h.DB.Exec(r.Context(), `DELETE FROM cells WHERE id = $1`, cell.ID); err != nil {
+		logErr("delete cell", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to delete cell")
+		return
+	}
+	uid, _ := auth.UserID(r.Context())
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		TeamID:     cell.TeamID,
+		ActorID:    uid,
+		Action:     audit.ActionDeleteCell,
+		TargetType: audit.TargetCell,
+		TargetID:   cell.ID,
+		Metadata:   map[string]any{"name": cell.Name},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"id": cell.ID, "status": "deleted"})
 }
 
 // ---------- POST /v1/cells/{cellID}/attach_deployment ----------

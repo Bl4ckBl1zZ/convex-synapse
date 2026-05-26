@@ -1864,6 +1864,14 @@ export const api = {
         body: {},
       });
     },
+    // Deletes a cell. Deployments in it become unassigned (they keep running);
+    // 409 cell_has_links if the cell still has service-to-service links.
+    delete(id: string): Promise<{ id: string; status: string }> {
+      return request<{ id: string; status: string }>(
+        `/v1/cells/${encodeURIComponent(id)}/delete`,
+        { method: "POST", body: {} },
+      );
+    },
     // Attaches an existing deployment (by name) as a resource of the cell.
     // 409 deployment_already_attached when it lives in another cell; 404
     // when the name is unknown OR in a project the caller can't see.

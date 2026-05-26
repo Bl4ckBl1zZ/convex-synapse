@@ -56,6 +56,7 @@ export function CellsPanel({ projectId }: Props) {
   const [attachDepCell, setAttachDepCell] = useState<Cell | null>(null);
   const [attachHostCell, setAttachHostCell] = useState<Cell | null>(null);
   const [drainCell, setDrainCell] = useState<Cell | null>(null);
+  const [deleteCellTarget, setDeleteCellTarget] = useState<Cell | null>(null);
 
   const deploymentNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -153,6 +154,7 @@ export function CellsPanel({ projectId }: Props) {
                 onAttachDeployment={() => setAttachDepCell(cell)}
                 onAttachHost={() => setAttachHostCell(cell)}
                 onDrain={() => setDrainCell(cell)}
+                onDelete={() => setDeleteCellTarget(cell)}
               />
             ))}
           </div>
@@ -192,6 +194,11 @@ export function CellsPanel({ projectId }: Props) {
         cell={drainCell}
         onClose={() => setDrainCell(null)}
         onDrained={() => void cells.mutate()}
+      />
+      <DeleteCellDialog
+        cell={deleteCellTarget}
+        onClose={() => setDeleteCellTarget(null)}
+        onDeleted={() => void cells.mutate()}
       />
     </Card>
   );
@@ -254,6 +261,7 @@ function CellCard({
   onAttachDeployment,
   onAttachHost,
   onDrain,
+  onDelete,
 }: {
   cell: Cell;
   deploymentName?: string;
@@ -262,6 +270,7 @@ function CellCard({
   onAttachDeployment: () => void;
   onAttachHost: () => void;
   onDrain: () => void;
+  onDelete: () => void;
 }) {
   return (
     <Card data-testid="cell-card" data-cell-name={cell.name}>
@@ -323,6 +332,9 @@ function CellCard({
               Drain
             </Button>
           )}
+          <Button variant="danger" size="sm" onClick={onDelete}>
+            Delete
+          </Button>
         </div>
       </CardBody>
     </Card>
@@ -899,6 +911,73 @@ function DrainCellDialog({
             data-testid="confirm-drain-cell"
           >
             {pending ? "Draining…" : "Drain cell"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/* -------------------- delete confirm -------------------- */
+
+function DeleteCellDialog({
+  cell,
+  onClose,
+  onDeleted,
+}: {
+  cell: Cell | null;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  if (!cell) {
+    return (
+      <Dialog open={false} onClose={onClose}>
+        <></>
+      </Dialog>
+    );
+  }
+
+  const remove = async () => {
+    setFormError(null);
+    setPending(true);
+    try {
+      await api.cells.delete(cell.id);
+      onDeleted();
+      onClose();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : "Could not delete cell");
+      setPending(false);
+    }
+  };
+
+  return (
+    <Dialog open onClose={pending ? () => {} : onClose} title="Delete cell">
+      <div className="space-y-4">
+        <p className="text-sm text-neutral-300">
+          Delete{" "}
+          <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
+            {cell.name}
+          </code>
+          ? Any deployments in it become <strong>unassigned</strong> — they keep
+          running, they just lose the grouping. A cell with active links can&apos;t
+          be deleted; remove its links first. This can&apos;t be undone.
+        </p>
+        {formError && <p className="text-xs text-red-400">{formError}</p>}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={remove}
+            disabled={pending}
+            data-testid="confirm-delete-cell"
+          >
+            {pending ? "Deleting…" : "Delete cell"}
           </Button>
         </div>
       </div>

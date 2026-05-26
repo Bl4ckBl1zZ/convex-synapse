@@ -368,3 +368,48 @@ func TestCellLinks_RBAC(t *testing.T) {
 		map[string]any{"sourceCellId": core.ID, "targetCellId": runtime.ID}, http.StatusForbidden)
 	h.AssertStatus(http.MethodGet, "/v1/projects/"+projectID+"/cell_links", stranger.AccessToken, nil, http.StatusForbidden)
 }
+
+// Deleting a cell: refused while it has links; otherwise removes the cell and
+// un-assigns its deployments (which keep running — a cell is organization).
+func TestDeleteCell(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, core, runtime := linkFixture(t, h)
+
+	// (a) a cell with a link can't be deleted — remove the contract first.
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/cell_links", owner.AccessToken, map[string]any{
+		"sourceCellId":    core.ID,
+		"targetCellId":    runtime.ID,
+		"protocol":        "outbox",
+		"authMode":        "service_token",
+		"allowedCommands": []string{"runtime.runAutomation"},
+	}, http.StatusCreated, &models.CellLink{})
+	env := h.AssertStatus(http.MethodPost, "/v1/cells/"+core.ID+"/delete", owner.AccessToken, map[string]any{}, http.StatusConflict)
+	if env.Code != "cell_has_links" {
+		t.Errorf("expected cell_has_links, got %q", env.Code)
+	}
+
+	// (b) a standalone cell with a deployment: delete succeeds, the deployment
+	// survives (just unassigned), the placement is gone.
+	cell := createCellViaAPI(t, h, owner.AccessToken, projectID, "integration-br-1", "integration")
+	depID := h.SeedDeployment(projectID, "calm-otter-7777", "dev", "running", false, owner.ID, 3299, "")
+	h.DoJSON(http.MethodPost, "/v1/cells/"+cell.ID+"/attach_deployment", owner.AccessToken,
+		map[string]any{"deploymentName": "calm-otter-7777"}, http.StatusOK, &attachResp{})
+
+	h.DoJSON(http.MethodPost, "/v1/cells/"+cell.ID+"/delete", owner.AccessToken, map[string]any{}, http.StatusOK, &map[string]string{})
+
+	h.AssertStatus(http.MethodGet, "/v1/cells/"+cell.ID, owner.AccessToken, nil, http.StatusNotFound)
+
+	var n int
+	if err := h.DB.QueryRow(h.rootCtx, `SELECT count(*) FROM deployments WHERE id::text = $1 AND status <> 'deleted'`, depID).Scan(&n); err != nil {
+		t.Fatalf("count deployment: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("deployment must survive cell delete (became unassigned), got %d", n)
+	}
+	if err := h.DB.QueryRow(h.rootCtx, `SELECT count(*) FROM deployment_placements WHERE deployment_id::text = $1`, depID).Scan(&n); err != nil {
+		t.Fatalf("count placement: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("placement should be gone after cell delete, got %d", n)
+	}
+}

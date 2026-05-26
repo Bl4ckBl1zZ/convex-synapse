@@ -168,6 +168,26 @@ const cellsDrain = {
   },
 };
 
+const cellsDelete = {
+  name: "cells delete",
+  summary: "Delete a cell. Deployments in it become unassigned (they keep running).",
+  usage: "synapse cells delete <cell-id> --yes [--json]",
+  async run(args, ctx) {
+    const { flags, rest } = extractFlags(args, { boolean: ["yes"] });
+    const id = rest[0];
+    if (!id) throw new Error("Usage: synapse cells delete <cell-id> --yes");
+    if (!flags.yes) {
+      throw new Error(
+        "Refusing to delete a cell without --yes. Re-run with --yes to confirm. (Deployments in it keep running — they just become unassigned.)",
+      );
+    }
+    const res = await ctx.api.cellDelete(id);
+    ctx.out.result(res, () => {
+      ctx.out.stdout.write(`${colors.red("Deleted")} cell ${colors.bold(id)}\n`);
+    });
+  },
+};
+
 module.exports = [
   cellsList,
   cellsShow,
@@ -176,4 +196,5 @@ module.exports = [
   cellsAttachHost,
   cellsResources,
   cellsDrain,
+  cellsDelete,
 ];
