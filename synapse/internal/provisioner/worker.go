@@ -696,6 +696,7 @@ func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) 
 		HAReplica:             j.HAEnabled,
 		ReplicaIndex:          j.ReplicaIndex,
 		PublicURL:             w.computePublicOrigin(ctx, j.DeploymentID, j.Name, j.HostPort),
+		SiteURL:               w.computeSiteOrigin(ctx, j.DeploymentID, j.Name),
 	}
 	if j.Storage != nil {
 		spec.Storage = &dockerprov.StorageEnv{
@@ -808,6 +809,7 @@ func (w *Worker) runUpgradeToHA(ctx context.Context, logger *slog.Logger, cfg Co
 	// per-replica loop with the primary replica's host port so the env
 	// is stable across the pair.
 	publicOrigin := w.computePublicOrigin(ctx, j.DeploymentID, j.Name, ports[0])
+	siteOrigin := w.computeSiteOrigin(ctx, j.DeploymentID, j.Name)
 	replicas := make([]upgradeReplica, 0, 2)
 	for idx, port := range ports {
 		info, err := w.Docker.Provision(ctx, dockerprov.DeploymentSpec{
@@ -822,6 +824,7 @@ func (w *Worker) runUpgradeToHA(ctx context.Context, logger *slog.Logger, cfg Co
 			ReplicaIndex:          idx,
 			Storage:               storageToDocker(j.Storage),
 			PublicURL:             publicOrigin,
+			SiteURL:               siteOrigin,
 		})
 		if err != nil {
 			logger.Error("provisioner: upgrade_to_ha provision replica failed",
@@ -1186,4 +1189,32 @@ func (w *Worker) computePublicOrigin(ctx context.Context, deploymentID, name str
 	}
 	domain := deploymenturl.LookupActiveAPIDomain(ctx, w.DB, deploymentID)
 	return computer.CLI(d, domain)
+}
+
+// computeSiteOrigin returns the CONVEX_SITE_ORIGIN baked into the
+// freshly-provisioned container — the deployment's site-proxy URL (port
+// 3211) where HTTP actions live at their natural paths. Mirrors
+// computePublicOrigin but resolves through Computer.Site + a role='site'
+// custom-domain lookup. Returns "" (provisioner falls back to the cloud
+// origin) when no base domain and no site custom domain apply — e.g.
+// host-port mode, where 3211 isn't externally reachable anyway.
+func (w *Worker) computeSiteOrigin(ctx context.Context, deploymentID, name string) string {
+	cfg := w.Config
+	if cfg.BaseDomain == "" {
+		// Only a base domain or a role='site' custom domain yields a
+		// working external site URL. A plain PublicURL (host-port mode)
+		// can't, so check for a site domain and otherwise return "".
+		if domain := deploymenturl.LookupActiveSiteDomain(ctx, w.DB, deploymentID); domain != "" {
+			return "https://" + domain
+		}
+		return ""
+	}
+	computer := deploymenturl.Computer{
+		PublicURL:    cfg.PublicURL,
+		ProxyEnabled: cfg.ProxyEnabled,
+		BaseDomain:   cfg.BaseDomain,
+	}
+	d := &models.Deployment{Name: name}
+	domain := deploymenturl.LookupActiveSiteDomain(ctx, w.DB, deploymentID)
+	return computer.Site(d, domain)
 }

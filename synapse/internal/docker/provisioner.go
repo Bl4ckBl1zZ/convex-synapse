@@ -75,6 +75,16 @@ type DeploymentSpec struct {
 	// incorrect here. Empty falls back to the loopback form (pre-v1.6.15
 	// behaviour).
 	PublicURL string
+
+	// SiteURL, when set, becomes CONVEX_SITE_ORIGIN — the deployment's
+	// site-proxy origin (Convex port 3211) where HTTP actions are served
+	// at their natural paths. Distinct from PublicURL (the cloud origin,
+	// port 3210): the two are different ports on the same container, not
+	// the same URL. Empty falls back to PublicURL (the legacy "same URL"
+	// behaviour), which is correct for host-port mode where 3211 isn't
+	// published. Computed by deploymenturl.Computer.Site. See
+	// docs/CONVEX_SITE_ORIGIN.md.
+	SiteURL string
 }
 
 // StorageEnv carries the per-deployment Postgres + S3 configuration.
@@ -342,6 +352,13 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 	cName := ContainerName(spec.Name, spec.ReplicaIndex, spec.HAReplica)
 
 	containerPort := nat.Port("3210/tcp")
+	// sitePort (3211) is the Convex site proxy. The upstream image already
+	// EXPOSEs it, but declaring it here is explicit + defensive. In DNS
+	// (compose / base-domain) mode the proxy reaches it over the docker
+	// network, so we don't publish a host PortBinding for it. Host-port
+	// mode would need a 2nd published port to expose 3211 externally —
+	// documented TODO (see docs/SITE_ORIGIN_PLAN.md, host-port Phase 2).
+	sitePort := nat.Port("3211/tcp")
 	hostBinding := nat.PortBinding{HostIP: "0.0.0.0", HostPort: strconv.Itoa(spec.HostPort)}
 
 	// internalURL is what THIS process polls for healthchecks (always
@@ -355,11 +372,21 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 	if spec.PublicURL != "" {
 		publicOrigin = spec.PublicURL
 	}
+	// Site origin (Convex port 3211, where HTTP actions live at their
+	// natural paths) diverges from the cloud origin once a base domain or
+	// a role='site' custom domain exists. Falls back to publicOrigin when
+	// no site URL was computed (host-port mode / pre-site deployments) —
+	// preserving the legacy "same URL" behaviour where 3211 isn't
+	// externally reachable anyway.
+	siteOrigin := publicOrigin
+	if spec.SiteURL != "" {
+		siteOrigin = spec.SiteURL
+	}
 	env := []string{
 		"INSTANCE_NAME=" + spec.Name,
 		"INSTANCE_SECRET=" + spec.InstanceSecret,
 		"CONVEX_CLOUD_ORIGIN=" + publicOrigin,
-		"CONVEX_SITE_ORIGIN=" + publicOrigin,
+		"CONVEX_SITE_ORIGIN=" + siteOrigin,
 	}
 
 	// HA storage: append the env vars the upstream backend reads when
@@ -403,7 +430,7 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 		Image:        c.BackendImage,
 		Env:          env,
 		Labels:       labels,
-		ExposedPorts: nat.PortSet{containerPort: struct{}{}},
+		ExposedPorts: nat.PortSet{containerPort: struct{}{}, sitePort: struct{}{}},
 	}
 	hostCfg := &container.HostConfig{
 		PortBindings: nat.PortMap{containerPort: []nat.PortBinding{hostBinding}},

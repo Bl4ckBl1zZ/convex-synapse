@@ -224,6 +224,9 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 		Name:     deploymentName,
 		HostPort: *hostPort,
 	}, h.lookupActiveAPIDomain(ctx, deploymentID))
+	siteOrigin := h.urlComputer().Site(&models.Deployment{
+		Name: deploymentName,
+	}, h.lookupActiveSiteDomain(ctx, deploymentID))
 
 	spec := dockerprov.DeploymentSpec{
 		Name:                  deploymentName,
@@ -234,6 +237,7 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 		EnvVars:               envVars,
 		HealthcheckViaNetwork: h.HealthcheckViaNetwork,
 		PublicURL:             publicOrigin,
+		SiteURL:               siteOrigin,
 	}
 
 	logger.Info("rebuild cors: recreating container",
@@ -336,6 +340,9 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 		Name:     deploymentName,
 		HostPort: primaryReplicaPort,
 	}, h.lookupActiveAPIDomain(ctx, deploymentID))
+	siteOrigin := h.urlComputer().Site(&models.Deployment{
+		Name: deploymentName,
+	}, h.lookupActiveSiteDomain(ctx, deploymentID))
 
 	// Project id for the synapse.project_id container label (best-effort; the
 	// synapse.deployment_id label is the one drift correlates on).
@@ -355,6 +362,7 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 			ReplicaIndex:          r.index,
 			Storage:               storage,
 			PublicURL:             publicOrigin,
+			SiteURL:               siteOrigin,
 		}
 		logger.Info("rebuild cors: recreating HA replica",
 			"deployment_id", deploymentID, "name", deploymentName,
@@ -573,6 +581,14 @@ func (h *DeploymentsHandler) cliDeploymentURL(ctx context.Context, d *models.Dep
 	return h.urlComputer().CLI(d, h.lookupActiveAPIDomain(ctx, d.ID))
 }
 
+// siteDeploymentURL returns the deployment's site-proxy URL (Convex port
+// 3211) — where HTTP actions are served at their natural paths. Empty
+// when no base domain and no role='site' custom domain apply (host-port
+// mode). See deploymenturl.Computer.Site + docs/CONVEX_SITE_ORIGIN.md.
+func (h *DeploymentsHandler) siteDeploymentURL(ctx context.Context, d *models.Deployment) string {
+	return h.urlComputer().Site(d, h.lookupActiveSiteDomain(ctx, d.ID))
+}
+
 // lookupActiveAPIDomain returns the first active custom domain for this
 // deployment with role='api', or "" if none exists / lookup fails. The
 // UNIQUE(domain) constraint means at most one row matches, but we ORDER
@@ -584,6 +600,12 @@ func (h *DeploymentsHandler) cliDeploymentURL(ctx context.Context, d *models.Dep
 // just because the domains lookup hit a transient db blip.
 func (h *DeploymentsHandler) lookupActiveAPIDomain(ctx context.Context, deploymentID string) string {
 	return deploymenturl.LookupActiveAPIDomain(ctx, h.DB, deploymentID)
+}
+
+// lookupActiveSiteDomain is the role='site' counterpart of
+// lookupActiveAPIDomain. Same infallible contract.
+func (h *DeploymentsHandler) lookupActiveSiteDomain(ctx context.Context, deploymentID string) string {
+	return deploymenturl.LookupActiveSiteDomain(ctx, h.DB, deploymentID)
 }
 
 // SecretEncrypter is the *crypto.SecretBox subset the handler needs.
@@ -2594,6 +2616,12 @@ func (h *DeploymentsHandler) revokeDeployKey(w http.ResponseWriter, r *http.Requ
 		HostPort:              d.HostPort,
 		EnvVars:               envVars,
 		HealthcheckViaNetwork: h.HealthcheckViaNetwork,
+		// Bake the public + site origins so the recreated container keeps
+		// CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN pointing at the
+		// reachable host (PublicURL was previously omitted here, leaving a
+		// rotated container on the loopback origin).
+		PublicURL: h.cliDeploymentURL(r.Context(), d),
+		SiteURL:   h.siteDeploymentURL(r.Context(), d),
 	}
 	info, err := h.Docker.Recreate(r.Context(), spec)
 	if err != nil {
