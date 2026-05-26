@@ -72,9 +72,10 @@ export function HostsPanel() {
 
       <div className="space-y-3 p-5">
         <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
-          The synapse-agent runtime isn&apos;t implemented yet. Hosts can be
-          registered manually and issued an adoption token now; live heartbeat,
-          metrics and observed state arrive with the agent.
+          The synapse-agent is observe-only: register a host, issue an adoption
+          token, and run the agent there to get live heartbeat + observed
+          container state. The host running Synapse itself shows online
+          automatically.
         </p>
 
         {error && !(error instanceof ApiError) && (

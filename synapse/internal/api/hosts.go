@@ -74,10 +74,15 @@ func effectiveHostStatus(hst models.Host, staleAfter, offlineAfter time.Duration
 	if hst.Status == models.HostStatusDraining {
 		return models.HostStatusDraining
 	}
+	// The synapse self-host runs the control plane that is answering THIS
+	// request, so it is alive by definition — a stale/absent agent heartbeat
+	// must NOT mark the box that's serving the panel as offline. (This is
+	// liveness only; drift trust is computed separately in drift.go and still
+	// requires a real, fresh container scan, so this never causes false drift.)
+	if hst.IsSynapseHost {
+		return models.HostStatusOnline
+	}
 	if hst.LastHeartbeatAt == nil {
-		if hst.IsSynapseHost {
-			return models.HostStatusOnline
-		}
 		return hst.Status
 	}
 	age := now.Sub(*hst.LastHeartbeatAt)

@@ -173,8 +173,12 @@ func TestDrift_SoftDeletedIsOrphaned(t *testing.T) {
 // cell_resource — so it stops appearing as a ghost in cells / topology / drift.
 func TestDeleteDeployment_CleansCellState(t *testing.T) {
 	h := Setup(t)
-	owner, projectID, _, _, depID := desiredFixture(t, h)
+	owner, projectID, cellID, _, depID := desiredFixture(t, h)
 	syncDrift(t, h, owner.AccessToken, projectID) // desired + placement now exist
+	// Simulate the backfill pointing the cell's primary_deployment_id at the dep.
+	if _, err := h.DB.Exec(h.rootCtx, `UPDATE cells SET primary_deployment_id = $1 WHERE id::text = $2`, depID, cellID); err != nil {
+		t.Fatalf("set primary_deployment_id: %v", err)
+	}
 
 	if n := countRowsArg(t, h, `SELECT count(*) FROM desired_states WHERE resource_id = $1 AND status = 'active'`, depID); n != 1 {
 		t.Fatalf("precondition: expected 1 active desired state, got %d", n)
@@ -190,6 +194,40 @@ func TestDeleteDeployment_CleansCellState(t *testing.T) {
 	}
 	if n := countRowsArg(t, h, `SELECT count(*) FROM cell_resources WHERE resource_id = $1`, depID); n != 0 {
 		t.Errorf("cell_resource should be gone after delete, %d remain", n)
+	}
+	if n := countRowsArg(t, h, `SELECT count(*) FROM cells WHERE primary_deployment_id::text = $1`, depID); n != 0 {
+		t.Errorf("cell primary_deployment_id should be cleared after delete, %d remain", n)
+	}
+}
+
+// Bloco 14.1: the synapse self-host runs the control plane, so it must read
+// online regardless of a stale/absent agent heartbeat — otherwise the box
+// serving the panel shows "offline" while you're browsing it. (Liveness only;
+// drift trust still requires a real scan, asserted elsewhere.)
+func TestHost_SelfHostOnlineDespiteStaleHeartbeat(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	var host models.Host
+	h.DoJSON(http.MethodPost, "/v1/hosts", owner.AccessToken, map[string]any{"name": "self", "region": "local"}, http.StatusCreated, &host)
+	// mark it the self-host with a long-stale heartbeat (would be offline otherwise)
+	if _, err := h.DB.Exec(h.rootCtx, `UPDATE hosts SET is_synapse_host = true, last_heartbeat_at = now() - make_interval(hours => 17) WHERE id::text = $1`, host.ID); err != nil {
+		t.Fatalf("mark self-host: %v", err)
+	}
+	var list struct {
+		Items []models.Host `json:"items"`
+	}
+	h.DoJSON(http.MethodGet, "/v1/hosts", owner.AccessToken, nil, http.StatusOK, &list)
+	var got *models.Host
+	for i := range list.Items {
+		if list.Items[i].ID == host.ID {
+			got = &list.Items[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("self-host not returned in /v1/hosts")
+	}
+	if got.EffectiveStatus != models.HostStatusOnline {
+		t.Errorf("self-host with 17h-stale heartbeat must read online, got %q", got.EffectiveStatus)
 	}
 }
 

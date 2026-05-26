@@ -1961,12 +1961,13 @@ func (h *DeploymentsHandler) upgradeToHA(w http.ResponseWriter, r *http.Request)
 
 // cleanupDeploymentCellState removes the Cell Control Plane footprint of a
 // now-deleted deployment: it supersedes the active desired state, drops the
-// placement, and unlinks the cell_resource so the deployment stops showing as a
-// ghost in cells / topology / drift. Best-effort — a hiccup here must never
-// fail the user's delete (the drift engine treats a deleted deployment as
-// orphaned regardless, so a leftover desired row is classified correctly, never
-// recreated). The cell itself is left in place: an empty cell is harmless and
-// may be reused. resource_id is text; deployment_id is uuid (hence ::text).
+// placement, unlinks the cell_resource, and clears any cell.primary_deployment_id
+// pointer — so the deployment stops showing as a ghost in cells / topology /
+// drift. Best-effort — a hiccup here must never fail the user's delete (the
+// drift engine treats a deleted deployment as orphaned regardless, so a leftover
+// desired row is classified correctly, never recreated). The cell row itself is
+// left in place: an empty cell is harmless and may be reused. resource_id is
+// text; deployment_id / primary_deployment_id are uuid (hence ::text).
 func (h *DeploymentsHandler) cleanupDeploymentCellState(ctx context.Context, deploymentID string) {
 	if _, err := h.DB.Exec(ctx, `
 		UPDATE desired_states SET status = 'superseded', updated_at = now()
@@ -1981,6 +1982,12 @@ func (h *DeploymentsHandler) cleanupDeploymentCellState(ctx context.Context, dep
 		DELETE FROM cell_resources WHERE resource_type = 'convex_deployment' AND resource_id = $1
 	`, deploymentID); err != nil {
 		logErr("cleanup cell_resource on delete", err)
+	}
+	// A backfilled core cell points its primary_deployment_id at the deployment;
+	// the FK is ON DELETE SET NULL, but a soft delete (status='deleted') doesn't
+	// fire it, so clear it explicitly or the cell keeps showing the dead dep.
+	if _, err := h.DB.Exec(ctx, `UPDATE cells SET primary_deployment_id = NULL, updated_at = now() WHERE primary_deployment_id::text = $1`, deploymentID); err != nil {
+		logErr("cleanup cell primary_deployment_id on delete", err)
 	}
 }
 
