@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { ApiError, api, type EnvVar } from "@/lib/api";
+import { ApiError, api, type EnvVar, type EnvSyncResult } from "@/lib/api";
 
 type Props = { projectId: string };
 
@@ -24,9 +24,11 @@ const TYPE_TONE: Record<DeploymentTypeOption, "cyan" | "amber" | "violet"> = {
   preview: "violet",
 };
 
-// Default env vars are baked into deployments at create-time. The
-// existing-deployment sync flow ("Apply to existing deployments")
-// recreates running containers so they pick up changes.
+// v1.17+: env vars here are pushed into the Convex backend's function
+// runtime env store (the same one `npx convex env set` writes to).
+// Saving auto-syncs to every running deployment in the project;
+// failures are surfaced inline so the operator can retry via the
+// Re-sync button. No container restart. See docs/ENV_PIPELINE_PLAN.md.
 export function EnvVarsPanel({ projectId }: Props) {
   const { data, error, isLoading, mutate } = useSWR<EnvVar[]>(
     ["/env-vars", projectId],
@@ -44,16 +46,17 @@ export function EnvVarsPanel({ projectId }: Props) {
   // the operator opened the project page.
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
 
-  // "Apply to existing deployments" flow state.
+  // Re-sync flow state (manual retry of the per-deployment push).
   const [syncOpen, setSyncOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{
-    total: number;
-    recreated: number;
-    skipped: number;
-    notice?: string;
-  } | null>(null);
+  const [syncResult, setSyncResult] = useState<EnvSyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+
+  // Auto-sync result captured from the last updateEnvVars call (add or
+  // remove). Surfaced as an inline banner under the form so the operator
+  // knows the push happened without opening the manual re-sync dialog.
+  const [lastAutoSync, setLastAutoSync] = useState<EnvSyncResult | null>(null);
+  const [lastAutoSyncAt, setLastAutoSyncAt] = useState<number | null>(null);
 
   const toggleReveal = (n: string) => {
     setRevealed((prev) => {
@@ -80,7 +83,7 @@ export function EnvVarsPanel({ projectId }: Props) {
     }
     setPending(true);
     try {
-      await api.projects.updateEnvVars(projectId, [
+      const resp = await api.projects.updateEnvVars(projectId, [
         {
           op: "set",
           name: name.trim(),
@@ -88,6 +91,8 @@ export function EnvVarsPanel({ projectId }: Props) {
           deploymentTypes: types,
         },
       ]);
+      setLastAutoSync(resp.syncResult ?? null);
+      setLastAutoSyncAt(Date.now());
       setName("");
       setValue("");
       setTypes(ALL_TYPES);
@@ -104,7 +109,11 @@ export function EnvVarsPanel({ projectId }: Props) {
   const remove = async (n: string) => {
     setFormError(null);
     try {
-      await api.projects.updateEnvVars(projectId, [{ op: "delete", name: n }]);
+      const resp = await api.projects.updateEnvVars(projectId, [
+        { op: "delete", name: n },
+      ]);
+      setLastAutoSync(resp.syncResult ?? null);
+      setLastAutoSyncAt(Date.now());
       // Clear the reveal flag for the removed name so a future var with
       // the same name doesn't auto-reveal.
       setRevealed((prev) => {
@@ -143,13 +152,15 @@ export function EnvVarsPanel({ projectId }: Props) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-neutral-200">
-            Default environment variables
+            Environment variables
           </h2>
           <p className="text-xs text-neutral-500">
-            Seeded into new deployments at creation. Existing deployments
-            keep their current values — use{" "}
-            <span className="text-neutral-300">Apply to existing</span> to
-            push changes.
+            Available inside every Convex function in this project via{" "}
+            <code className="text-neutral-300">process.env.NAME</code>. Same
+            store the Convex Dashboard env panel writes to. Changes here
+            push to every running deployment automatically; use{" "}
+            <span className="text-neutral-300">Re-sync to deployments</span>{" "}
+            to retry if a push failed.
           </p>
         </div>
         {hasEnvVars && (
@@ -163,7 +174,7 @@ export function EnvVarsPanel({ projectId }: Props) {
             }}
             data-testid="env-vars-apply-existing-open"
           >
-            Apply to existing deployments
+            Re-sync to deployments
           </Button>
         )}
       </div>
@@ -317,32 +328,66 @@ export function EnvVarsPanel({ projectId }: Props) {
 
       {formError && <p className="text-xs text-red-400">{formError}</p>}
 
+      {lastAutoSync && (
+        <div
+          className="flex flex-wrap items-center gap-3 rounded border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-xs"
+          data-testid="env-vars-autosync-banner"
+        >
+          {lastAutoSync.synced > 0 && (
+            <span className="text-emerald-300">
+              ✓ synced to <strong>{lastAutoSync.synced}</strong>{" "}
+              deployment{lastAutoSync.synced === 1 ? "" : "s"}
+            </span>
+          )}
+          {lastAutoSync.skipped > 0 && (
+            <span className="text-neutral-400">
+              <strong>{lastAutoSync.skipped}</strong> skipped (not running)
+            </span>
+          )}
+          {lastAutoSync.failed && lastAutoSync.failed.length > 0 && (
+            <span className="text-amber-400">
+              <strong>{lastAutoSync.failed.length}</strong> failed — click
+              Re-sync to retry
+            </span>
+          )}
+          {lastAutoSync.notice && (
+            <span className="text-neutral-500">{lastAutoSync.notice}</span>
+          )}
+          {lastAutoSyncAt && (
+            <span className="text-neutral-600">
+              {new Date(lastAutoSyncAt).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      )}
+
       <Dialog open={syncOpen} onClose={() => !syncing && setSyncOpen(false)}>
         <div className="space-y-4 p-1" data-testid="env-vars-sync-dialog">
           <div>
             <h3 className="text-sm font-semibold text-neutral-100">
-              Apply env vars to existing deployments?
+              Re-sync env vars to deployments?
             </h3>
             <p className="mt-1 text-xs text-neutral-400">
-              Each non-HA deployment will be recreated to pick up the
-              current env var values. Expect about <strong>15 seconds of
-              downtime per deployment</strong>. HA deployments roll one
-              replica at a time and stay reachable.
+              Pushes the current env vars to the Convex function runtime store
+              of every running deployment in this project. No container restart,
+              no downtime — just a single API call per deployment.
             </p>
             <p className="mt-1 text-xs text-neutral-500">
-              Adopted, stopped, and non-running deployments are skipped.
+              Use this only if an automatic push failed (e.g. a deployment
+              was offline during the last save). Stopped / non-running
+              deployments are skipped.
             </p>
           </div>
 
           {!syncResult && !syncError && (
             <div className="flex gap-2">
               <Button
-                variant="danger"
+                variant="primary"
                 onClick={sync}
                 disabled={syncing}
                 data-testid="env-vars-sync-confirm"
               >
-                {syncing ? "Recreating…" : "Yes, recreate now"}
+                {syncing ? "Syncing…" : "Re-sync now"}
               </Button>
               <Button
                 variant="ghost"
@@ -369,10 +414,28 @@ export function EnvVarsPanel({ projectId }: Props) {
               data-testid="env-vars-sync-result"
             >
               <p className="text-neutral-200">
-                <strong>{syncResult.recreated}</strong> recreated ·{" "}
+                <strong>{syncResult.synced}</strong> synced ·{" "}
                 <strong>{syncResult.skipped}</strong> skipped ·{" "}
                 <strong>{syncResult.total}</strong> total
+                {syncResult.failed && syncResult.failed.length > 0 && (
+                  <>
+                    {" "}·{" "}
+                    <span className="text-amber-400">
+                      <strong>{syncResult.failed.length}</strong> failed
+                    </span>
+                  </>
+                )}
               </p>
+              {syncResult.failed && syncResult.failed.length > 0 && (
+                <ul className="space-y-1 text-neutral-400">
+                  {syncResult.failed.map((f) => (
+                    <li key={f.deploymentId}>
+                      <span className="text-amber-300">{f.deploymentName}</span>:{" "}
+                      {f.reason}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {syncResult.notice && (
                 <p className="text-neutral-500">{syncResult.notice}</p>
               )}

@@ -484,6 +484,30 @@ export type DNSCredential = {
   lastError?: string;
 };
 
+// Per-deployment failure detail returned by the env-sync paths.
+// Stable shape since v1.17 — the dashboard renders these inline so
+// operators can see exactly which deployment refused the push and why.
+export type EnvSyncFailure = {
+  deploymentId: string;
+  deploymentName: string;
+  reason: string;
+};
+
+// Result of an env-var sync to the Convex function runtime env store.
+// Returned both as the body of `syncEnvToDeployments` and embedded as
+// `syncResult` in the response of `updateEnvVars` (auto-sync path).
+//
+// `recreated` is a legacy alias for `synced` kept for backward compat;
+// new code reads `synced`.
+export type EnvSyncResult = {
+  total: number;
+  synced: number;
+  recreated?: number;
+  skipped: number;
+  failed?: EnvSyncFailure[];
+  notice?: string;
+};
+
 export type EnvVar = {
   name: string;
   value: string;
@@ -1618,17 +1642,19 @@ export const api = {
     updateEnvVars(
       id: string,
       changes: EnvVarChange[]
-    ): Promise<{ applied: number }> {
+    ): Promise<{ applied: number; syncResult: EnvSyncResult }> {
       return request(
         `/v1/projects/${encodeURIComponent(id)}/update_default_environment_variables`,
         { method: "POST", body: { changes } }
       );
     },
-    // v1.9.2+: re-creates running deployments so they pick up current
-    // project_env_vars values. ~15s downtime per non-HA deployment.
+    // v1.17+: pushes current project env vars to the Convex function
+    // runtime env store of every running deployment. No container
+    // restart — same store `npx convex env set` writes to. Used as a
+    // retry hook when an automatic push (from updateEnvVars) failed.
     syncEnvToDeployments(
       id: string,
-    ): Promise<{ total: number; recreated: number; skipped: number; errors?: string[]; notice?: string }> {
+    ): Promise<EnvSyncResult> {
       return request(
         `/v1/projects/${encodeURIComponent(id)}/sync_env_to_deployments`,
         { method: "POST", body: {} }
