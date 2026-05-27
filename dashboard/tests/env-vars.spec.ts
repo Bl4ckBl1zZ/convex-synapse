@@ -63,17 +63,18 @@ test("project env vars: add, list, delete", async ({ page }) => {
   await page.getByRole("button", { name: "Add" }).click();
   await expect(page.getByText("DATABASE_URL")).toBeVisible();
 
-  // Delete API_KEY.
-  await page.getByRole("button", { name: "Delete env var API_KEY" }).click();
-  // The per-row Delete button is unique to the live row in the env-vars
-  // panel; assert through it. (v1.10.0+: ActivityFeed shows the
-  // `updateProjectEnvVars` audit event which mentions the name, so a
-  // page-wide text match never hides.)
+  // Delete API_KEY (all types). v1.17.1+: same NAME stores one row per
+  // deployment_type, so the bulk-delete button removes every type at once.
+  await page.getByRole("button", { name: "Delete all values for API_KEY" }).click();
+  // The grouped "Delete all values" button is unique per name; once
+  // API_KEY is gone, the button must disappear. (v1.10.0+: ActivityFeed
+  // shows the `updateProjectEnvVars` audit event which mentions the
+  // name, so a page-wide text match never hides.)
   await expect(
-    page.getByRole("button", { name: "Delete env var API_KEY" }),
+    page.getByRole("button", { name: "Delete all values for API_KEY" }),
   ).toBeHidden();
   // The other one survives.
   await expect(
-    page.getByRole("button", { name: "Delete env var DATABASE_URL" }),
+    page.getByRole("button", { name: "Delete all values for DATABASE_URL" }),
   ).toBeVisible();
 });

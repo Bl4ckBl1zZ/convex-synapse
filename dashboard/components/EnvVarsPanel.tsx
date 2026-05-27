@@ -24,11 +24,13 @@ const TYPE_TONE: Record<DeploymentTypeOption, "cyan" | "amber" | "violet"> = {
   preview: "violet",
 };
 
-// v1.17+: env vars here are pushed into the Convex backend's function
-// runtime env store (the same one `npx convex env set` writes to).
-// Saving auto-syncs to every running deployment in the project;
-// failures are surfaced inline so the operator can retry via the
-// Re-sync button. No container restart. See docs/ENV_PIPELINE_PLAN.md.
+// v1.17.1+: env vars are stored per (name, deploymentType), so the
+// same NAME can carry DIFFERENT values for dev / prod / preview — the
+// Convex Cloud model. The list comes back with one entry per
+// (name, type); we group by name on render to show one card per
+// variable with per-type rows underneath. Saving a value pushes it
+// to that deployment's Convex function runtime store; failures
+// surface inline.
 export function EnvVarsPanel({ projectId }: Props) {
   const { data, error, isLoading, mutate } = useSWR<EnvVar[]>(
     ["/env-vars", projectId],
@@ -58,11 +60,11 @@ export function EnvVarsPanel({ projectId }: Props) {
   const [lastAutoSync, setLastAutoSync] = useState<EnvSyncResult | null>(null);
   const [lastAutoSyncAt, setLastAutoSyncAt] = useState<number | null>(null);
 
-  const toggleReveal = (n: string) => {
+  const toggleReveal = (key: string) => {
     setRevealed((prev) => {
       const next = new Set(prev);
-      if (next.has(n)) next.delete(n);
-      else next.add(n);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -106,7 +108,28 @@ export function EnvVarsPanel({ projectId }: Props) {
     }
   };
 
-  const remove = async (n: string) => {
+  const removeOne = async (n: string, type: DeploymentTypeOption) => {
+    setFormError(null);
+    try {
+      const resp = await api.projects.updateEnvVars(projectId, [
+        { op: "delete", name: n, deploymentTypes: [type] },
+      ]);
+      setLastAutoSync(resp.syncResult ?? null);
+      setLastAutoSyncAt(Date.now());
+      setRevealed((prev) => {
+        const next = new Set(prev);
+        next.delete(n + ":" + type);
+        return next;
+      });
+      await mutate();
+    } catch (err) {
+      setFormError(
+        err instanceof ApiError ? err.message : "Could not delete env var",
+      );
+    }
+  };
+
+  const removeAllForName = async (n: string) => {
     setFormError(null);
     try {
       const resp = await api.projects.updateEnvVars(projectId, [
@@ -114,11 +137,12 @@ export function EnvVarsPanel({ projectId }: Props) {
       ]);
       setLastAutoSync(resp.syncResult ?? null);
       setLastAutoSyncAt(Date.now());
-      // Clear the reveal flag for the removed name so a future var with
-      // the same name doesn't auto-reveal.
+      // Strip every revealed key for this name.
       setRevealed((prev) => {
         const next = new Set(prev);
-        next.delete(n);
+        for (const k of Array.from(prev)) {
+          if (k === n || k.startsWith(n + ":")) next.delete(k);
+        }
         return next;
       });
       await mutate();
@@ -147,6 +171,28 @@ export function EnvVarsPanel({ projectId }: Props) {
 
   const hasEnvVars = data && data.length > 0;
 
+  // Group the flat list of (name, deploymentTypes:[type]) entries into
+  // per-name buckets. Order: alphabetic by name, then dev / prod / preview
+  // per the canonical lifecycle order (not alphabetic, because that puts
+  // preview before prod which reads wrong).
+  const TYPE_ORDER: Record<string, number> = { dev: 0, prod: 1, preview: 2, custom: 3 };
+  const grouped = new Map<string, EnvVar[]>();
+  if (data) {
+    for (const v of data) {
+      const arr = grouped.get(v.name) ?? [];
+      arr.push(v);
+      grouped.set(v.name, arr);
+    }
+    for (const [, arr] of grouped) {
+      arr.sort((a, b) => {
+        const ai = TYPE_ORDER[a.deploymentTypes[0] ?? ""] ?? 99;
+        const bi = TYPE_ORDER[b.deploymentTypes[0] ?? ""] ?? 99;
+        return ai - bi;
+      });
+    }
+  }
+  const groupedEntries = Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b));
+
   return (
     <section className="space-y-3" data-testid="env-vars-panel">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -157,8 +203,11 @@ export function EnvVarsPanel({ projectId }: Props) {
           <p className="text-xs text-neutral-500">
             Available inside every Convex function in this project via{" "}
             <code className="text-neutral-300">process.env.NAME</code>. Same
-            store the Convex Dashboard env panel writes to. Changes here
-            push to every running deployment automatically; use{" "}
+            store the Convex Dashboard env panel writes to. <strong>Same name
+            can carry different values per deployment type</strong> — e.g.{" "}
+            <code className="text-neutral-300">BETTER_AUTH_SECRET</code>{" "}
+            with one value for dev and another for prod. Saves push to
+            every running deployment automatically; use{" "}
             <span className="text-neutral-300">Re-sync to deployments</span>{" "}
             to retry if a push failed.
           </p>
@@ -193,76 +242,74 @@ export function EnvVarsPanel({ projectId }: Props) {
       {hasEnvVars && (
         <Card>
           <CardBody className="divide-y divide-neutral-800 p-0">
-            {data!.map((v) => {
-              const isRevealed = revealed.has(v.name);
-              const typeList =
-                v.deploymentTypes && v.deploymentTypes.length > 0
-                  ? v.deploymentTypes
-                  : ALL_TYPES;
-              const allTypes = typeList.length === ALL_TYPES.length;
-              return (
-                <div
-                  key={v.name}
-                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-sm"
-                  data-testid={`env-var-row-${v.name}`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="truncate font-mono text-neutral-100">
-                        {v.name}
-                      </p>
-                      {!allTypes && (
-                        <div className="flex gap-1">
-                          {typeList.map((t) => (
-                            <Badge
-                              key={t}
-                              tone={TYPE_TONE[t as DeploymentTypeOption] ?? "neutral"}
-                              className="px-1.5 py-0 text-[10px]"
-                            >
-                              {t.toUpperCase()}
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2">
-                      <p
-                        className="truncate font-mono text-xs text-neutral-500"
-                        data-testid={`env-var-value-${v.name}`}
-                      >
-                        {!v.value ? (
-                          <span className="italic">(empty)</span>
-                        ) : isRevealed ? (
-                          v.value
-                        ) : (
-                          "•".repeat(Math.max(8, Math.min(24, v.value.length)))
-                        )}
-                      </p>
-                      {v.value && (
-                        <button
-                          type="button"
-                          onClick={() => toggleReveal(v.name)}
-                          className="text-[11px] text-neutral-500 hover:text-neutral-200"
-                          aria-label={isRevealed ? `Hide value for ${v.name}` : `Reveal value for ${v.name}`}
-                          aria-pressed={isRevealed}
-                          data-testid={`env-var-toggle-${v.name}`}
-                        >
-                          {isRevealed ? "Hide" : "Reveal"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => remove(v.name)}
-                    aria-label={`Delete env var ${v.name}`}
+            {groupedEntries.map(([name, rows]) => (
+              <div key={name} className="px-4 py-3" data-testid={`env-var-group-${name}`}>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="truncate font-mono text-sm text-neutral-100">{name}</p>
+                  <button
+                    type="button"
+                    onClick={() => removeAllForName(name)}
+                    className="text-[11px] text-neutral-500 hover:text-red-400"
+                    aria-label={`Delete all values for ${name}`}
+                    data-testid={`env-var-delete-all-${name}`}
                   >
-                    Delete
-                  </Button>
+                    Delete all
+                  </button>
                 </div>
-              );
-            })}
+                <div className="space-y-1.5">
+                  {rows.map((v) => {
+                    const t = (v.deploymentTypes[0] ?? "dev") as DeploymentTypeOption;
+                    const isRevealed = revealed.has(v.name + ":" + t);
+                    return (
+                      <div
+                        key={v.name + ":" + t}
+                        className="flex flex-wrap items-center gap-3 text-sm"
+                        data-testid={`env-var-row-${v.name}`}
+                      >
+                        <Badge
+                          tone={TYPE_TONE[t] ?? "neutral"}
+                          className="px-1.5 py-0 text-[10px]"
+                        >
+                          {t.toUpperCase()}
+                        </Badge>
+                        <p
+                          className="min-w-0 flex-1 truncate font-mono text-xs text-neutral-500"
+                          data-testid={`env-var-value-${v.name}`}
+                        >
+                          {!v.value ? (
+                            <span className="italic">(empty)</span>
+                          ) : isRevealed ? (
+                            v.value
+                          ) : (
+                            "•".repeat(Math.max(8, Math.min(24, v.value.length)))
+                          )}
+                        </p>
+                        {v.value && (
+                          <button
+                            type="button"
+                            onClick={() => toggleReveal(v.name + ":" + t)}
+                            className="text-[11px] text-neutral-500 hover:text-neutral-200"
+                            aria-label={isRevealed ? `Hide value for ${v.name} on ${t}` : `Reveal value for ${v.name} on ${t}`}
+                            aria-pressed={isRevealed}
+                            data-testid={`env-var-toggle-${v.name}`}
+                          >
+                            {isRevealed ? "Hide" : "Reveal"}
+                          </button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeOne(v.name, t)}
+                          aria-label={`Delete ${v.name} (${t})`}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </CardBody>
         </Card>
       )}
@@ -321,7 +368,9 @@ export function EnvVarsPanel({ projectId }: Props) {
             ))}
           </div>
           <p className="text-[10px] text-neutral-600">
-            All three selected = applied to every deployment in this project (the default).
+            Select multiple types to apply the same value to each. Add the
+            same NAME again with different types to use a different value
+            per type (e.g. one secret for dev, another for prod).
           </p>
         </fieldset>
       </form>
