@@ -1,9 +1,16 @@
 package synapsetest
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/Iann29/synapse/internal/convexenv"
 )
 
 type projectResp struct {
@@ -307,8 +314,16 @@ func TestProjects_EnvVarsRoundTrip(t *testing.T) {
 	type listResp struct {
 		Configs []envConfig `json:"configs"`
 	}
+	type syncFunctionResultLite struct {
+		Total   int    `json:"total"`
+		Synced  int    `json:"synced"`
+		Skipped int    `json:"skipped"`
+		Failed  []any  `json:"failed"`
+		Notice  string `json:"notice"`
+	}
 	type updateResp struct {
-		Applied int `json:"applied"`
+		Applied    int                    `json:"applied"`
+		SyncResult syncFunctionResultLite `json:"syncResult"`
 	}
 
 	// Empty list to start.
@@ -514,6 +529,15 @@ func TestProjects_Transfer_SlugCollision409(t *testing.T) {
 // they pick up the current project_env_vars values. Validated against
 // the FakeDocker harness, so we cover the wiring (auth → DB query →
 // iteration → audit) but the actual container recreate is mocked.
+// v1.17+: sync_env_to_deployments now pushes via the Convex env API
+// (no container recreate). The default harness leaves SetupOpts.ConvexEnv
+// nil, which means the helper logs + skips per-deployment — so the
+// expected outcome here is total=2, synced=0, skipped=2. A separate
+// test (TestProjects_UpdateEnvVars_AutoSync) wires a stub backend and
+// asserts the actual push path with synced=1.
+//
+// We still cover the wiring (auth → DB query → iteration → audit) and
+// the legacy `recreated` alias that the dashboard + CLI still read.
 func TestProjects_SyncEnvToDeployments_HappyPath(t *testing.T) {
 	h := Setup(t)
 	owner := h.RegisterRandomUser()
@@ -521,8 +545,8 @@ func TestProjects_SyncEnvToDeployments_HappyPath(t *testing.T) {
 	proj := createProject(t, h, owner.AccessToken, team.Slug, "Sync")
 
 	// Seed two RUNNING deployments directly so the test is deterministic
-	// — we want to exercise the iteration + rebuild path, not the
-	// async provisioning worker (which has its own integration tests).
+	// — we want to exercise the iteration path, not the async
+	// provisioning worker (which has its own integration tests).
 	h.SeedDeployment(proj.ID, "sync-dev-1234", "dev", "running", true, owner.ID, 3501, "")
 	h.SeedDeployment(proj.ID, "sync-prod-5678", "prod", "running", true, owner.ID, 3502, "")
 
@@ -541,12 +565,18 @@ func TestProjects_SyncEnvToDeployments_HappyPath(t *testing.T) {
 		updateEnvVarsReq{Changes: []envVarChange{{Op: "set", Name: "API_KEY", Value: "x"}}},
 		http.StatusOK, &map[string]any{})
 
+	type syncFailure struct {
+		DeploymentID   string `json:"deploymentId"`
+		DeploymentName string `json:"deploymentName"`
+		Reason         string `json:"reason"`
+	}
 	type syncResp struct {
-		Total     int      `json:"total"`
-		Recreated int      `json:"recreated"`
-		Skipped   int      `json:"skipped"`
-		Errors    []string `json:"errors"`
-		Notice    string   `json:"notice"`
+		Total     int           `json:"total"`
+		Recreated int           `json:"recreated"` // legacy alias of `synced`; kept until v2.0.0
+		Synced    int           `json:"synced"`
+		Skipped   int           `json:"skipped"`
+		Failed    []syncFailure `json:"failed"`
+		Notice    string        `json:"notice"`
 	}
 	var resp syncResp
 	h.DoJSON(http.MethodPost,
@@ -556,11 +586,24 @@ func TestProjects_SyncEnvToDeployments_HappyPath(t *testing.T) {
 	if resp.Total != 2 {
 		t.Errorf("total: want 2, got %d", resp.Total)
 	}
-	// Recreated + skipped should sum to total. The FakeDocker harness
-	// reports success on Recreate, so both should be "recreated" — but
-	// we don't assert that strictly, only that the sum is right.
-	if resp.Recreated+resp.Skipped != resp.Total {
-		t.Errorf("recreated(%d) + skipped(%d) != total(%d)", resp.Recreated, resp.Skipped, resp.Total)
+	// Default harness: no ConvexEnv → helper skips every deployment.
+	if resp.Synced != 0 {
+		t.Errorf("synced: want 0 (nil ConvexEnv), got %d", resp.Synced)
+	}
+	if resp.Recreated != resp.Synced {
+		t.Errorf("recreated must mirror synced for legacy compat; got recreated=%d synced=%d",
+			resp.Recreated, resp.Synced)
+	}
+	if resp.Skipped != 2 {
+		t.Errorf("skipped: want 2, got %d", resp.Skipped)
+	}
+	if len(resp.Failed) != 0 {
+		t.Errorf("failed: want empty, got %+v", resp.Failed)
+	}
+	// FakeDocker.Recreate must NOT be called anymore — env sync no
+	// longer rebuilds containers.
+	if specs := h.Docker.RecreatedSpecs(); len(specs) != 0 {
+		t.Errorf("v1.17+ sync must not Recreate containers; got %d", len(specs))
 	}
 }
 
@@ -599,7 +642,9 @@ func TestProjects_SyncEnvToDeployments_NoDeployments(t *testing.T) {
 	type syncResp struct {
 		Total     int    `json:"total"`
 		Recreated int    `json:"recreated"`
+		Synced    int    `json:"synced"`
 		Skipped   int    `json:"skipped"`
+		Failed    []any  `json:"failed"`
 		Notice    string `json:"notice"`
 	}
 	var resp syncResp
@@ -607,7 +652,7 @@ func TestProjects_SyncEnvToDeployments_NoDeployments(t *testing.T) {
 		"/v1/projects/"+proj.ID+"/sync_env_to_deployments",
 		owner.AccessToken, map[string]any{}, http.StatusOK, &resp)
 
-	if resp.Total != 0 || resp.Recreated != 0 || resp.Skipped != 0 {
+	if resp.Total != 0 || resp.Recreated != 0 || resp.Synced != 0 || resp.Skipped != 0 {
 		t.Errorf("expected zeros for empty project, got %+v", resp)
 	}
 }
@@ -705,4 +750,160 @@ func TestDeleteProject_TearsDownDeploymentContainers(t *testing.T) {
 	if n != 0 {
 		t.Errorf("project should be deleted, %d remain", n)
 	}
+}
+
+// TestProjects_UpdateEnvVars_AutoSync covers Slice 2.4: after the DB
+// write commits, updateEnvVars MUST fan out the changes to every
+// running deployment's Convex FUNCTION runtime env store via the
+// convexenv API. The response includes a syncResult breakdown so the
+// dashboard can render per-row status without a second round-trip.
+//
+// We wire SetupOpts.ConvexEnv with a stub HTTP doer that captures the
+// raw POST body and replies 200 OK, so we both (a) prove the auto-sync
+// fires synchronously and (b) verify the on-wire payload matches what
+// the operator entered (minus CLI-managed names, which the helper
+// filters before pushing).
+func TestProjects_UpdateEnvVars_AutoSync(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		captured [][]byte
+		authHdr  string
+	)
+	// Stub Convex backend: capture everything pushed to
+	// /api/update_environment_variables, reply 200. We deliberately use
+	// httptest.Server (not just a Doer) so the URL is real and the
+	// authorization header gets to flow through the live http stack.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/update_environment_variables" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		captured = append(captured, body)
+		authHdr = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer stub.Close()
+
+	// Build the per-process Client against the stub. NewClient's
+	// default 5s timeout is fine; we override the transport via
+	// NewClientWith so the URL the helper computes lands on the stub.
+	// But cliDeploymentURL falls back to the deployments.deployment_url
+	// column when PublicURL is empty — SeedDeployment writes
+	// "http://127.0.0.1:<port>" there, NOT our stub URL. The cleanest
+	// way to point the helper at the stub is to use NewClientWith with
+	// a doer that retargets every request to the stub's URL.
+	client := convexenv.NewClientWith(&retargetDoer{base: stub.URL})
+
+	h := SetupWithOpts(t, SetupOpts{ConvexEnv: client})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "AutoSync Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "AutoSyncProj")
+
+	// Seed ONE running deployment with a known admin key so we can
+	// assert it on the captured Authorization header.
+	const adminKey = "test-admin-key-1234"
+	h.SeedDeployment(proj.ID, "auto-sync-1234", "dev", "running", true, owner.ID, 3601, adminKey)
+
+	// POST: one regular var + one CLI-managed name that must be
+	// filtered before the push (operator paste-mistake).
+	type envVarChange struct {
+		Op    string `json:"op"`
+		Name  string `json:"name"`
+		Value string `json:"value,omitempty"`
+	}
+	type updateEnvVarsReq struct {
+		Changes []envVarChange `json:"changes"`
+	}
+	type syncFailure struct {
+		DeploymentID   string `json:"deploymentId"`
+		DeploymentName string `json:"deploymentName"`
+		Reason         string `json:"reason"`
+	}
+	type syncResult struct {
+		Total   int           `json:"total"`
+		Synced  int           `json:"synced"`
+		Skipped int           `json:"skipped"`
+		Failed  []syncFailure `json:"failed"`
+		Notice  string        `json:"notice"`
+	}
+	type updateResp struct {
+		Applied    int        `json:"applied"`
+		SyncResult syncResult `json:"syncResult"`
+	}
+
+	var resp updateResp
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
+		owner.AccessToken,
+		updateEnvVarsReq{Changes: []envVarChange{
+			{Op: "set", Name: "BETTER_AUTH_SECRET", Value: "s3kret"},
+			// CLI-managed — filter MUST drop this before pushing.
+			{Op: "set", Name: "CONVEX_DEPLOY_KEY", Value: "should-be-dropped"},
+		}},
+		http.StatusOK, &resp)
+
+	if resp.Applied != 2 {
+		t.Errorf("applied: want 2, got %d", resp.Applied)
+	}
+	if resp.SyncResult.Total != 1 {
+		t.Errorf("syncResult.total: want 1, got %d", resp.SyncResult.Total)
+	}
+	if resp.SyncResult.Synced != 1 {
+		t.Errorf("syncResult.synced: want 1, got %d (skipped=%d failed=%+v)",
+			resp.SyncResult.Synced, resp.SyncResult.Skipped, resp.SyncResult.Failed)
+	}
+	if len(resp.SyncResult.Failed) != 0 {
+		t.Errorf("syncResult.failed: want empty, got %+v", resp.SyncResult.Failed)
+	}
+
+	// Stub recording: exactly one POST captured.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 1 {
+		t.Fatalf("expected exactly one push to /api/update_environment_variables, got %d", len(captured))
+	}
+	if got, want := authHdr, "Convex "+adminKey; got != want {
+		t.Errorf("authorization header: want %q, got %q", want, got)
+	}
+	// Payload: must include BETTER_AUTH_SECRET=s3kret, must NOT include
+	// CONVEX_DEPLOY_KEY (dropped by FilterManaged).
+	var payload struct {
+		Changes []struct {
+			Name  string  `json:"name"`
+			Value *string `json:"value"`
+		} `json:"changes"`
+	}
+	if err := json.Unmarshal(captured[0], &payload); err != nil {
+		t.Fatalf("decode pushed body: %v\nraw=%s", err, string(captured[0]))
+	}
+	if len(payload.Changes) != 1 {
+		t.Fatalf("expected exactly 1 change pushed (CLI-managed name filtered), got %d: %+v",
+			len(payload.Changes), payload.Changes)
+	}
+	c := payload.Changes[0]
+	if c.Name != "BETTER_AUTH_SECRET" {
+		t.Errorf("pushed change name: want BETTER_AUTH_SECRET, got %q", c.Name)
+	}
+	if c.Value == nil || *c.Value != "s3kret" {
+		t.Errorf("pushed change value: want s3kret, got %v", c.Value)
+	}
+}
+
+// retargetDoer rewrites every Request's URL host+scheme to base while
+// preserving path + query. Lets the test point the convexenv client at
+// an httptest.Server without caring what URL the helper computed.
+type retargetDoer struct{ base string }
+
+func (d *retargetDoer) Do(req *http.Request) (*http.Response, error) {
+	base, err := url.Parse(d.base)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.Scheme = base.Scheme
+	req.URL.Host = base.Host
+	req.Host = base.Host
+	return http.DefaultClient.Do(req)
 }

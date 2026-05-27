@@ -17,6 +17,7 @@ import (
 
 	"github.com/Iann29/synapse/internal/audit"
 	"github.com/Iann29/synapse/internal/auth"
+	"github.com/Iann29/synapse/internal/convexenv"
 	synapsedb "github.com/Iann29/synapse/internal/db"
 	"github.com/Iann29/synapse/internal/deploymenturl"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
@@ -111,6 +112,16 @@ type DeploymentsHandler struct {
 	// `http://convex-<name>:3210/version`; tests inject deterministic
 	// fakes via this hook.
 	BackendProbe BackendProbe
+
+	// ConvexEnv is the client used to push project_env_vars into the
+	// Convex backend's FUNCTION runtime env store (the one that backs
+	// process.env inside a Convex function isolate — NOT the container
+	// process env, which functions never see). Required for any handler
+	// that touches env vars; nil is treated as "sync disabled" (logged
+	// silently in the helper) so minimal test harnesses and legacy
+	// wirings don't blow up. Constructed once in cmd/server/main.go and
+	// shared with the provisioner.Worker.
+	ConvexEnv *convexenv.Client
 
 	// versionCache memoises probe results per deployment for
 	// backendVersionCacheTTL so the dashboard's deployment-detail
@@ -276,6 +287,134 @@ func loadProjectEnvVars(ctx context.Context, db *pgxpool.Pool, projectID, deploy
 		return nil, err
 	}
 	return out, nil
+}
+
+// pushFunctionEnvForDeployment loads project_env_vars for the
+// deployment's type, filters out CLI-managed names, and calls the
+// Convex backend's function-env API to set them. v1.17+ this is the
+// canonical "sync this deployment's project_env_vars into its Convex
+// FUNCTION runtime env store" path — used by the provisioner worker
+// (post-provision push), the operator-triggered re-sync handler, and
+// the auto-sync that fires on update_default_environment_variables.
+//
+// Best-effort: returns an error so the caller can surface a per-row
+// failure to the operator, but the caller MUST decide whether to
+// fail-loud or carry on — the DB write that triggered this call has
+// already committed, and a transient backend hiccup shouldn't roll it
+// back.
+//
+// Skip rules (returns nil silently):
+//   - h.ConvexEnv == nil (sync disabled, e.g. minimal test harness)
+//   - deployment is not 'running' (we can't reach a stopped backend)
+//   - admin_key is empty (adopted deployment registered without one;
+//     operator re-adopts to fix)
+//
+// Adopted deployments are otherwise included — they have admin_key
+// (operator supplied at adopt time). If the key is wrong, the API call
+// returns 401 and we surface it; operator's responsibility to re-adopt
+// with a fresh key.
+//
+// HA deployments: the Convex backend uses a single-writer-per-deployment
+// Postgres lease, so one HTTP call to the cluster's public URL reaches
+// whichever replica currently holds the lease. No fanout needed.
+func (h *DeploymentsHandler) pushFunctionEnvForDeployment(
+	ctx context.Context,
+	deploymentID string,
+	logger *slog.Logger,
+) error {
+	if h.ConvexEnv == nil {
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	// Load just the fields we need; loadDeployment joins team/project
+	// and is overkill for this hot-path helper.
+	var (
+		name, projectID, depType, adminKey, status string
+		hostPort                                   *int
+		adopted                                    bool
+		haEnabled                                  bool
+		deploymentURLCol                           string
+	)
+	err := h.DB.QueryRow(ctx, `
+		SELECT name, project_id, deployment_type, admin_key, status,
+		       host_port, adopted, ha_enabled, deployment_url
+		  FROM deployments
+		 WHERE id = $1
+	`, deploymentID).Scan(&name, &projectID, &depType, &adminKey, &status,
+		&hostPort, &adopted, &haEnabled, &deploymentURLCol)
+	if err != nil {
+		return fmt.Errorf("push function env: load deployment: %w", err)
+	}
+
+	if status != models.DeploymentStatusRunning {
+		logger.Info("push function env: deployment not running, skipping",
+			"deployment_id", deploymentID, "name", name, "status", status)
+		return nil
+	}
+	if adminKey == "" {
+		logger.Warn("push function env: deployment has no admin_key, skipping",
+			"deployment_id", deploymentID, "name", name)
+		return nil
+	}
+
+	// Synthesize the minimum fields cliDeploymentURL inspects. We use
+	// the SAME URL shape `npx convex` would hit — same resolution rules
+	// (custom-domain > base-domain > host:port > stored deployment_url
+	// fallback) so the env API call lands at the same backend the CLI
+	// would.
+	d := &models.Deployment{
+		Name:          name,
+		HostPort:      ptrIntOrZero(hostPort),
+		Adopted:       adopted,
+		DeploymentURL: deploymentURLCol,
+	}
+	deploymentURL := h.cliDeploymentURL(ctx, d)
+	if deploymentURL == "" {
+		logger.Warn("push function env: empty deployment URL, skipping",
+			"deployment_id", deploymentID, "name", name)
+		return nil
+	}
+
+	vars, err := loadProjectEnvVars(ctx, h.DB, projectID, depType)
+	if err != nil {
+		return fmt.Errorf("push function env: load project env vars: %w", err)
+	}
+
+	changes := make([]convexenv.Change, 0, len(vars))
+	for vname, value := range vars {
+		changes = append(changes, convexenv.Set(vname, value))
+	}
+	changes, dropped := convexenv.FilterManaged(changes)
+	if len(dropped) > 0 {
+		// Log the NAMES of dropped vars (values may be secrets — never
+		// log them). Operator paste-mistake: noisy enough they notice,
+		// not noisy enough to spam normal flows.
+		logger.Warn("push function env: dropped CLI-managed names (not pushed)",
+			"deployment_id", deploymentID, "name", name, "dropped", dropped)
+	}
+
+	// convexenv.Client.Update treats an empty changes slice as a no-op
+	// (no HTTP call) — safe to call always.
+	if err := h.ConvexEnv.Update(ctx, deploymentURL, adminKey, changes); err != nil {
+		return fmt.Errorf("push function env: convex API: %w", err)
+	}
+
+	logger.Info("push function env: synced",
+		"deployment_id", deploymentID, "name", name,
+		"applied", len(changes), "ha", haEnabled)
+	return nil
+}
+
+// ptrIntOrZero returns 0 when p is nil. Used for the *int → int hop when
+// passing host_port (nullable in the DB) into a struct that wants an int.
+func ptrIntOrZero(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploymentID, deploymentName, instanceSecret string, envVars map[string]string, activeDomains int, logger *slog.Logger) bool {

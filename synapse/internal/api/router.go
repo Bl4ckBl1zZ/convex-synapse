@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Iann29/synapse/internal/auth"
+	"github.com/Iann29/synapse/internal/convexenv"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
 	"github.com/Iann29/synapse/internal/geo"
 	"github.com/Iann29/synapse/internal/middleware"
@@ -150,6 +151,13 @@ type RouterDeps struct {
 	// is never enabled in this block.
 	EnableDesiredState  bool
 	EnableObservedState bool
+	// ConvexEnv pushes operator-set project_env_vars into each
+	// deployment's Convex FUNCTION runtime env store (the store that
+	// backs process.env inside function isolates). Constructed once in
+	// cmd/server/main.go and shared with provisioner.Worker. nil
+	// disables env sync — minimal test harnesses + legacy wirings
+	// degrade gracefully (the helpers log + skip instead of panicking).
+	ConvexEnv *convexenv.Client
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -216,6 +224,7 @@ func NewRouter(d RouterDeps) http.Handler {
 		HA:                    d.HA,
 		Crypto:                d.Crypto,
 		BackendProbe:          d.BackendProbe,
+		ConvexEnv:             d.ConvexEnv,
 	}
 	// Per-deployment custom domains (v1.1+). Sub-routes mount under
 	// /v1/deployments/{name}/domains; the handler reuses the
