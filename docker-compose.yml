@@ -140,6 +140,33 @@ services:
       SYNAPSE_BACKEND_S3_ACCESS_KEY: ${SYNAPSE_BACKEND_S3_ACCESS_KEY:-}
       SYNAPSE_BACKEND_S3_SECRET_KEY: ${SYNAPSE_BACKEND_S3_SECRET_KEY:-}
       SYNAPSE_BACKEND_S3_BUCKET_PREFIX: ${SYNAPSE_BACKEND_S3_BUCKET_PREFIX:-}
+      # ---- Cell Control Plane (v1.12+) ----
+      # observe/plan-only control surface. Defaults match config.go
+      # so a fresh install behaves identically to the v1.11.x baseline;
+      # operators can override per-host (e.g. SYNAPSE_REGION=eu-west-1)
+      # via .env. SYNAPSE_AGENT_APPLY is hard-coded to false here too
+      # — apply is not implemented; the var exists so the surface is
+      # explicit and audit-grep-able.
+      SYNAPSE_ENABLE_CELLS: ${SYNAPSE_ENABLE_CELLS:-true}
+      SYNAPSE_REGION: ${SYNAPSE_REGION:-}
+      SYNAPSE_AGENT_STALE_AFTER_SECONDS: ${SYNAPSE_AGENT_STALE_AFTER_SECONDS:-60}
+      SYNAPSE_AGENT_OFFLINE_AFTER_SECONDS: ${SYNAPSE_AGENT_OFFLINE_AFTER_SECONDS:-300}
+      SYNAPSE_ENABLE_DESIRED_STATE: ${SYNAPSE_ENABLE_DESIRED_STATE:-true}
+      SYNAPSE_ENABLE_OBSERVED_STATE: ${SYNAPSE_ENABLE_OBSERVED_STATE:-true}
+      SYNAPSE_ENABLE_RECONCILE_DRY_RUN: ${SYNAPSE_ENABLE_RECONCILE_DRY_RUN:-true}
+      SYNAPSE_AGENT_APPLY: ${SYNAPSE_AGENT_APPLY:-false}
+      # ---- Auto-restart + meta + dashboard upstream ----
+      # SYNAPSE_HEALTH_AUTO_RESTART: empty = disabled. The health worker
+      # only promotes 'stopped' → restart attempt when this is "true".
+      # SYNAPSE_GITHUB_REPO: where the auto-updater fetches /releases/latest.
+      # Override for forks ("my-org/my-fork").
+      # SYNAPSE_DASHBOARD_UPSTREAM / SYNAPSE_DASHBOARD_SHELL_UPSTREAM: the
+      # service names the proxy proxies to. Override only if you renamed
+      # the convex-dashboard / synapse-dashboard services in compose.
+      SYNAPSE_HEALTH_AUTO_RESTART: ${SYNAPSE_HEALTH_AUTO_RESTART:-}
+      SYNAPSE_GITHUB_REPO: ${SYNAPSE_GITHUB_REPO:-Iann29/convex-synapse}
+      SYNAPSE_DASHBOARD_UPSTREAM: ${SYNAPSE_DASHBOARD_UPSTREAM:-synapse-convex-dashboard-proxy:80}
+      SYNAPSE_DASHBOARD_SHELL_UPSTREAM: ${SYNAPSE_DASHBOARD_SHELL_UPSTREAM:-synapse-dashboard:3000}
     volumes:
       # Synapse provisions sibling containers via the host docker daemon.
       # This mount is unavoidable for the v0 architecture; the alternative is

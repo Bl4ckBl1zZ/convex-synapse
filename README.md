@@ -117,7 +117,7 @@ tests + 396 bats unit cases, all expected green in CI on every push.
 
 Latest release:
 [`github.com/Iann29/convex-synapse/releases/latest`](https://github.com/Iann29/convex-synapse/releases/latest).
-This checkout's installer version is `1.2.0` (`setup.sh --version`).
+This checkout's installer version is `1.11.7` (`setup.sh --version`).
 
 `./setup.sh --upgrade` queries
 [`/releases/latest`](https://github.com/Iann29/convex-synapse/releases/latest)
