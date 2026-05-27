@@ -147,8 +147,8 @@ func TestDeployKeys_Revoke_RotatesDeploymentCredentials(t *testing.T) {
 	deploymentID := h.SeedDeployment(proj.ID, "dk-rotate-1111", "prod", "running", true, owner.ID, 3412, "")
 
 	if _, err := h.DB.Exec(h.rootCtx, `
-		INSERT INTO project_env_vars (project_id, name, value, deployment_types)
-		VALUES ($1, 'SERVICE_TOKEN', 'keep-me', ARRAY['prod'])
+		INSERT INTO project_env_vars (project_id, name, value, deployment_type)
+		VALUES ($1, 'SERVICE_TOKEN', 'keep-me', 'prod')
 	`, proj.ID); err != nil {
 		t.Fatalf("insert project env var: %v", err)
 	}
