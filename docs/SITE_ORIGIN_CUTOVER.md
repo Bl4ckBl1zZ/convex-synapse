@@ -59,16 +59,27 @@ Deployment → Domains → Add  →  domain: site.mip.amagejumpy.com, role: site
 Wait for the row to go `active` (DNS verified), then Caddy issues TLS on
 first hit (gated by `tls_ask`).
 
-## Step 3 — Rebake existing deployments (REQUIRED)
+## Step 3 — Rebake `CONVEX_SITE_ORIGIN`
 
 Deployments created before this release froze `CONVEX_SITE_ORIGIN` at the
-cloud URL. They need one recreate/restart to pick up the new value
-(Better Auth derives its cookie/callback origin from it):
+cloud URL; the container needs one recreate/restart to pick up the new
+value (Better Auth derives its cookie/callback origin from it). **Whether
+this is automatic depends on the path:**
 
-- Dashboard → deployment row → **Restart**, or
-- recreate via the provisioner.
+- **Custom domain (`role='site'`) — automatic.** When the domain row goes
+  `active` (after DNS verifies), Synapse recreates the container for you
+  (`verifyDomain`/`createDomain` → `rebuildCORSAndRestart`), and since
+  v1.15.0 that rebuild bakes the new `CONVEX_SITE_ORIGIN` and adds the
+  site host to CORS. **No manual restart needed** — adding + verifying the
+  domain is enough. (The only exception: a domain that was *already*
+  active before the upgrade won't re-trigger; restart once manually then.)
+- **Wildcard (`<name>.site.<base>`) — manual for pre-existing deployments.**
+  There's no domain row to trigger a rebuild, so a deployment that existed
+  before the upgrade keeps the old origin until you restart it once:
+  Dashboard → deployment row → **Restart** (or recreate). New deployments
+  bake it correctly at create-time.
 
-Verify the container env after:
+Verify the container env either way:
 
 ```bash
 docker inspect convex-<name> --format '{{range .Config.Env}}{{println .}}{{end}}' \
