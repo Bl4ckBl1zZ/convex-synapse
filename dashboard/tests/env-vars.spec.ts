@@ -54,7 +54,10 @@ test("project env vars: add, list, delete", async ({ page }) => {
   // v1.9.2: values mask by default — assert visible after toggling
   // Reveal rather than expecting plaintext in the DOM.
   await expect(page.getByText("supersecret")).toBeHidden();
-  await page.getByTestId("env-var-toggle-API_KEY").click();
+  // v1.17.1+: same NAME now renders one row per deployment_type, so
+  // env-var-toggle-API_KEY matches 3 elements (dev, prod, preview).
+  // Click the specific dev row via its aria-label.
+  await page.getByRole("button", { name: "Reveal value for API_KEY on dev" }).click();
   await expect(page.getByText("supersecret")).toBeVisible();
 
   // Add a second one to confirm the list grows.
@@ -63,17 +66,18 @@ test("project env vars: add, list, delete", async ({ page }) => {
   await page.getByRole("button", { name: "Add" }).click();
   await expect(page.getByText("DATABASE_URL")).toBeVisible();
 
-  // Delete API_KEY.
-  await page.getByRole("button", { name: "Delete env var API_KEY" }).click();
-  // The per-row Delete button is unique to the live row in the env-vars
-  // panel; assert through it. (v1.10.0+: ActivityFeed shows the
-  // `updateProjectEnvVars` audit event which mentions the name, so a
-  // page-wide text match never hides.)
+  // Delete API_KEY (all types). v1.17.1+: same NAME stores one row per
+  // deployment_type, so the bulk-delete button removes every type at once.
+  await page.getByRole("button", { name: "Delete all values for API_KEY" }).click();
+  // The grouped "Delete all values" button is unique per name; once
+  // API_KEY is gone, the button must disappear. (v1.10.0+: ActivityFeed
+  // shows the `updateProjectEnvVars` audit event which mentions the
+  // name, so a page-wide text match never hides.)
   await expect(
-    page.getByRole("button", { name: "Delete env var API_KEY" }),
+    page.getByRole("button", { name: "Delete all values for API_KEY" }),
   ).toBeHidden();
   // The other one survives.
   await expect(
-    page.getByRole("button", { name: "Delete env var DATABASE_URL" }),
+    page.getByRole("button", { name: "Delete all values for DATABASE_URL" }),
   ).toBeVisible();
 });

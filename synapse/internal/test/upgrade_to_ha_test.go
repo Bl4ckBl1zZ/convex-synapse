@@ -98,8 +98,8 @@ func TestUpgradeToHA_HappyPath_QueuesAndMigrates(t *testing.T) {
 	depID := h.SeedDeployment(proj.ID, "happy-up-6600", "prod", "running",
 		false, owner.ID, 4504, "k")
 	if _, err := h.DB.Exec(h.rootCtx, `
-		INSERT INTO project_env_vars (project_id, name, value, deployment_types)
-		VALUES ($1, 'UPGRADE_TOKEN', 'kept', ARRAY['prod'])
+		INSERT INTO project_env_vars (project_id, name, value, deployment_type)
+		VALUES ($1, 'UPGRADE_TOKEN', 'kept', 'prod')
 	`, proj.ID); err != nil {
 		t.Fatalf("seed env var: %v", err)
 	}

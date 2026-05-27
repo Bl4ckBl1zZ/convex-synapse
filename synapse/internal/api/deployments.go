@@ -267,7 +267,7 @@ func loadProjectEnvVars(ctx context.Context, db *pgxpool.Pool, projectID, deploy
 		SELECT name, value
 		  FROM project_env_vars
 		 WHERE project_id = $1
-		   AND $2 = ANY(deployment_types)
+		   AND deployment_type = $2
 		 ORDER BY name ASC
 	`, projectID, deploymentType)
 	if err != nil {
@@ -2491,7 +2491,7 @@ func (h *DeploymentsHandler) runtimeEnvVarsForRecreate(ctx context.Context, d *m
 			SELECT name, value
 			  FROM project_env_vars
 			 WHERE project_id = $1
-			   AND $2 = ANY(deployment_types)
+			   AND deployment_type = $2
 			 ORDER BY name
 		`, d.ProjectID, d.DeploymentType)
 		if err != nil {

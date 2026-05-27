@@ -242,8 +242,11 @@ func TestProjects_DeleteCascadesEnvVars(t *testing.T) {
 		`SELECT count(*) FROM project_env_vars WHERE project_id = $1`, proj.ID).Scan(&pre); err != nil {
 		t.Fatalf("count env vars: %v", err)
 	}
-	if pre != 1 {
-		t.Fatalf("expected 1 env var pre-delete, got %d", pre)
+	// v1.17.1+: `set` without explicit deploymentTypes fans out to all
+	// three types (dev/prod/preview) as separate rows, so the seed row
+	// becomes 3. Pre-v1.17.1 it was 1 row with a 3-element array column.
+	if pre != 3 {
+		t.Fatalf("expected 3 env var rows pre-delete (one per default type), got %d", pre)
 	}
 
 	// Delete project.
@@ -335,7 +338,12 @@ func TestProjects_EnvVarsRoundTrip(t *testing.T) {
 		t.Errorf("expected empty initial env vars, got %+v", initial.Configs)
 	}
 
-	// Set two vars in one batch.
+	// Set two vars in one batch. Post-v1.17.1 the schema is one row per
+	// (project_id, name, deployment_type), so FOO (default types =
+	// [dev,prod,preview]) expands to 3 rows and BAR (types=[prod])
+	// stays at 1 row -- 4 configs total. Each returned config wraps a
+	// single type in a one-element deploymentTypes array (legacy shape
+	// preserved; dashboard groups by name client-side).
 	var setResp updateResp
 	h.DoJSON(http.MethodPost,
 		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
@@ -349,33 +357,37 @@ func TestProjects_EnvVarsRoundTrip(t *testing.T) {
 		t.Errorf("expected applied=2, got %d", setResp.Applied)
 	}
 
-	// List confirms both.
+	// List confirms both names; FOO×3 + BAR×1 = 4 single-type rows.
 	var listed listResp
 	h.DoJSON(http.MethodGet,
 		"/v1/projects/"+proj.ID+"/list_default_environment_variables",
 		owner.AccessToken, nil, http.StatusOK, &listed)
-	if len(listed.Configs) != 2 {
-		t.Fatalf("expected 2 env vars after set, got %+v", listed.Configs)
+	if len(listed.Configs) != 4 {
+		t.Fatalf("expected 4 env var rows (FOO×3 + BAR×1) after set, got %+v", listed.Configs)
 	}
-	byName := map[string]envConfig{}
+	type key struct{ name, depType string }
+	byKey := map[key]envConfig{}
 	for _, c := range listed.Configs {
-		byName[c.Name] = c
+		if len(c.DeploymentTypes) != 1 {
+			t.Errorf("each config must carry exactly one deployment type post-v1.17.1, got %+v", c)
+			continue
+		}
+		byKey[key{c.Name, c.DeploymentTypes[0]}] = c
 	}
-	if byName["FOO"].Value != "1" {
-		t.Errorf("FOO mismatch: %+v", byName["FOO"])
+	for _, dt := range []string{"dev", "prod", "preview"} {
+		got, ok := byKey[key{"FOO", dt}]
+		if !ok || got.Value != "1" {
+			t.Errorf("FOO/%s missing or wrong value: %+v", dt, got)
+		}
 	}
-	if byName["BAR"].Value != "two" {
-		t.Errorf("BAR mismatch: %+v", byName["BAR"])
+	if bar, ok := byKey[key{"BAR", "prod"}]; !ok || bar.Value != "two" {
+		t.Errorf("BAR/prod missing or wrong: %+v", bar)
 	}
-	if len(byName["BAR"].DeploymentTypes) != 1 || byName["BAR"].DeploymentTypes[0] != "prod" {
-		t.Errorf("BAR deployment types: got %v", byName["BAR"].DeploymentTypes)
-	}
-	// FOO should default to all three deployment types.
-	if len(byName["FOO"].DeploymentTypes) != 3 {
-		t.Errorf("FOO should have 3 default deployment types, got %v", byName["FOO"].DeploymentTypes)
+	if _, ok := byKey[key{"BAR", "dev"}]; ok {
+		t.Errorf("BAR should NOT exist for dev (was prod-only)")
 	}
 
-	// Delete BAR.
+	// Delete BAR (no deploymentTypes => wipe every row for that name).
 	h.DoJSON(http.MethodPost,
 		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
 		owner.AccessToken,
@@ -386,8 +398,124 @@ func TestProjects_EnvVarsRoundTrip(t *testing.T) {
 	h.DoJSON(http.MethodGet,
 		"/v1/projects/"+proj.ID+"/list_default_environment_variables",
 		owner.AccessToken, nil, http.StatusOK, &afterDelete)
-	if len(afterDelete.Configs) != 1 || afterDelete.Configs[0].Name != "FOO" {
-		t.Errorf("expected only FOO after delete, got %+v", afterDelete.Configs)
+	if len(afterDelete.Configs) != 3 {
+		t.Fatalf("expected 3 env var rows (FOO across dev/prod/preview) after deleting BAR, got %+v", afterDelete.Configs)
+	}
+	for _, c := range afterDelete.Configs {
+		if c.Name != "FOO" {
+			t.Errorf("expected only FOO rows after delete, got %+v", c)
+		}
+	}
+}
+
+// TestProjects_EnvVars_DifferentValuesPerType locks the v1.17.1 bug fix:
+// setting NAME=A for dev and then NAME=B for prod must NOT collapse to a
+// single row -- both values must survive independently. Pre-v1.17.1 the
+// schema's UNIQUE(project_id, name) + ON CONFLICT (project_id, name) DO
+// UPDATE replaced the dev value with the prod value (and vice versa).
+func TestProjects_EnvVars_DifferentValuesPerType(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "PerType Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "PerType")
+
+	type envVarChange struct {
+		Op              string   `json:"op"`
+		Name            string   `json:"name"`
+		Value           string   `json:"value,omitempty"`
+		DeploymentTypes []string `json:"deploymentTypes,omitempty"`
+	}
+	type updateEnvVarsReq struct {
+		Changes []envVarChange `json:"changes"`
+	}
+	type envConfig struct {
+		Name            string   `json:"name"`
+		Value           string   `json:"value"`
+		DeploymentTypes []string `json:"deploymentTypes"`
+	}
+	type listResp struct {
+		Configs []envConfig `json:"configs"`
+	}
+
+	// Step 1: BETTER_AUTH_SECRET=dev-secret for dev only.
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
+		owner.AccessToken,
+		updateEnvVarsReq{Changes: []envVarChange{
+			{Op: "set", Name: "BETTER_AUTH_SECRET", Value: "dev-secret", DeploymentTypes: []string{"dev"}},
+		}},
+		http.StatusOK, nil)
+
+	// Step 2: BETTER_AUTH_SECRET=prod-secret for prod only. The pre-fix
+	// bug: this would REPLACE the dev row -- dev would suddenly read
+	// "prod-secret". Post-fix: both rows survive independently.
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
+		owner.AccessToken,
+		updateEnvVarsReq{Changes: []envVarChange{
+			{Op: "set", Name: "BETTER_AUTH_SECRET", Value: "prod-secret", DeploymentTypes: []string{"prod"}},
+		}},
+		http.StatusOK, nil)
+
+	var got listResp
+	h.DoJSON(http.MethodGet,
+		"/v1/projects/"+proj.ID+"/list_default_environment_variables",
+		owner.AccessToken, nil, http.StatusOK, &got)
+
+	if len(got.Configs) != 2 {
+		t.Fatalf("want 2 configs (dev + prod), got %d: %+v", len(got.Configs), got.Configs)
+	}
+	byType := map[string]envConfig{}
+	for _, c := range got.Configs {
+		if c.Name != "BETTER_AUTH_SECRET" {
+			t.Errorf("unexpected name %q", c.Name)
+			continue
+		}
+		if len(c.DeploymentTypes) != 1 {
+			t.Errorf("each config should be one-type post-v1.17.1, got %+v", c.DeploymentTypes)
+			continue
+		}
+		byType[c.DeploymentTypes[0]] = c
+	}
+	if dev, ok := byType["dev"]; !ok || dev.Value != "dev-secret" {
+		t.Errorf("dev value: got %+v want dev-secret", dev)
+	}
+	if prod, ok := byType["prod"]; !ok || prod.Value != "prod-secret" {
+		t.Errorf("prod value: got %+v want prod-secret", prod)
+	}
+
+	// Step 3: delete only the prod row -- dev must survive.
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
+		owner.AccessToken,
+		updateEnvVarsReq{Changes: []envVarChange{
+			{Op: "delete", Name: "BETTER_AUTH_SECRET", DeploymentTypes: []string{"prod"}},
+		}},
+		http.StatusOK, nil)
+
+	got = listResp{}
+	h.DoJSON(http.MethodGet,
+		"/v1/projects/"+proj.ID+"/list_default_environment_variables",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if len(got.Configs) != 1 || got.Configs[0].DeploymentTypes[0] != "dev" || got.Configs[0].Value != "dev-secret" {
+		t.Fatalf("after deleting prod: want dev still present, got %+v", got.Configs)
+	}
+
+	// Step 4: bulk delete without deploymentTypes wipes every row.
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
+		owner.AccessToken,
+		updateEnvVarsReq{Changes: []envVarChange{
+			{Op: "delete", Name: "BETTER_AUTH_SECRET"},
+		}},
+		http.StatusOK, nil)
+
+	got = listResp{}
+	h.DoJSON(http.MethodGet,
+		"/v1/projects/"+proj.ID+"/list_default_environment_variables",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if len(got.Configs) != 0 {
+		t.Fatalf("bulk delete should wipe all rows, got %+v", got.Configs)
 	}
 }
 

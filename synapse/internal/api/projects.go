@@ -817,11 +817,16 @@ func (h *ProjectsHandler) listEnvVars(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// v1.17.1+: schema is one row per (project_id, name, deployment_type).
+	// We return one config entry per row -- wrapping the single type in a
+	// one-element array preserves the pre-v1.17.1 envVarConfig.deploymentTypes
+	// shape so clients that don't yet know about per-type values keep
+	// parsing without changes. The dashboard groups by name client-side.
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT name, value, deployment_types
+		SELECT name, value, deployment_type
 		  FROM project_env_vars
 		 WHERE project_id = $1
-		 ORDER BY name ASC
+		 ORDER BY name ASC, deployment_type ASC
 	`, p.ID)
 	if err != nil {
 		logErr("list env vars", err)
@@ -832,13 +837,17 @@ func (h *ProjectsHandler) listEnvVars(w http.ResponseWriter, r *http.Request) {
 
 	resp := listEnvVarsResp{Configs: []envVarConfig{}}
 	for rows.Next() {
-		var c envVarConfig
-		if err := rows.Scan(&c.Name, &c.Value, &c.DeploymentTypes); err != nil {
+		var name, value, depType string
+		if err := rows.Scan(&name, &value, &depType); err != nil {
 			logErr("scan env var", err)
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to scan env vars")
 			return
 		}
-		resp.Configs = append(resp.Configs, c)
+		resp.Configs = append(resp.Configs, envVarConfig{
+			Name:            name,
+			Value:           value,
+			DeploymentTypes: []string{depType},
+		})
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -890,29 +899,58 @@ func (h *ProjectsHandler) updateEnvVars(w http.ResponseWriter, r *http.Request) 
 		}
 		switch c.Op {
 		case "set":
+			// v1.17.1+: each (project_id, name, deployment_type) is its
+			// own row. A change with multiple deploymentTypes fans out
+			// into N upserts so the operator can either:
+			//   - send one change with [dev,prod,preview] to apply the
+			//     same value to every type (legacy ergonomics), OR
+			//   - send three separate changes with different values per
+			//     type to set BETTER_AUTH_SECRET=dev-secret for dev and
+			//     =prod-secret for prod (the bug fix).
 			types := c.DeploymentTypes
 			if len(types) == 0 {
 				types = []string{"dev", "prod", "preview"}
 			}
-			_, err = tx.Exec(r.Context(), `
-				INSERT INTO project_env_vars (project_id, name, value, deployment_types, updated_at)
-				VALUES ($1, $2, $3, $4, now())
-				ON CONFLICT (project_id, name) DO UPDATE
-				   SET value = EXCLUDED.value,
-				       deployment_types = EXCLUDED.deployment_types,
-				       updated_at = now()
-			`, p.ID, c.Name, c.Value, types)
+			for _, dt := range types {
+				dt = strings.TrimSpace(dt)
+				if dt == "" {
+					writeError(w, http.StatusBadRequest, "bad_deployment_type", "deploymentTypes entries must be non-empty")
+					return
+				}
+				_, err = tx.Exec(r.Context(), `
+					INSERT INTO project_env_vars (project_id, name, value, deployment_type, updated_at)
+					VALUES ($1, $2, $3, $4, now())
+					ON CONFLICT (project_id, name, deployment_type) DO UPDATE
+					   SET value = EXCLUDED.value,
+					       updated_at = now()
+				`, p.ID, c.Name, c.Value, dt)
+				if err != nil {
+					logErr("env var change", err)
+					writeError(w, http.StatusInternalServerError, "internal", "Failed to apply env var change")
+					return
+				}
+			}
 		case "delete":
-			_, err = tx.Exec(r.Context(),
-				`DELETE FROM project_env_vars WHERE project_id = $1 AND name = $2`,
-				p.ID, c.Name)
+			// delete without deploymentTypes removes every type for that
+			// name (the operator says "this var is gone, period"). With
+			// deploymentTypes, only the listed types are removed; other
+			// types of the same name survive.
+			if len(c.DeploymentTypes) == 0 {
+				_, err = tx.Exec(r.Context(),
+					`DELETE FROM project_env_vars WHERE project_id = $1 AND name = $2`,
+					p.ID, c.Name)
+			} else {
+				_, err = tx.Exec(r.Context(),
+					`DELETE FROM project_env_vars WHERE project_id = $1 AND name = $2 AND deployment_type = ANY($3)`,
+					p.ID, c.Name, c.DeploymentTypes)
+			}
+			if err != nil {
+				logErr("env var delete", err)
+				writeError(w, http.StatusInternalServerError, "internal", "Failed to apply env var change")
+				return
+			}
 		default:
 			writeError(w, http.StatusBadRequest, "bad_op", "op must be 'set' or 'delete'")
-			return
-		}
-		if err != nil {
-			logErr("env var change", err)
-			writeError(w, http.StatusInternalServerError, "internal", "Failed to apply env var change")
 			return
 		}
 	}

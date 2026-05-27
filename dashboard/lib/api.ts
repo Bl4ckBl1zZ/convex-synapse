@@ -508,15 +508,23 @@ export type EnvSyncResult = {
   notice?: string;
 };
 
+// v1.17.1+: backend stores one row per (name, deploymentType); list
+// returns one EnvVar per row with deploymentTypes as a single-element
+// array. Group by name client-side to render per-name cards with
+// per-type values.
 export type EnvVar = {
   name: string;
   value: string;
   deploymentTypes: string[];
 };
 
+// `delete` accepts an optional `deploymentTypes`: when omitted the
+// backend removes every row for that name; when present it removes
+// only the matching (name, type) rows. `set` fans out to N upserts
+// when multiple types are supplied (same value for each).
 export type EnvVarChange =
   | { op: "set"; name: string; value: string; deploymentTypes?: string[] }
-  | { op: "delete"; name: string };
+  | { op: "delete"; name: string; deploymentTypes?: string[] };
 
 export type PendingInvite = {
   id: string;

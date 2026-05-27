@@ -838,7 +838,7 @@ func (w *Worker) pushFunctionEnvForJob(ctx context.Context, j claimedJob, logger
 func loadProjectEnvVarsForWorker(ctx context.Context, db dbQuerier, projectID, deploymentType string) (map[string]string, error) {
 	rows, err := db.Query(ctx, `
 		SELECT name, value FROM project_env_vars
-		 WHERE project_id = $1 AND $2 = ANY(deployment_types)
+		 WHERE project_id = $1 AND deployment_type = $2
 		 ORDER BY name ASC
 	`, projectID, deploymentType)
 	if err != nil {
