@@ -8,7 +8,7 @@ endpoint with a smaller payload).
 
 All authenticated endpoints expect `Authorization: Bearer <token>` where the
 token is either:
-- A JWT issued by `/v1/auth/login` (15-minute lifetime by default), or
+- A JWT issued by `/v1/auth/login` (24-hour lifetime by default — operators leave dashboards open all day; refresh TTL stays the real session boundary), or
 - A `syn_*` opaque personal-access token (created via the dashboard's
   `/me` page or via `POST /v1/create_personal_access_token` — see below).
 
@@ -802,3 +802,13 @@ they bump the `--upgrade` target.
 | v1.0.3 | added deployment deploy-key endpoints under `/v1/deployments/{name}/deploy_keys` |
 | v1.1.0 | added instance-admin self-update endpoints under `/v1/admin/version_check`, `/v1/admin/upgrade`, and `/v1/admin/upgrade/status` |
 | v1.2.0 | installer/runtime release; no intentional public `/v1` breaking change |
+| v1.3.0 | HA polish — `POST /v1/deployments/{name}/upgrade_to_ha` async worker; active replica health probe; HA-aware CORS rolling across replicas |
+| v1.4.0 | added `POST /v1/admin/host_domain` for runtime domain reconfiguration |
+| v1.5.0 | added DNS auto-configuration — `POST /v1/admin/dns_credentials/cloudflare` (CRUD) + `POST /v1/deployments/{name}/domains/{id}/auto_configure` |
+| v1.6.0 | no `/v1` surface change — CLI `synapse convex` wrapper shipped client-side |
+| v1.11.0 | no `/v1` surface change — bilingual `/docs` shipped in the dashboard; CLI `synapse skills` group added |
+| v1.12.0 | added Cell Control Plane (observe / plan only, apply hard-disabled): `/v1/hosts`, `/v1/host_agents`, `/v1/cells`, `/v1/cell_links`, `/v1/service_tokens`, `/v1/operation_runs`, project/cell/host scoped `desired_state` / `observed_state` / `drift` / `reconcile_dry_run` (any `apply:true` returns 400 `apply_not_supported`) |
+| v1.13.0 | added `POST /v1/cells/{id}/delete` |
+| v1.14.0 | added `POST /v1/deployments/{name}/restart` |
+| v1.15.0 | Site Origin — `role='site'` accepted on `POST /v1/deployments/{name}/domains`; `deployment.siteUrl` field added to deployment JSON; proxy routes `<name>.site.<base>` to Convex port 3211; `/v1/internal/tls_ask` approves the site subdomain branch |
+| v1.16.0 | no `/v1` surface change — adds CLI `domains`/`members`/`upgrade` command families against existing endpoints; backend gains CCP audit-event assertion coverage; HA port alloc race wrapped in retry |
