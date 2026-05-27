@@ -6,10 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Iann29/synapse/internal/audit"
 	"github.com/Iann29/synapse/internal/models"
 )
 
 // Cell links + service tokens (feat/cell-control-plane, Bloco 7).
+
+// TODO: no happy-path test exists for PATCH /v1/cell_links/{id} (audit.ActionUpdateCellLink)
 
 func createCellViaAPI(t *testing.T, h *Harness, bearer, projectID, name, kind string) models.Cell {
 	t.Helper()
@@ -80,6 +83,7 @@ func TestCellLinks_CreateAndList(t *testing.T) {
 	if len(list.Items) != 1 || list.Items[0].ID != link.ID {
 		t.Fatalf("expected the created link in the list, got %+v", list.Items)
 	}
+	assertAuditEvent(t, h, audit.ActionCreateCellLink, owner.ID, audit.TargetCellLink, link.ID)
 }
 
 type listCellLinksResult struct {
@@ -412,4 +416,5 @@ func TestDeleteCell(t *testing.T) {
 	if n != 0 {
 		t.Errorf("placement should be gone after cell delete, got %d", n)
 	}
+	assertAuditEvent(t, h, audit.ActionDeleteCell, owner.ID, audit.TargetCell, cell.ID)
 }

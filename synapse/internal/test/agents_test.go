@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Iann29/synapse/internal/audit"
 	"github.com/Iann29/synapse/internal/models"
 )
 
@@ -332,6 +333,7 @@ func TestAgent_RevokeBlocksHeartbeat(t *testing.T) {
 	// Non-admin can't revoke.
 	stranger := h.RegisterRandomUser()
 	h.AssertStatus(http.MethodPost, "/v1/host_agents/"+reg.AgentID+"/revoke", stranger.AccessToken, map[string]any{}, http.StatusForbidden)
+	assertAuditEvent(t, h, audit.ActionRevokeHostAgent, admin.ID, audit.TargetHostAgent, reg.AgentID)
 }
 
 func TestAgent_RotateToken(t *testing.T) {
@@ -353,6 +355,7 @@ func TestAgent_RotateToken(t *testing.T) {
 	// Old token no longer works; new token does.
 	h.AssertStatus(http.MethodPost, "/v1/agents/heartbeat", reg.AgentToken, map[string]any{}, http.StatusUnauthorized)
 	h.DoJSON(http.MethodPost, "/v1/agents/heartbeat", rot.AgentToken, map[string]any{}, http.StatusOK, &map[string]any{})
+	assertAuditEvent(t, h, audit.ActionRotateHostAgentToken, admin.ID, audit.TargetHostAgent, reg.AgentID)
 }
 
 func TestAgent_HeartbeatIgnoresBodyHostID(t *testing.T) {

@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Iann29/synapse/internal/audit"
 	"github.com/Iann29/synapse/internal/cells"
 	"github.com/Iann29/synapse/internal/models"
 )
@@ -18,6 +20,41 @@ import (
 //   - attach deployment to a cell
 //   - backfill idempotence
 //   - existing deployments keep working after backfill
+
+// TODO: no happy-path test exists for PATCH /v1/hosts/{id} (audit.ActionUpdateHost)
+// TODO: no happy-path test exists for POST  /v1/hosts/{id}/drain (audit.ActionDrainHost)
+// TODO: no happy-path test exists for PATCH /v1/cells/{id} (audit.ActionUpdateCell)
+// TODO: no happy-path test exists for POST  /v1/cells/{id}/drain (audit.ActionDrainCell)
+
+// assertAuditEvent polls audit_events for up to 2s for a row matching
+// action+actor+target. Direct SQL (not the team-scoped /audit_log endpoint)
+// because instance-scoped CCP events — hosts, host agents — carry no team_id
+// and therefore never surface in that feed. audit.Record is best-effort, so a
+// tight assertion would flake under load; the bounded poll buys us
+// determinism without slowing the green path.
+func assertAuditEvent(t *testing.T, h *Harness, action, actorID, targetType, targetID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var n int
+		if err := h.DB.QueryRow(h.rootCtx, `
+			SELECT count(*) FROM audit_events
+			 WHERE action = $1 AND actor_id::text = $2
+			   AND target_type = $3 AND target_id::text = $4`,
+			action, actorID, targetType, targetID,
+		).Scan(&n); err != nil {
+			t.Fatalf("query audit_events: %v", err)
+		}
+		if n > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("audit_event missing: action=%s actor=%s target=%s/%s",
+				action, actorID, targetType, targetID)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
 
 type hostsListResp struct {
 	Items []models.Host `json:"items"`
@@ -46,6 +83,7 @@ type attachResp struct {
 func TestHosts_CreateListGet(t *testing.T) {
 	h := Setup(t)
 	admin := h.RegisterRandomUser() // first user in a fresh DB is the instance admin
+
 	if !admin.IsInstanceAdmin {
 		t.Fatalf("expected first registered user to be instance admin")
 	}
@@ -83,6 +121,7 @@ func TestHosts_CreateListGet(t *testing.T) {
 	if got.ID != created.ID {
 		t.Fatalf("get host id mismatch: %s != %s", got.ID, created.ID)
 	}
+	assertAuditEvent(t, h, audit.ActionCreateHost, admin.ID, audit.TargetHost, created.ID)
 }
 
 func TestHosts_RequireInstanceAdmin(t *testing.T) {
@@ -171,6 +210,7 @@ func TestCells_CreateRuntimeWithoutDeployment(t *testing.T) {
 	// Invalid kind is rejected.
 	h.AssertStatus(http.MethodPost, "/v1/projects/"+proj.ID+"/cells", owner.AccessToken,
 		map[string]any{"name": "bad", "kind": "wat"}, http.StatusBadRequest)
+	assertAuditEvent(t, h, audit.ActionCreateCell, owner.ID, audit.TargetCell, cell.ID)
 }
 
 func TestCells_AttachDeployment(t *testing.T) {
@@ -212,6 +252,7 @@ func TestCells_AttachDeployment(t *testing.T) {
 	if len(res.Resources) != 1 || res.Resources[0].ResourceID != depID || len(res.Placements) != 1 {
 		t.Fatalf("resources/placements not reflecting attach: %+v / %+v", res.Resources, res.Placements)
 	}
+	assertAuditEvent(t, h, audit.ActionAttachDeploymentToCell, owner.ID, audit.TargetCell, cell.ID)
 }
 
 func TestCells_AttachDeployment_WrongProject(t *testing.T) {
