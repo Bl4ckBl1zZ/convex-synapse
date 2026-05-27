@@ -152,3 +152,72 @@ provisioner keeps `CONVEX_SITE_ORIGIN == CONVEX_CLOUD_ORIGIN`, and the
 proxy answers 501 for site hosts. Publishing a second host port for 3211
 in this mode is a deliberate, documented TODO — base-domain and
 custom-domain mode (the production shapes) ship unblocked.
+
+## Environment-variable categories (v1.17+)
+
+The cloud-vs-site split above is about **where requests land**. There is
+a sibling distinction about **where env vars land** — operators reading
+this doc almost always ask it next, and the two models echo each other.
+After v1.17 Synapse exposes three operator-visible env-var categories,
+each backed by a different store and read by a different consumer.
+
+### 1. CLI / deploy credentials (operator's workstation)
+
+- **Owner:** the `npx convex` CLI. `synapse select` writes them into the
+  operator's `.env.local` (next to the app source tree).
+- **Variables:** `CONVEX_DEPLOYMENT`, `CONVEX_SELF_HOSTED_URL`,
+  `CONVEX_SELF_HOSTED_ADMIN_KEY`, `CONVEX_DEPLOY_KEY`,
+  `CONVEX_DEPLOYMENT_TOKEN`.
+- **Read by:** the `npx convex` binary on the operator's machine
+  (deploy, env, run, dashboard).
+- **Lifetime:** as long as the project stays linked on that workstation.
+
+### 2. Frontend public vars (browser-visible, baked at build time)
+
+- **Owner:** the operator's frontend build (Next.js, Vite, etc) —
+  inlined into the JS bundle.
+- **Variables:** `NEXT_PUBLIC_CONVEX_URL` (cloud listener, port 3210)
+  and `NEXT_PUBLIC_CONVEX_SITE_URL` (the site origin — port 3211, the
+  whole point of the two-port model above).
+- **Read by:** the browser bundle at runtime.
+- **Written by:** `synapse select` into `.env.local`; the framework
+  picks them up at build.
+
+### 3. Convex function runtime env (what functions actually read)
+
+- **Owner:** the Convex backend's internal env store (Postgres-backed
+  metadata, per deployment).
+- **Variables:** every operator-defined application value —
+  `BETTER_AUTH_SECRET`, `STRIPE_SECRET_KEY`, `DATABASE_URL`, feature
+  flags, third-party API keys, etc.
+- **Read by:** `process.env.NAME` inside any Convex query / mutation
+  / action / HTTP action.
+- **Written by:** the **Convex Dashboard env panel**, `npx convex env
+  set`, **or** (since v1.17) the **Synapse "Environment variables"
+  project-settings panel**. All three paths land in the same store via
+  the backend's `POST /api/update_environment_variables` endpoint
+  (auth = the deployment's admin key).
+
+The Synapse panel auto-syncs to every running deployment in the project
+after each save. If a deployment is offline or transiently unreachable
+the push is reported as `failed` inline; the operator clicks **Re-sync
+to deployments** to retry. Adopted deployments are included whenever
+their admin key is on file.
+
+### Why this matters
+
+Before v1.17, Synapse's "Default environment variables" panel wrote to
+**container ENV** — the OS-level env of the Convex backend Rust process.
+Convex functions never read from there (they read from the internal env
+store), so operators setting `BETTER_AUTH_SECRET` in the Synapse panel
+found their app still 500'ing because the secret never reached the
+function isolate. v1.17 substitutes the container path for the
+function-runtime path — the panel now writes to the same store the
+Convex Dashboard's own panel uses, so values reach functions and show
+up in both UIs.
+
+System env vars (`CONVEX_CLOUD_ORIGIN`, `CONVEX_SITE_ORIGIN`,
+`INSTANCE_SECRET`, S3/Postgres HA creds) still flow into container ENV
+— the Convex backend's startup process reads them directly. Operators
+don't set or see those; Synapse manages them internally in
+`internal/docker/provisioner.go`.
