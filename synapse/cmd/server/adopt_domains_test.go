@@ -212,10 +212,10 @@ func TestParseUpstream(t *testing.T) {
 
 func TestInferRole(t *testing.T) {
 	cases := []struct {
-		host    string
-		ups     []caddyUpstream
-		dflt    string
-		want    string
+		host string
+		ups  []caddyUpstream
+		dflt string
+		want string
 	}{
 		// hostname hint wins
 		{"dashboard.foo.com", []caddyUpstream{{Port: 3210}}, "api", "dashboard"},
@@ -360,13 +360,13 @@ public.example.com {
 
 func TestPostPlan_LiveMode(t *testing.T) {
 	type recorded struct {
-		path  string
-		body  map[string]string
-		auth  string
+		path string
+		body map[string]string
+		auth string
 	}
 	var (
-		mu      sync.Mutex
-		hits    []recorded
+		mu   sync.Mutex
+		hits []recorded
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()

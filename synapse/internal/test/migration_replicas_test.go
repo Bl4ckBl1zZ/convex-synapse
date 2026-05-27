@@ -44,11 +44,11 @@ func TestMigration_BackfillsReplicasFromExistingDeployments(t *testing.T) {
 	}
 
 	var (
-		count    int
-		port     int
+		count       int
+		port        int
 		containerID string
-		status   string
-		idx      int
+		status      string
+		idx         int
 	)
 	err := h.DB.QueryRow(h.rootCtx, `
 		SELECT count(*) FROM deployment_replicas WHERE deployment_id = $1

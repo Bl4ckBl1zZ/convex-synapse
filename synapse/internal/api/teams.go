@@ -814,9 +814,9 @@ func (h *TeamsHandler) removeMember(w http.ResponseWriter, r *http.Request) {
 		TargetType: audit.TargetUser,
 		TargetID:   req.MemberID,
 		Metadata: map[string]any{
-			"memberId":     req.MemberID,
-			"role":         targetRole,
-			"selfRemoval":  selfRemoval,
+			"memberId":    req.MemberID,
+			"role":        targetRole,
+			"selfRemoval": selfRemoval,
 		},
 	})
 	writeJSON(w, http.StatusOK, map[string]string{

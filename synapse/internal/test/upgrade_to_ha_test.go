@@ -157,8 +157,12 @@ func TestUpgradeToHA_HappyPath_QueuesAndMigrates(t *testing.T) {
 	var haSpecs int
 	for _, spec := range provisioned {
 		if spec.Name == "happy-up-6600" && spec.HAReplica && spec.Storage != nil {
-			if spec.EnvVars["UPGRADE_TOKEN"] != "kept" {
-				t.Errorf("project env var not preserved on HA replica %d: %+v", spec.ReplicaIndex, spec.EnvVars)
+			// v1.17+: project_env_vars (UPGRADE_TOKEN here) no longer flow
+			// into container ENV — they reach functions via the convexenv
+			// post-provision push. spec.EnvVars now carries only system
+			// bits (CORS_ALLOWED_ORIGINS from active custom domains).
+			if _, leaked := spec.EnvVars["UPGRADE_TOKEN"]; leaked {
+				t.Errorf("UPGRADE_TOKEN leaked into container ENV on HA replica %d: %+v", spec.ReplicaIndex, spec.EnvVars)
 			}
 			if spec.EnvVars["CORS_ALLOWED_ORIGINS"] != "https://api.example.test" {
 				t.Errorf("CORS origins not preserved on HA replica %d: %+v", spec.ReplicaIndex, spec.EnvVars)

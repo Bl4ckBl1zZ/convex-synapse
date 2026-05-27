@@ -82,8 +82,8 @@ func TestTopology_SingleHost_SingleDeployment(t *testing.T) {
 
 func TestTopology_StatusAggregation(t *testing.T) {
 	h := SetupWithOpts(t, SetupOpts{
-		PublicURL: "https://synapsepanel.com",
-		PublicIP:  "72.60.3.159",
+		PublicURL:   "https://synapsepanel.com",
+		PublicIP:    "72.60.3.159",
 		GeoResolver: &stubResolver{info: geo.Info{Country: "DE", CountryFlag: "🇩🇪", Provider: "Hetzner"}},
 	})
 	owner := h.RegisterRandomUser()
@@ -116,8 +116,8 @@ func TestTopology_StatusAggregation(t *testing.T) {
 
 func TestTopology_EmptyProject(t *testing.T) {
 	h := SetupWithOpts(t, SetupOpts{
-		PublicURL: "https://synapsepanel.com",
-		PublicIP:  "",
+		PublicURL:   "https://synapsepanel.com",
+		PublicIP:    "",
 		GeoResolver: &stubResolver{info: geo.Info{}},
 	})
 	owner := h.RegisterRandomUser()

@@ -63,6 +63,14 @@ const (
 	// (which only writes the table); used by the "Apply to existing
 	// deployments" button in the dashboard.
 	ActionSyncEnvToDeployments = "syncEnvToDeployments"
+	// v1.17+: when project_env_vars are pushed into the Convex backend's
+	// function runtime env store (the one functions actually read via
+	// process.env). Distinct from updateProjectEnvVars (which only writes
+	// the project_env_vars table) and from syncEnvToDeployments (which
+	// is the operator-triggered fan-out). Emitted from the auto-sync
+	// path on updateEnvVars + from the per-deployment seed at provision
+	// time. Metadata: {deploymentName, applied, dropped}.
+	ActionUpdateFunctionEnvVars = "updateFunctionEnvVars"
 
 	// Deployments.
 	ActionCreateDeployment  = "createDeployment"

@@ -20,6 +20,7 @@ import (
 	"github.com/Iann29/synapse/internal/auth"
 	"github.com/Iann29/synapse/internal/cells"
 	"github.com/Iann29/synapse/internal/config"
+	"github.com/Iann29/synapse/internal/convexenv"
 	"github.com/Iann29/synapse/internal/crypto"
 	"github.com/Iann29/synapse/internal/db"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
@@ -245,6 +246,12 @@ func run() error {
 		DashboardAddr:      cfg.DashboardAddr,
 		DashboardShellAddr: cfg.DashboardShellAddr,
 	}
+	// Convex backend env-var client (v1.17+). One per-process, shared
+	// between the provisioner worker (post-provision push) and the
+	// ProjectsHandler (auto-sync on update + operator-triggered re-sync).
+	// Stateless; defaults are sane (5s per-call timeout). nil disables
+	// the env-sync paths; production always constructs one.
+	convexEnvClient := convexenv.NewClient()
 
 	handler := api.NewRouter(api.RouterDeps{
 		Logger:                logger,
@@ -283,6 +290,7 @@ func run() error {
 		// secrets-at-rest. Literal-nil interface when SYNAPSE_STORAGE_KEY
 		// is unset, in which case /v1/admin/dns_credentials/cloudflare
 		// returns 503 crypto_not_configured.
+		ConvexEnv:   convexEnvClient,
 		DNSEnvelope: dnsEnvelope,
 	})
 
@@ -315,8 +323,9 @@ func run() error {
 				ProxyEnabled: cfg.ProxyEnabled,
 				BaseDomain:   cfg.BaseDomain,
 			},
-			Logger: logger,
-			Crypto: workerCrypto, // literal-nil interface when HA is off — single-replica jobs don't read it
+			Logger:    logger,
+			ConvexEnv: convexEnvClient,
+			Crypto:    workerCrypto, // literal-nil interface when HA is off — single-replica jobs don't read it
 		}
 		go pworker.Run(rootCtx)
 	}

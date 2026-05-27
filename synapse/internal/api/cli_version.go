@@ -42,15 +42,15 @@ type CLIVersionHandler struct {
 
 	// Cache state — shared across all in-flight requests so npm sees
 	// at most one fetch per cliVersionCacheTTL.
-	mu        sync.Mutex
-	cached    *cliVersionPayload
-	cachedAt  time.Time
-	fromAPI   bool
+	mu       sync.Mutex
+	cached   *cliVersionPayload
+	cachedAt time.Time
+	fromAPI  bool
 }
 
 const (
-	cliVersionCacheTTL    = 15 * time.Minute
-	cliRegistryTimeout    = 6 * time.Second
+	cliVersionCacheTTL     = 15 * time.Minute
+	cliRegistryTimeout     = 6 * time.Second
 	cliVersionRefreshFloor = 30 * time.Second
 )
 

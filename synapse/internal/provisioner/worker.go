@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Iann29/synapse/internal/convexenv"
 	synapsedb "github.com/Iann29/synapse/internal/db"
 	"github.com/Iann29/synapse/internal/deploymenturl"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
@@ -138,6 +139,12 @@ type Worker struct {
 	// provisioning (jobs with replica_id pointing at HA deployments
 	// will fail with a clear error rather than panic).
 	Crypto SecretDecrypter
+	// ConvexEnv pushes user project_env_vars into the deployment's
+	// Convex FUNCTION runtime env store right after a fresh provision
+	// finishes. Mirrors DeploymentsHandler.ConvexEnv; nil disables the
+	// post-provision push (legacy and minimal-harness behaviour). Same
+	// process-wide client built once in cmd/server/main.go.
+	ConvexEnv *convexenv.Client
 }
 
 // SecretDecrypter is the *crypto.SecretBox subset the worker needs.
@@ -542,34 +549,22 @@ func loadStorage(ctx context.Context, tx pgx.Tx, dec SecretDecrypter, deployment
 	}, nil
 }
 
+// loadRuntimeEnvVars returns the runtime env baked into the container
+// at create-time. v1.17+ this is *only* system/CORS vars — user
+// project_env_vars no longer flow here (they're pushed into the Convex
+// FUNCTION runtime env store via the convexenv API after the container
+// is up). See docs/ENV_PIPELINE_PLAN.md §3 for the three categories;
+// in short: container ENV is read by the Convex backend's startup
+// (Rust) process, NOT the function isolate, so user vars set here
+// were always dead-letter.
+//
+// Signature kept identical for caller compatibility — projectID +
+// deploymentType are accepted but no longer consulted (the post-
+// provision push reloads them from project_env_vars directly).
 func loadRuntimeEnvVars(ctx context.Context, tx pgx.Tx, projectID, deploymentID, deploymentType string) (map[string]string, error) {
+	_ = projectID
+	_ = deploymentType
 	env := map[string]string{}
-	if projectID != "" {
-		rows, err := tx.Query(ctx, `
-			SELECT name, value
-			  FROM project_env_vars
-			 WHERE project_id = $1
-			   AND $2 = ANY(deployment_types)
-			 ORDER BY name ASC
-		`, projectID, deploymentType)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var name, value string
-			if err := rows.Scan(&name, &value); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			env[name] = value
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		rows.Close()
-	}
-
 	origins, err := loadActiveDomainOrigins(ctx, tx, deploymentID)
 	if err != nil {
 		return nil, err
@@ -756,9 +751,115 @@ func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) 
 			"replica", j.ReplicaIndex, "job_id", j.JobID)
 		return
 	}
+	// v1.17+: push the project's user env vars into the deployment's
+	// Convex FUNCTION runtime env store now that the container is up.
+	// Best-effort — a transient backend failure shouldn't fail the
+	// provisioning job; operator can re-sync from the dashboard. Guard
+	// on !alreadyRunning above already (handled by the earlier return),
+	// so we only push when THIS replica brought the deployment up
+	// fresh. HA sibling replicas that catch alreadyRunning never reach
+	// this point — single push per cluster wake-up.
+	if w.ConvexEnv != nil {
+		if err := w.pushFunctionEnvForJob(ctx, j, logger); err != nil {
+			logger.Warn("provisioner: function env push failed (operator can re-sync from dashboard)",
+				"deployment_id", j.DeploymentID, "name", j.Name, "err", err)
+		}
+	}
 	logger.Info("provisioner: deployment ready",
 		"deployment_id", j.DeploymentID, "name", j.Name,
 		"replica", j.ReplicaIndex, "job_id", j.JobID)
+}
+
+// pushFunctionEnvForJob pushes the project_env_vars for this deployment
+// into the Convex backend's FUNCTION runtime env store. Mirrors
+// (DeploymentsHandler).pushFunctionEnvForDeployment with the bits the
+// provisioner has direct access to. The two helpers exist separately
+// to avoid an import cycle (api → provisioner already).
+func (w *Worker) pushFunctionEnvForJob(ctx context.Context, j claimedJob, logger *slog.Logger) error {
+	// admin_key + name might have been mutated by markProvisionRunning
+	// (e.g. admin key generated during provision). Re-read both so we
+	// always push with the live values.
+	var name, adminKey string
+	err := w.DB.QueryRow(ctx, `SELECT name, admin_key FROM deployments WHERE id = $1`, j.DeploymentID).Scan(&name, &adminKey)
+	if err != nil {
+		return fmt.Errorf("load deployment: %w", err)
+	}
+	if adminKey == "" {
+		logger.Info("provisioner: function env push skipped (no admin_key yet)",
+			"deployment_id", j.DeploymentID, "name", name)
+		return nil
+	}
+
+	vars, err := loadProjectEnvVarsForWorker(ctx, w.DB, j.ProjectID, j.DeploymentType)
+	if err != nil {
+		return fmt.Errorf("load project env vars: %w", err)
+	}
+	if len(vars) == 0 {
+		// No user vars set — nothing to push. Don't burn an HTTP call
+		// just to send an empty batch.
+		return nil
+	}
+
+	changes := make([]convexenv.Change, 0, len(vars))
+	for n, v := range vars {
+		changes = append(changes, convexenv.Set(n, v))
+	}
+	changes, dropped := convexenv.FilterManaged(changes)
+	if len(dropped) > 0 {
+		// Names only — values may be secrets.
+		logger.Warn("provisioner: dropped CLI-managed env var names (not pushed)",
+			"deployment_id", j.DeploymentID, "name", name, "dropped", dropped)
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+
+	// computePublicOrigin returns the cluster's public URL — same shape
+	// `npx convex` would hit. Returns "" in test/dev setups without
+	// PublicURL or BaseDomain wired, in which case we silently skip
+	// (no working external URL to reach).
+	deploymentURL := w.computePublicOrigin(ctx, j.DeploymentID, name, j.HostPort)
+	if deploymentURL == "" {
+		logger.Info("provisioner: function env push skipped (no public URL configured)",
+			"deployment_id", j.DeploymentID, "name", name)
+		return nil
+	}
+	if err := w.ConvexEnv.Update(ctx, deploymentURL, adminKey, changes); err != nil {
+		return fmt.Errorf("convex env api: %w", err)
+	}
+	logger.Info("provisioner: function env push succeeded",
+		"deployment_id", j.DeploymentID, "name", name, "applied", len(changes))
+	return nil
+}
+
+// loadProjectEnvVarsForWorker mirrors the api package helper to avoid an
+// import cycle. Keep the SQL in sync with loadProjectEnvVars in
+// internal/api/deployments.go.
+func loadProjectEnvVarsForWorker(ctx context.Context, db dbQuerier, projectID, deploymentType string) (map[string]string, error) {
+	rows, err := db.Query(ctx, `
+		SELECT name, value FROM project_env_vars
+		 WHERE project_id = $1 AND $2 = ANY(deployment_types)
+		 ORDER BY name ASC
+	`, projectID, deploymentType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var name, value string
+		if err := rows.Scan(&name, &value); err != nil {
+			return nil, err
+		}
+		out[name] = value
+	}
+	return out, rows.Err()
+}
+
+// dbQuerier is the Query subset of *pgxpool.Pool the env helper uses.
+// Both *pgxpool.Pool and pgx.Tx satisfy it, so callers can pass either.
+type dbQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 type upgradeReplica struct {

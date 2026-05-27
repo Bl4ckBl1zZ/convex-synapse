@@ -922,6 +922,15 @@ func (h *ProjectsHandler) updateEnvVars(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal", "Database error")
 		return
 	}
+
+	// v1.17+: auto-sync the new values into every running deployment's
+	// Convex FUNCTION runtime env store. Best-effort — per-deployment
+	// failures don't block the 200 (the DB write already committed) but
+	// are surfaced in syncResult so the dashboard can render partial
+	// failure inline. Synchronous (not goroutine) because the operator
+	// expects "yes, applied" feedback in the response.
+	syncResult := h.syncFunctionEnvForProject(r.Context(), p.ID, slog.Default())
+
 	uid, _ := auth.UserID(r.Context())
 	// Capture the count + change names so admins can audit which keys
 	// were touched without leaking values (which often contain secrets).
@@ -935,9 +944,19 @@ func (h *ProjectsHandler) updateEnvVars(w http.ResponseWriter, r *http.Request) 
 		Action:     audit.ActionUpdateEnvVars,
 		TargetType: audit.TargetProject,
 		TargetID:   p.ID,
-		Metadata:   map[string]any{"applied": len(req.Changes), "names": names},
+		Metadata: map[string]any{
+			"applied":           len(req.Changes),
+			"names":             names,
+			"sync_total":        syncResult.Total,
+			"sync_synced":       syncResult.Synced,
+			"sync_skipped":      syncResult.Skipped,
+			"sync_failed_count": len(syncResult.Failed),
+		},
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"applied": len(req.Changes)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"applied":    len(req.Changes),
+		"syncResult": syncResult,
+	})
 }
 
 // ---------- POST /v1/projects/{id}/sync_env_to_deployments ----------
@@ -958,12 +977,96 @@ func (h *ProjectsHandler) updateEnvVars(w http.ResponseWriter, r *http.Request) 
 //     skipped — never touched. Returned in `skipped` for honesty.
 //
 // Gated by canEditProject (admin/member). Viewers get 403.
-type syncEnvResp struct {
-	Total     int      `json:"total"`
-	Recreated int      `json:"recreated"`
-	Skipped   int      `json:"skipped"`
-	Errors    []string `json:"errors,omitempty"`
-	Notice    string   `json:"notice,omitempty"`
+// syncEnvFunctionResult is the shape returned by both the auto-sync
+// path (updateEnvVars) and the operator-triggered re-sync
+// (syncEnvToDeployments). The previous field name was `Recreated`
+// (when sync rebuilt containers); v1.17+ renames to `Synced` because
+// we now push via the Convex env API — no recreate. The legacy
+// `recreated` field is kept on the wire (== synced) until v2.0.0 so
+// the dashboard + CLI don't break mid-rollout.
+type syncEnvFunctionResult struct {
+	Total   int              `json:"total"`
+	Synced  int              `json:"synced"`
+	Skipped int              `json:"skipped"`
+	Failed  []syncEnvFailure `json:"failed,omitempty"`
+	Notice  string           `json:"notice,omitempty"`
+}
+
+type syncEnvFailure struct {
+	DeploymentID   string `json:"deploymentId"`
+	DeploymentName string `json:"deploymentName"`
+	Reason         string `json:"reason"`
+}
+
+// syncFunctionEnvForProject enumerates non-deleted deployments of the
+// project and pushes the current project_env_vars into each one's
+// Convex function runtime env store. Shared between updateEnvVars
+// (auto-sync after commit) and syncEnvToDeployments (operator-
+// triggered "Re-sync"). Per-deployment failures are collected, never
+// fatal — the caller decides how to surface them.
+func (h *ProjectsHandler) syncFunctionEnvForProject(ctx context.Context, projectID string, logger *slog.Logger) syncEnvFunctionResult {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, name, status FROM deployments
+		 WHERE project_id = $1 AND status <> 'deleted'
+		 ORDER BY created_at ASC
+	`, projectID)
+	if err != nil {
+		logger.Warn("sync function env: list deployments failed",
+			"project_id", projectID, "err", err)
+		return syncEnvFunctionResult{}
+	}
+	type dep struct{ ID, Name, Status string }
+	var deps []dep
+	for rows.Next() {
+		var d dep
+		if err := rows.Scan(&d.ID, &d.Name, &d.Status); err != nil {
+			logger.Warn("sync function env: scan deployment failed", "err", err)
+			continue
+		}
+		deps = append(deps, d)
+	}
+	rows.Close()
+
+	res := syncEnvFunctionResult{Total: len(deps)}
+	if h.Deployments == nil {
+		// Defensive — production wiring always sets this. Report a
+		// notice so the caller's response makes the cause obvious.
+		res.Notice = "sync disabled: DeploymentsHandler not wired"
+		return res
+	}
+	for _, d := range deps {
+		// pushFunctionEnvForDeployment already handles 'not running'
+		// + missing admin_key + nil ConvexEnv as silent skips, so we
+		// don't pre-filter here — we only need to classify the
+		// outcome.
+		if err := h.Deployments.pushFunctionEnvForDeployment(ctx, d.ID, logger); err != nil {
+			res.Failed = append(res.Failed, syncEnvFailure{
+				DeploymentID:   d.ID,
+				DeploymentName: d.Name,
+				Reason:         err.Error(),
+			})
+			continue
+		}
+		if d.Status != models.DeploymentStatusRunning {
+			res.Skipped++
+			continue
+		}
+		if h.Deployments.ConvexEnv == nil {
+			// Helper returned nil because sync is disabled at the
+			// process level, not because the deployment was OK to
+			// sync. Count as skipped so the notice is honest.
+			res.Skipped++
+			continue
+		}
+		res.Synced++
+	}
+	if res.Skipped > 0 || len(res.Failed) > 0 {
+		res.Notice = "Some deployments were skipped or failed. They will pick up env vars on next provision or re-sync."
+	}
+	return res
 }
 
 func (h *ProjectsHandler) syncEnvToDeployments(w http.ResponseWriter, r *http.Request) {
@@ -976,54 +1079,16 @@ func (h *ProjectsHandler) syncEnvToDeployments(w http.ResponseWriter, r *http.Re
 			"Viewers cannot sync env vars; ask a project admin or member")
 		return
 	}
-
-	// Pull all non-deleted deployments for this project. We rebuild
-	// each one in turn so the operator sees a single coherent "all
-	// done" rather than firing a fleet of async jobs.
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT id, name FROM deployments
-		 WHERE project_id = $1 AND status <> 'deleted'
-		 ORDER BY created_at ASC
-	`, p.ID)
-	if err != nil {
-		logErr("sync env: list deployments", err)
-		writeError(w, http.StatusInternalServerError, "internal", "Failed to list deployments")
-		return
-	}
-	type dep struct{ ID, Name string }
-	var deps []dep
-	for rows.Next() {
-		var d dep
-		if err := rows.Scan(&d.ID, &d.Name); err != nil {
-			rows.Close()
-			logErr("sync env: scan deployment", err)
-			writeError(w, http.StatusInternalServerError, "internal", "Failed to read deployment row")
-			return
-		}
-		deps = append(deps, d)
-	}
-	rows.Close()
-
-	resp := syncEnvResp{Total: len(deps)}
 	if h.Deployments == nil {
 		// Defensive — handlers wired through router.go always set this,
-		// but a misconfigured test harness would otherwise panic.
+		// but a misconfigured test harness would otherwise return a
+		// confusing "synced=0" with no clue why.
 		writeError(w, http.StatusServiceUnavailable, "not_configured",
-			"DeploymentsHandler not wired; cannot recreate")
+			"DeploymentsHandler not wired; cannot sync")
 		return
 	}
-	logger := slog.Default()
-	for _, d := range deps {
-		recreated := h.Deployments.rebuildCORSAndRestart(r.Context(), d.ID, d.Name, logger)
-		if recreated {
-			resp.Recreated++
-		} else {
-			resp.Skipped++
-		}
-	}
-	if resp.Skipped > 0 {
-		resp.Notice = "Some deployments were skipped (adopted, not-running, or missing host port). They will pick up env vars on their next provision."
-	}
+
+	res := h.syncFunctionEnvForProject(r.Context(), p.ID, slog.Default())
 
 	uid, _ := auth.UserID(r.Context())
 	_ = audit.Record(r.Context(), h.DB, audit.Options{
@@ -1032,10 +1097,25 @@ func (h *ProjectsHandler) syncEnvToDeployments(w http.ResponseWriter, r *http.Re
 		Action:     audit.ActionSyncEnvToDeployments,
 		TargetType: audit.TargetProject,
 		TargetID:   p.ID,
-		Metadata:   map[string]any{"total": resp.Total, "recreated": resp.Recreated, "skipped": resp.Skipped},
+		Metadata: map[string]any{
+			"total":        res.Total,
+			"synced":       res.Synced,
+			"skipped":      res.Skipped,
+			"failed_count": len(res.Failed),
+		},
 	})
 
-	writeJSON(w, http.StatusOK, resp)
+	// Backward-compat: existing dashboard + CLI + Playwright tests
+	// read `recreated`. Keep the field as a legacy alias equal to
+	// `synced` until v2.0.0; new callers use `synced` + `failed`.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":     res.Total,
+		"recreated": res.Synced,
+		"synced":    res.Synced,
+		"skipped":   res.Skipped,
+		"failed":    res.Failed,
+		"notice":    res.Notice,
+	})
 }
 
 // ---------- GET /v1/projects/{id}/list_members ----------

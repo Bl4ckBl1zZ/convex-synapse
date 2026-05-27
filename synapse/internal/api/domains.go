@@ -1015,9 +1015,9 @@ type dnsCredentialForAuto struct {
 //     the zone, those are the candidate set. Only when zero project rows
 //     match do we fall back to instance-wide rows. Within whichever tier
 //     wins:
-//       0 matches  → 400 no_credential_for_zone
-//       1 match    → use it
-//       2+ matches → 400 credential_required (pass credentialId)
+//     0 matches  → 400 no_credential_for_zone
+//     1 match    → use it
+//     2+ matches → 400 credential_required (pass credentialId)
 //
 // projectID being "" means "no project context" (legacy path / instance
 // admin) and skips the project tier entirely.

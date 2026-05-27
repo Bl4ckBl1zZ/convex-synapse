@@ -620,12 +620,19 @@ func TestDeployments_CreateReturnsImmediatelyAndProvisionsAsync(t *testing.T) {
 	}
 }
 
-func TestDeployments_CreateAppliesProjectEnvVarsToProvisionSpec(t *testing.T) {
+// v1.17+: project_env_vars no longer flow into container ENV. They
+// land in the Convex backend's function runtime store via the
+// convexenv client. The provisioner's spec.EnvVars should carry ONLY
+// system vars (CORS_ALLOWED_ORIGINS when an active custom domain
+// exists; nothing project-derived otherwise).
+func TestDeployments_Create_DoesNotInjectProjectEnvVarsIntoContainer(t *testing.T) {
 	h := Setup(t)
 	owner := h.RegisterRandomUser()
 	team := createTeam(t, h, owner.AccessToken, "Env Runtime Co")
 	proj := createProject(t, h, owner.AccessToken, team.Slug, "EnvRuntime")
 
+	// Seed project env vars across all the deployment-type slices the
+	// old test exercised — they must all stay OUT of spec.EnvVars.
 	h.DoJSON(http.MethodPost,
 		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
 		owner.AccessToken,
@@ -647,17 +654,15 @@ func TestDeployments_CreateAppliesProjectEnvVarsToProvisionSpec(t *testing.T) {
 		t.Fatalf("expected 1 Provision call, got %d (%+v)", len(specs), specs)
 	}
 	env := specs[0].EnvVars
-	if env["SHARED"] != "yes" {
-		t.Errorf("SHARED env: got %q want yes", env["SHARED"])
-	}
-	if env["PROD_ONLY"] != "prod" {
-		t.Errorf("PROD_ONLY env: got %q want prod", env["PROD_ONLY"])
-	}
-	if _, ok := env["DEV_ONLY"]; ok {
-		t.Errorf("DEV_ONLY should not apply to prod deployment: %+v", env)
-	}
-	if _, ok := env["CUSTOM_ONLY"]; ok {
-		t.Errorf("CUSTOM_ONLY should not apply to prod deployment: %+v", env)
+
+	// Regression guards: every project_env_var name from the seed must
+	// be ABSENT from container env. Functions read these via the Convex
+	// backend's runtime env store, not process.env — see
+	// docs/ENV_PIPELINE_PLAN.md §3 for the three env categories.
+	for _, name := range []string{"SHARED", "PROD_ONLY", "DEV_ONLY", "CUSTOM_ONLY"} {
+		if _, present := env[name]; present {
+			t.Errorf("%s leaked into container spec.EnvVars (%+v) — must go through convexenv only", name, env)
+		}
 	}
 }
 

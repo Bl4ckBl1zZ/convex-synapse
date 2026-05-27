@@ -36,6 +36,7 @@ import (
 
 	"github.com/Iann29/synapse/internal/api"
 	"github.com/Iann29/synapse/internal/auth"
+	"github.com/Iann29/synapse/internal/convexenv"
 	cryptopkg "github.com/Iann29/synapse/internal/crypto"
 	"github.com/Iann29/synapse/internal/db"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
@@ -181,6 +182,15 @@ type SetupOpts struct {
 	// the backend_version tests so they don't need a live container
 	// over the Docker network.
 	BackendProbe api.BackendProbe
+
+	// ConvexEnv injects a convexenv.Client into both the API
+	// (DeploymentsHandler.ConvexEnv) and the provisioner worker. nil
+	// (the default) disables env sync: the helpers log + skip without
+	// touching the network. Tests that exercise the auto-sync /
+	// re-sync paths build a Client via convexenv.NewClientWith(stub)
+	// against an httptest.Server stub so they can capture pushed bodies
+	// without spinning a real Convex backend.
+	ConvexEnv *convexenv.Client
 }
 
 // stubResolverFunc adapts a closure to api.HostDomainResolver.
@@ -301,6 +311,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		// production default). Apply is never enabled.
 		EnableDesiredState:  true,
 		EnableObservedState: true,
+		ConvexEnv:           opts.ConvexEnv,
 	}
 
 	// HA wiring (only when SetupHA was called). The crypto box is a
@@ -369,6 +380,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		},
 		Logger: logger,
 	}
+	pworker.ConvexEnv = opts.ConvexEnv
 	if box != nil {
 		pworker.Crypto = box
 	}
