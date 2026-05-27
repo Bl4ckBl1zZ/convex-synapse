@@ -371,6 +371,7 @@ test("synapse select saves dev and prod metadata without secrets and writes dev 
           return json({
             deploymentName: "dev-cat",
             convexUrl: "https://dev-cat.example.com",
+            siteUrl: "https://dev-cat.site.example.com",
             adminKey: "dev-admin-key",
           });
         default:
@@ -392,6 +393,74 @@ test("synapse select saves dev and prod metadata without secrets and writes dev 
     const env = fs.readFileSync(path.join(dir, ".env.local"), "utf8");
     assert.match(env, /CONVEX_SELF_HOSTED_URL="https:\/\/dev-cat\.example\.com"/);
     assert.match(env, /CONVEX_SELF_HOSTED_ADMIN_KEY="dev-admin-key"/);
+    // Regression guard for docs/ENV_PIPELINE_PLAN.md Item 1: when the
+    // backend returns a distinct siteUrl, the writer must emit it as
+    // NEXT_PUBLIC_CONVEX_SITE_URL — not silently fall back to convexUrl.
+    assert.match(env, /NEXT_PUBLIC_CONVEX_URL="https:\/\/dev-cat\.example\.com"/);
+    assert.match(env, /NEXT_PUBLIC_CONVEX_SITE_URL="https:\/\/dev-cat\.site\.example\.com"/);
+  } finally {
+    global.fetch = originalFetch;
+    process.chdir(previousCwd);
+    delete process.env.SYNAPSE_CLI_CONFIG;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("synapse select falls back NEXT_PUBLIC_CONVEX_SITE_URL to convexUrl when backend omits siteUrl (host-port mode)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-select-"));
+  const previousCwd = process.cwd();
+  const originalFetch = global.fetch;
+  process.env.SYNAPSE_CLI_CONFIG = path.join(dir, "config.json");
+  try {
+    config.writeConfig({
+      baseUrl: "https://synapse.example.com",
+      accessToken: "access",
+      refreshToken: "refresh",
+    });
+    process.chdir(dir);
+    global.fetch = async (url, init) => {
+      assert.equal(init.headers.Authorization, "Bearer access");
+      const json = (body) => new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+      switch (url.pathname) {
+        case "/v1/teams/":
+          return json([{ id: "team-id", slug: "team", name: "Team", accessToken: "team-secret" }]);
+        case "/v1/teams/team/list_projects":
+          return json([{ id: "project-id", slug: "app", name: "App", refreshToken: "project-secret" }]);
+        case "/v1/projects/project-id/list_deployments":
+          return json([
+            {
+              id: "dev-id",
+              name: "dev-cat",
+              deploymentType: "dev",
+              status: "running",
+              isDefault: true,
+              adminKey: "dev-must-not-save",
+            },
+          ]);
+        case "/v1/deployments/dev-cat/cli_credentials":
+          // Host-port mode: no base domain configured, so the backend
+          // returns convexUrl only. The writer documents this branch
+          // (cli/lib/env-file.js:168 — `siteUrl || convexUrl`); locking
+          // it here keeps a future "fix" from silently dropping the
+          // fallback and breaking host-port deployments.
+          return json({
+            deploymentName: "dev-cat",
+            convexUrl: "https://dev-cat.example.com",
+            adminKey: "dev-admin-key",
+          });
+        default:
+          throw new Error(`unexpected request ${url.pathname}`);
+      }
+    };
+
+    await main(["select"]);
+
+    const env = fs.readFileSync(path.join(dir, ".env.local"), "utf8");
+    assert.match(env, /NEXT_PUBLIC_CONVEX_URL="https:\/\/dev-cat\.example\.com"/);
+    assert.match(env, /NEXT_PUBLIC_CONVEX_SITE_URL="https:\/\/dev-cat\.example\.com"/);
   } finally {
     global.fetch = originalFetch;
     process.chdir(previousCwd);
