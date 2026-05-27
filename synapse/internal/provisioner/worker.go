@@ -731,14 +731,17 @@ func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) 
 	}
 
 	if !running {
+		// Race lost: the deployment row flipped out of 'provisioning'
+		// before markProvisionRunning could update it (most likely a
+		// delete that arrived while we were mid-provision). Destroy the
+		// just-started container so it doesn't leak; the originating
+		// handler owns the row-side cleanup. The HA and single-replica
+		// paths used to fork here and call the same Destroy(j.Name)
+		// twice — merged into one call since the behaviour is identical
+		// in either mode.
 		logger.Warn("provisioner: deployment no longer provisioning; cleaning up",
 			"deployment_id", j.DeploymentID, "name", j.Name)
-		if j.HAEnabled {
-			if destroyErr := w.Docker.Destroy(ctx, j.Name); destroyErr != nil {
-				logger.Warn("provisioner: cleanup destroy failed",
-					"deployment_id", j.DeploymentID, "err", destroyErr)
-			}
-		} else if destroyErr := w.Docker.Destroy(ctx, j.Name); destroyErr != nil {
+		if destroyErr := w.Docker.Destroy(ctx, j.Name); destroyErr != nil {
 			logger.Warn("provisioner: cleanup destroy failed",
 				"deployment_id", j.DeploymentID, "err", destroyErr)
 		}
