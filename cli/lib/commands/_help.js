@@ -19,7 +19,9 @@ function renderRootHelp(registry, { stdout = process.stdout } = {}) {
     ["Projects", "project"],
     ["Teams", "team"],
     ["Env vars", "env"],
-    ["Domains", "domain"],
+    ["Custom domains", "domains"],
+    ["Project members", "members"],
+    ["Auto-update", "upgrade"],
     // Cell Control Plane (Bloco 5). Diagnose + plan only — no apply.
     ["Hosts", "hosts"],
     ["Agents", "agents"],

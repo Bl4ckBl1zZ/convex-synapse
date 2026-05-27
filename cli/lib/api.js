@@ -310,14 +310,95 @@ class SynapseAPI {
   operationRunGet(id) {
     return this.request("GET", `/v1/operation_runs/${encodeURIComponent(id)}`);
   }
+
+  // ---- Custom domains per deployment (v1.0+) ---------------------
+  // Operator manages <domain> records on a specific deployment. Role
+  // selects which Convex listener the proxy routes to:
+  //   api       → port 3210 (cloud / queries / mutations)
+  //   site      → port 3211 (HTTP actions; required for Better Auth)
+  //   dashboard → the Convex Dashboard sidecar (port 6791)
+  // status flips pending→active after the verify probe sees a matching
+  // A record (SYNAPSE_PUBLIC_IP must be set server-side).
+
+  deploymentDomainsList(name) {
+    return this.request("GET", `/v1/deployments/${encodeURIComponent(name)}/domains`).then(itemsOf);
+  }
+  deploymentDomainCreate(name, body) {
+    // body: { domain, role }
+    return this.request("POST", `/v1/deployments/${encodeURIComponent(name)}/domains`, body);
+  }
+  deploymentDomainDelete(name, domainId) {
+    return this.request(
+      "DELETE",
+      `/v1/deployments/${encodeURIComponent(name)}/domains/${encodeURIComponent(domainId)}`,
+    );
+  }
+  deploymentDomainVerify(name, domainId) {
+    return this.request(
+      "POST",
+      `/v1/deployments/${encodeURIComponent(name)}/domains/${encodeURIComponent(domainId)}/verify`,
+      {},
+    );
+  }
+  deploymentDomainAutoConfigure(name, domainId) {
+    return this.request(
+      "POST",
+      `/v1/deployments/${encodeURIComponent(name)}/domains/${encodeURIComponent(domainId)}/auto_configure`,
+      {},
+    );
+  }
+
+  // ---- Project members (RBAC v1.0+) ------------------------------
+  // Three roles at the project grain: admin > member > viewer.
+  // Overrides win over team_members (see effectiveProjectRole in
+  // synapse/internal/api/projects.go). Adding a member requires the
+  // user already be on the owning team.
+
+  projectMembersList(projectId) {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(projectId)}/list_members`).then(itemsOf);
+  }
+  projectMemberAdd(projectId, userId, role) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/add_member`, { userId, role });
+  }
+  projectMemberUpdateRole(projectId, memberId, role) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/update_member_role`, { memberId, role });
+  }
+  projectMemberRemove(projectId, memberId) {
+    return this.request("POST", `/v1/projects/${encodeURIComponent(projectId)}/remove_member`, { memberId });
+  }
+
+  // ---- Auto-update (instance-admin only) -------------------------
+  // Read /admin/version_check to see whether a newer Synapse release
+  // exists on GitHub; POST /admin/upgrade to dispatch setup.sh --upgrade
+  // through the host-side updater daemon. The backend 503s with code
+  // "updater_unreachable" when the operator skipped the updater install
+  // — upgrade.js catches that and prints a friendlier hint.
+
+  adminVersionCheck({ refresh = false } = {}) {
+    if (refresh) {
+      return this.request("POST", "/v1/admin/version_check/refresh", {});
+    }
+    return this.request("GET", "/v1/admin/version_check");
+  }
+  adminUpgrade(body = {}) {
+    // body: { ref?: string } — optional git ref/tag to upgrade to.
+    return this.request("POST", "/v1/admin/upgrade", body);
+  }
+  adminUpgradeStatus(jobId) {
+    const query = jobId ? `?jobId=${encodeURIComponent(jobId)}` : "";
+    return this.request("GET", `/v1/admin/upgrade/status${query}`);
+  }
 }
 
-// itemsOf unwraps a list endpoint's `{ items: [...] }` envelope to a bare
-// array (Cell Control Plane list endpoints aren't cursor-paginated). Tolerates
-// a bare array too.
+// itemsOf unwraps a list endpoint's envelope to a bare array. Tolerates
+// the canonical `{ items: [...] }`, the per-noun envelopes the v1.0
+// handlers emit (`{ domains: [...] }`, `{ members: [...] }`), and a
+// bare array. Used for non-cursor-paginated list endpoints.
 function itemsOf(data) {
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.items)) return data.items;
+  if (data && Array.isArray(data.domains)) return data.domains;
+  if (data && Array.isArray(data.members)) return data.members;
   return [];
 }
 
