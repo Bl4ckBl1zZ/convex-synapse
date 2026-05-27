@@ -83,7 +83,7 @@ func (h *DesiredStateHandler) syncFromPlacements(w http.ResponseWriter, r *http.
 
 	_ = audit.Record(r.Context(), h.DB, audit.Options{
 		TeamID: p.TeamID, ActorID: uid,
-		Action: "syncDesiredFromPlacements", TargetType: audit.TargetProject, TargetID: p.ID,
+		Action: audit.ActionSyncDesiredFromPlacements, TargetType: audit.TargetProject, TargetID: p.ID,
 		Metadata: result,
 	})
 	result["operationRunId"] = runID

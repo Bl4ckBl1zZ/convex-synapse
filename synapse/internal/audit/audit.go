@@ -156,6 +156,14 @@ const (
 	ActionDisableCellLink    = "disableCellLink"
 	ActionCreateServiceToken = "createServiceToken"
 	ActionRevokeServiceToken = "revokeServiceToken"
+	// Cell Control Plane observe/plan (v1.12+). Diagnostic side of the
+	// surface — no apply action exists by design (see
+	// docs/SAFETY_INVARIANTS.md). Sync rebuilds desired_state from
+	// deployment_placements; ComputeDrift compares desired vs observed;
+	// ReconcileDryRun produces the planned-but-not-executed step list.
+	ActionSyncDesiredFromPlacements = "syncDesiredFromPlacements"
+	ActionComputeDrift              = "computeDrift"
+	ActionReconcileDryRun           = "reconcileDryRun"
 )
 
 // Target type names.

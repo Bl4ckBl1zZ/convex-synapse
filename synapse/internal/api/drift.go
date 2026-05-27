@@ -188,7 +188,7 @@ func (h *DriftHandler) doRecompute(w http.ResponseWriter, r *http.Request, scope
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to recompute drift")
 		return
 	}
-	h.auditDrift(r.Context(), uid, scope, "computeDrift", report.Summary)
+	h.auditDrift(r.Context(), uid, scope, audit.ActionComputeDrift, report.Summary)
 	writeJSON(w, http.StatusOK, driftResponse{Report: &report, Items: items})
 }
 
@@ -221,7 +221,7 @@ func (h *DriftHandler) doDryRun(w http.ResponseWriter, r *http.Request, scope dr
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to build reconcile plan")
 		return
 	}
-	h.auditDrift(r.Context(), uid, scope, "reconcileDryRun", run.PlanJSON)
+	h.auditDrift(r.Context(), uid, scope, audit.ActionReconcileDryRun, run.PlanJSON)
 	writeJSON(w, http.StatusOK, map[string]any{"operationRun": run, "steps": steps})
 }
 
