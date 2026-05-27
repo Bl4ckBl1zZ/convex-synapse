@@ -14,7 +14,7 @@
 // a project-scoped PAT (TTL 15min, name "[dashboard-session-…]")
 // before loading the iframe and stitches it into the `?a=` URL:
 //
-//   ?a=https%3A%2F%2Fsynapse.example.com%2Fv1%2Finternal%2Flist_deployments_for_dashboard%3Ftoken%3Dsyn_xxx
+//	?a=https%3A%2F%2Fsynapse.example.com%2Fv1%2Finternal%2Flist_deployments_for_dashboard%3Ftoken%3Dsyn_xxx
 //
 // That token grants exactly enough to list this project's deployments;
 // shells that snoop the URL get a 15-min window of read-only access
@@ -65,10 +65,10 @@ type listDeploymentsForDashboardResp struct {
 // listDeploymentsForDashboard answers `GET /v1/internal/list_deployments_for_dashboard?token=syn_xxx`.
 //
 // The token is validated by:
-//   1. Hash lookup against access_tokens.token_hash.
-//   2. Scope must be "project" (or "app" — both bind to the same project).
-//   3. expires_at must be in the future (or NULL — we accept long-lived
-//      tokens too, even though the dashboard always issues TTL'd ones).
+//  1. Hash lookup against access_tokens.token_hash.
+//  2. Scope must be "project" (or "app" — both bind to the same project).
+//  3. expires_at must be in the future (or NULL — we accept long-lived
+//     tokens too, even though the dashboard always issues TTL'd ones).
 //
 // Returns deployments under the bound project, with public URLs +
 // admin keys ready for the upstream dashboard to talk to the
@@ -191,4 +191,3 @@ func (h *DashboardProxyHandler) listDeploymentsForDashboard(w http.ResponseWrite
 	}
 	writeJSON(w, http.StatusOK, listDeploymentsForDashboardResp{Deployments: out})
 }
-

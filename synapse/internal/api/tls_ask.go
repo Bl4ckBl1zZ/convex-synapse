@@ -17,12 +17,12 @@ import (
 //
 // We answer 200 iff one of:
 //
-//  A. The host is `<sub>.<BaseDomain>` (case-insensitive) AND `<sub>`
-//     is the name of a real, non-deleted deployment (wildcard
-//     subdomain mode — needs BaseDomain configured).
-//  B. The host exactly matches an active row in `deployment_domains`
-//     bound to a real, non-deleted deployment (per-deployment custom
-//     domain, v1.1+).
+//	A. The host is `<sub>.<BaseDomain>` (case-insensitive) AND `<sub>`
+//	   is the name of a real, non-deleted deployment (wildcard
+//	   subdomain mode — needs BaseDomain configured).
+//	B. The host exactly matches an active row in `deployment_domains`
+//	   bound to a real, non-deleted deployment (per-deployment custom
+//	   domain, v1.1+).
 //
 // Endpoint: GET /v1/internal/tls_ask?domain=<host>
 // Public — Caddy hits it from inside the docker network with no JWT.

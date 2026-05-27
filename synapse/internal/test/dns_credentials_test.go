@@ -621,13 +621,13 @@ func TestDNSProvider_Endpoint_MissingDomain(t *testing.T) {
 // EncryptString, and the receiver-method dereference panicked.
 //
 // Two coverage angles:
-//   1. **Literal-nil interface**: the path main.go now takes (via the
-//      intermediate var pattern). Should hit the 503 guard cleanly.
-//   2. **Typed-nil via concrete type assignment**: simulates the old
-//      bug shape — pass a `var sb *crypto.SecretBox; sb` directly. If
-//      this returns 503 we know the api-side guard handles both
-//      shapes; if it panics the test traps the panic and fails
-//      loudly so the bug never re-lands silently.
+//  1. **Literal-nil interface**: the path main.go now takes (via the
+//     intermediate var pattern). Should hit the 503 guard cleanly.
+//  2. **Typed-nil via concrete type assignment**: simulates the old
+//     bug shape — pass a `var sb *crypto.SecretBox; sb` directly. If
+//     this returns 503 we know the api-side guard handles both
+//     shapes; if it panics the test traps the panic and fails
+//     loudly so the bug never re-lands silently.
 //
 // The api-side `if h.Crypto == nil` guard was always there (since
 // PR #86); the bug was that the interface had a typed-nil pointer so

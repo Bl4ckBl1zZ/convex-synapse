@@ -12,13 +12,13 @@ import (
 
 // TestHA_CreateDeploymentEndToEnd: with HA enabled in the harness,
 // POST /v1/projects/{id}/create_deployment with ha:true should:
-// 1. return 201 (no longer 501)
-// 2. respond with haEnabled=true, replicaCount=2
-// 3. write a deployment_storage row with encrypted creds
-// 4. write 2 deployment_replicas rows
-// 5. enqueue 2 provisioning_jobs (one per replica)
-// 6. the worker provisions both → both replica rows flip to running
-//    and the deployment row flips to running
+//  1. return 201 (no longer 501)
+//  2. respond with haEnabled=true, replicaCount=2
+//  3. write a deployment_storage row with encrypted creds
+//  4. write 2 deployment_replicas rows
+//  5. enqueue 2 provisioning_jobs (one per replica)
+//  6. the worker provisions both → both replica rows flip to running
+//     and the deployment row flips to running
 func TestHA_CreateDeploymentEndToEnd(t *testing.T) {
 	h := SetupHA(t)
 	owner := h.RegisterRandomUser()
@@ -44,11 +44,11 @@ func TestHA_CreateDeploymentEndToEnd(t *testing.T) {
 	// deployment_storage row exists and decrypts back to the cluster
 	// defaults (with the per-deployment database/buckets stitched in).
 	var (
-		dbURLEnc       []byte
-		s3AccessEnc    []byte
-		s3SecretEnc    []byte
-		dbSchema       string
-		bucketFiles    string
+		dbURLEnc    []byte
+		s3AccessEnc []byte
+		s3SecretEnc []byte
+		dbSchema    string
+		bucketFiles string
 	)
 	if err := h.DB.QueryRow(h.rootCtx, `
 		SELECT db_url_enc, s3_access_key_enc, s3_secret_key_enc, db_schema, s3_bucket_files

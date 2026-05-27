@@ -21,9 +21,10 @@ import (
 // CLI / CI usage when JWTs (15-min lifetime) are too short-lived.
 //
 // Endpoints mirror Convex Cloud's stable v1 spec:
-//   POST /v1/create_personal_access_token
-//   GET  /v1/list_personal_access_tokens
-//   POST /v1/delete_personal_access_token
+//
+//	POST /v1/create_personal_access_token
+//	GET  /v1/list_personal_access_tokens
+//	POST /v1/delete_personal_access_token
 //
 // Why mounted at /v1 (top-level) instead of /v1/me/tokens? These endpoints
 // are user-scoped (not team/project-scoped) and the OpenAPI spec puts them
@@ -313,7 +314,6 @@ func (h *AccessTokensHandler) listForOwner(
 	}
 	return resp, true
 }
-
 
 // ---------- POST /v1/delete_personal_access_token ----------
 

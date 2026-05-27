@@ -44,10 +44,10 @@ func NotSupportedMiddleware(next http.Handler) http.Handler {
 // in docs/archive/HANDOFF_OPENAPI_PUSH.md.)
 //
 // Matching is done in three layers:
-//   1. exact /v1/<path> matches for one-off cuts (validate_referral_code)
-//   2. /v1/<prefix>/* matches for whole feature families (workos, vercel)
-//   3. parameterised matches for endpoints under /v1/<resource>/<id>/<verb>
-//      where <verb> is one of a fixed set
+//  1. exact /v1/<path> matches for one-off cuts (validate_referral_code)
+//  2. /v1/<prefix>/* matches for whole feature families (workos, vercel)
+//  3. parameterised matches for endpoints under /v1/<resource>/<id>/<verb>
+//     where <verb> is one of a fixed set
 //
 // path.Match has the right semantics for layer 3 — "*" matches a single
 // path segment (no slashes), so "/v1/teams/*/cancel_orb_subscription"

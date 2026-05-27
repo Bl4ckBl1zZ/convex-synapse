@@ -111,14 +111,14 @@ func (h *TeamsHandler) listAuditLog(w http.ResponseWriter, r *http.Request) {
 	out := make([]item, 0, limit)
 	for rows.Next() {
 		var (
-			id              int64
-			createTime      time.Time
-			action          string
-			actorID         *string
-			actorEmail      *string
-			targetType      *string
-			targetID        *string
-			metadataRaw     []byte
+			id          int64
+			createTime  time.Time
+			action      string
+			actorID     *string
+			actorEmail  *string
+			targetType  *string
+			targetID    *string
+			metadataRaw []byte
 		)
 		if err := rows.Scan(&id, &createTime, &action, &actorID, &actorEmail,
 			&targetType, &targetID, &metadataRaw); err != nil {

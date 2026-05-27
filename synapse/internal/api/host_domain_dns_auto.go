@@ -297,4 +297,3 @@ func (h *AdminHandler) touchCredentialError(ctx context.Context, id, reason stri
 			"id", id, "err", err.Error())
 	}
 }
-

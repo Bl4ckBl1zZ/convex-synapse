@@ -48,23 +48,23 @@ type TopologyHandler struct {
 }
 
 type topologyDeployment struct {
-	Name           string  `json:"name"`
-	Type           string  `json:"type"`
-	Status         string  `json:"status"`
-	URL            string  `json:"url,omitempty"`
-	URLForm        string  `json:"urlForm"`
-	Storage        string  `json:"storage"`
-	HAEnabled      bool    `json:"haEnabled"`
-	ReplicaCount   int     `json:"replicaCount"`
-	HealthyCount   int     `json:"healthyCount"`
-	Version        string  `json:"version,omitempty"`
-	CustomDomain   string  `json:"customDomain,omitempty"`
-	Adopted        bool    `json:"adopted"`
-	RunningSinceMS int64   `json:"runningSinceMs,omitempty"`
-	IsDefault      bool    `json:"isDefault"`
-	Reference      string  `json:"reference,omitempty"`
-	LastError      string  `json:"lastError,omitempty"`
-	Port           *int    `json:"port,omitempty"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	Status         string `json:"status"`
+	URL            string `json:"url,omitempty"`
+	URLForm        string `json:"urlForm"`
+	Storage        string `json:"storage"`
+	HAEnabled      bool   `json:"haEnabled"`
+	ReplicaCount   int    `json:"replicaCount"`
+	HealthyCount   int    `json:"healthyCount"`
+	Version        string `json:"version,omitempty"`
+	CustomDomain   string `json:"customDomain,omitempty"`
+	Adopted        bool   `json:"adopted"`
+	RunningSinceMS int64  `json:"runningSinceMs,omitempty"`
+	IsDefault      bool   `json:"isDefault"`
+	Reference      string `json:"reference,omitempty"`
+	LastError      string `json:"lastError,omitempty"`
+	Port           *int   `json:"port,omitempty"`
 }
 
 type topologyHost struct {

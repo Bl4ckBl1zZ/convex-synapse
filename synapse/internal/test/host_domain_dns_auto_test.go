@@ -24,9 +24,9 @@ import (
 // tests — it returns 200 unless the test wants a different status.
 
 type hostDomainPostRespForTest struct {
-	JobID     string                  `json:"jobId"`
-	StatusURL string                  `json:"statusUrl"`
-	State     string                  `json:"state"`
+	JobID     string                    `json:"jobId"`
+	StatusURL string                    `json:"statusUrl"`
+	State     string                    `json:"state"`
 	DNSAuto   *hostDomainDNSAutoForTest `json:"dnsAuto,omitempty"`
 }
 
@@ -83,11 +83,11 @@ func TestHostDomain_Post_AutoConfigureDNS_Success(t *testing.T) {
 	updater, tok := makeFakeUpdaterForReconfigure(t)
 
 	h := SetupWithOpts(t, SetupOpts{
-		DNSEnvelope:        freshCryptoBox(t),
-		CloudflareFactory:  cloudflareFactoryForStub(stub),
-		UpdaterURL:         updater.URL,
-		UpdaterToken:       tok,
-		PublicIP:           "203.0.113.10",
+		DNSEnvelope:       freshCryptoBox(t),
+		CloudflareFactory: cloudflareFactoryForStub(stub),
+		UpdaterURL:        updater.URL,
+		UpdaterToken:      tok,
+		PublicIP:          "203.0.113.10",
 		HostDomainResolver: stubResolverFunc(func(host string) ([]string, error) {
 			// After the upsert, the stub treats DNS as resolving to the
 			// expected IP so the api's preflight passes.
