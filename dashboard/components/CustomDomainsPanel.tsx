@@ -107,7 +107,7 @@ function CustomDomainsPanelExpanded({
   );
 
   const [domain, setDomain] = useState("");
-  const [role, setRole] = useState<"api" | "dashboard">("api");
+  const [role, setRole] = useState<"api" | "dashboard" | "site">("api");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -529,12 +529,15 @@ function CustomDomainsPanelExpanded({
             <select
               id={`custom-domain-role-${deploymentName}`}
               value={role}
-              onChange={(e) => setRole(e.target.value as "api" | "dashboard")}
+              onChange={(e) =>
+                setRole(e.target.value as "api" | "dashboard" | "site")
+              }
               className="h-9 rounded-md border border-neutral-700 bg-neutral-900 px-3 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
               data-testid="custom-domain-role"
             >
-              <option value="api">api</option>
-              <option value="dashboard">dashboard</option>
+              <option value="api">api — Cloud / client API (3210)</option>
+              <option value="site">site — HTTP actions: Better Auth, webhooks (3211)</option>
+              <option value="dashboard">dashboard — Convex Dashboard UI</option>
             </select>
           </div>
           <Button

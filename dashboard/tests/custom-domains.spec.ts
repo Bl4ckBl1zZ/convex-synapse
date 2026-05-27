@@ -155,7 +155,16 @@ test("custom domains: lists multiple rows", async ({ page }) => {
     page.getByTestId("custom-domain-row-admin.fechasul.com.br"),
   ).toBeVisible();
 
-  // Both rows live under the same list container.
+  // site-role (HTTP actions / port 3211) — selectable in the UI and
+  // accepted by the backend (migration 000022 widened the role CHECK).
+  await page.getByTestId("custom-domain-input").fill("site.fechasul.com.br");
+  await page.getByTestId("custom-domain-role").selectOption("site");
+  await page.getByTestId("custom-domain-add").click();
+  await expect(
+    page.getByTestId("custom-domain-row-site.fechasul.com.br"),
+  ).toBeVisible();
+
+  // All three rows live under the same list container.
   const list = page.getByTestId("custom-domains-list");
-  await expect(list.getByRole("listitem")).toHaveCount(2);
+  await expect(list.getByRole("listitem")).toHaveCount(3);
 });

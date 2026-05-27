@@ -436,7 +436,8 @@ export type DeploymentDomain = {
   id: string;
   deploymentId: string;
   domain: string;
-  role: "api" | "dashboard";
+  // 'site' routes to the deployment's HTTP-actions host (port 3211).
+  role: "api" | "dashboard" | "site";
   status: "pending" | "active" | "failed";
   dnsVerifiedAt?: string;
   lastDnsError?: string;
@@ -1810,7 +1811,7 @@ export const api = {
     addDomain(
       name: string,
       domain: string,
-      role: "api" | "dashboard",
+      role: "api" | "dashboard" | "site",
     ): Promise<DeploymentDomain> {
       return request<DeploymentDomain>(
         `/v1/deployments/${encodeURIComponent(name)}/domains`,
