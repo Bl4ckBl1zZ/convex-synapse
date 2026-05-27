@@ -54,7 +54,10 @@ test("project env vars: add, list, delete", async ({ page }) => {
   // v1.9.2: values mask by default — assert visible after toggling
   // Reveal rather than expecting plaintext in the DOM.
   await expect(page.getByText("supersecret")).toBeHidden();
-  await page.getByTestId("env-var-toggle-API_KEY").click();
+  // v1.17.1+: same NAME now renders one row per deployment_type, so
+  // env-var-toggle-API_KEY matches 3 elements (dev, prod, preview).
+  // Click the specific dev row via its aria-label.
+  await page.getByRole("button", { name: "Reveal value for API_KEY on dev" }).click();
   await expect(page.getByText("supersecret")).toBeVisible();
 
   // Add a second one to confirm the list grows.
