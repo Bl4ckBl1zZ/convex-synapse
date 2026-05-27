@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	synapsedb "github.com/Iann29/synapse/internal/db"
 	"github.com/Iann29/synapse/internal/deploymenturl"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
 	"github.com/Iann29/synapse/internal/models"
@@ -796,71 +797,85 @@ func (w *Worker) runUpgradeToHA(ctx context.Context, logger *slog.Logger, cfg Co
 		return
 	}
 
-	ports, err := w.allocatePorts(ctx, cfg, 2)
-	if err != nil {
-		logger.Error("provisioner: upgrade_to_ha allocate ports failed",
-			"job_id", j.JobID, "deployment", j.Name, "err", err)
-		w.markJobFailed(j.JobID, err.Error())
-		return
-	}
-
-	// All replicas of an HA deployment advertise the same public origin
-	// (they sit behind one logical address). Compute once outside the
-	// per-replica loop with the primary replica's host port so the env
-	// is stable across the pair.
-	publicOrigin := w.computePublicOrigin(ctx, j.DeploymentID, j.Name, ports[0])
-	siteOrigin := w.computeSiteOrigin(ctx, j.DeploymentID, j.Name)
-	replicas := make([]upgradeReplica, 0, 2)
-	for idx, port := range ports {
-		info, err := w.Docker.Provision(ctx, dockerprov.DeploymentSpec{
-			Name:                  j.Name,
-			DeploymentID:          j.DeploymentID,
-			ProjectID:             j.ProjectID,
-			InstanceSecret:        j.InstanceSecret,
-			HostPort:              port,
-			EnvVars:               j.EnvVars,
-			HealthcheckViaNetwork: j.HealthcheckViaNetwork,
-			HAReplica:             true,
-			ReplicaIndex:          idx,
-			Storage:               storageToDocker(j.Storage),
-			PublicURL:             publicOrigin,
-			SiteURL:               siteOrigin,
-		})
-		if err != nil {
-			logger.Error("provisioner: upgrade_to_ha provision replica failed",
-				"job_id", j.JobID, "deployment", j.Name, "replica", idx, "err", err)
+	// Port allocation is a classic SELECT-then-INSERT race. Two concurrent
+	// workers can both pick the same free port; UNIQUE on
+	// deployment_replicas.host_port catches the race at finishUpgradeSwap's
+	// INSERT and WithRetryOnUniqueViolation regenerates a fresh candidate.
+	// Containers from a losing attempt are torn down at the top of the next
+	// iteration so the OS-level port binding is released before the next
+	// allocatePorts call sees the row as freed.
+	// See AGENTS.md "Multi-node ground rules / Resource allocators".
+	var replicas []upgradeReplica
+	upgradeErr := synapsedb.WithRetryOnUniqueViolation(ctx, 5, func() error {
+		if len(replicas) > 0 {
 			w.cleanupUpgradeReplicas(context.Background(), logger, j.Name, replicas)
-			w.markJobFailed(j.JobID, err.Error())
-			return
+			replicas = replicas[:0]
 		}
-		replicas = append(replicas, upgradeReplica{Index: idx, Port: port, Info: info})
-	}
 
-	targetURLs := []string{
-		"http://" + dockerprov.ContainerName(j.Name, 0, true) + ":3210",
-		"http://" + dockerprov.ContainerName(j.Name, 1, true) + ":3210",
-	}
-	if err := w.SnapshotMigrator.MigrateSnapshot(ctx, dockerprov.SnapshotMigrationSpec{
-		DeploymentName: j.Name,
-		DeploymentID:   j.DeploymentID,
-		ProjectID:      j.ProjectID,
-		SourceURL:      "http://" + dockerprov.ContainerName(j.Name, 0, false) + ":3210",
-		SourceAdminKey: j.AdminKey,
-		TargetURLs:     targetURLs,
-		TargetAdminKey: j.AdminKey,
-	}); err != nil {
-		logger.Error("provisioner: upgrade_to_ha snapshot migration failed",
-			"job_id", j.JobID, "deployment", j.Name, "err", err)
-		w.cleanupUpgradeReplicas(context.Background(), logger, j.Name, replicas)
-		w.markJobFailed(j.JobID, err.Error())
-		return
-	}
+		ports, err := w.allocatePorts(ctx, cfg, 2)
+		if err != nil {
+			logger.Error("provisioner: upgrade_to_ha allocate ports failed",
+				"job_id", j.JobID, "deployment", j.Name, "err", err)
+			return err
+		}
 
-	if err := w.finishUpgradeSwap(ctx, j, replicas); err != nil {
-		logger.Error("provisioner: upgrade_to_ha swap failed",
-			"job_id", j.JobID, "deployment", j.Name, "err", err)
+		// All replicas of an HA deployment advertise the same public origin
+		// (they sit behind one logical address). Compute once outside the
+		// per-replica loop with the primary replica's host port so the env
+		// is stable across the pair.
+		publicOrigin := w.computePublicOrigin(ctx, j.DeploymentID, j.Name, ports[0])
+		siteOrigin := w.computeSiteOrigin(ctx, j.DeploymentID, j.Name)
+		for idx, port := range ports {
+			info, err := w.Docker.Provision(ctx, dockerprov.DeploymentSpec{
+				Name:                  j.Name,
+				DeploymentID:          j.DeploymentID,
+				ProjectID:             j.ProjectID,
+				InstanceSecret:        j.InstanceSecret,
+				HostPort:              port,
+				EnvVars:               j.EnvVars,
+				HealthcheckViaNetwork: j.HealthcheckViaNetwork,
+				HAReplica:             true,
+				ReplicaIndex:          idx,
+				Storage:               storageToDocker(j.Storage),
+				PublicURL:             publicOrigin,
+				SiteURL:               siteOrigin,
+			})
+			if err != nil {
+				logger.Error("provisioner: upgrade_to_ha provision replica failed",
+					"job_id", j.JobID, "deployment", j.Name, "replica", idx, "err", err)
+				return err
+			}
+			replicas = append(replicas, upgradeReplica{Index: idx, Port: port, Info: info})
+		}
+
+		targetURLs := []string{
+			"http://" + dockerprov.ContainerName(j.Name, 0, true) + ":3210",
+			"http://" + dockerprov.ContainerName(j.Name, 1, true) + ":3210",
+		}
+		if err := w.SnapshotMigrator.MigrateSnapshot(ctx, dockerprov.SnapshotMigrationSpec{
+			DeploymentName: j.Name,
+			DeploymentID:   j.DeploymentID,
+			ProjectID:      j.ProjectID,
+			SourceURL:      "http://" + dockerprov.ContainerName(j.Name, 0, false) + ":3210",
+			SourceAdminKey: j.AdminKey,
+			TargetURLs:     targetURLs,
+			TargetAdminKey: j.AdminKey,
+		}); err != nil {
+			logger.Error("provisioner: upgrade_to_ha snapshot migration failed",
+				"job_id", j.JobID, "deployment", j.Name, "err", err)
+			return err
+		}
+
+		if err := w.finishUpgradeSwap(ctx, j, replicas); err != nil {
+			logger.Error("provisioner: upgrade_to_ha swap failed",
+				"job_id", j.JobID, "deployment", j.Name, "err", err)
+			return err
+		}
+		return nil
+	})
+	if upgradeErr != nil {
 		w.cleanupUpgradeReplicas(context.Background(), logger, j.Name, replicas)
-		w.markJobFailed(j.JobID, err.Error())
+		w.markJobFailed(j.JobID, upgradeErr.Error())
 		return
 	}
 
