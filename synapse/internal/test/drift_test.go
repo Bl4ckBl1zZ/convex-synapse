@@ -974,3 +974,50 @@ func observedState(t *testing.T, h *Harness, hostID, depID string) string {
 	}
 	return state
 }
+
+// TestDrift_ApplyRejected_AllScopes locks the Cell Control Plane's
+// observe/plan-only contract: every drift / reconcile endpoint that
+// accepts a body MUST reject apply:true with 400 apply_not_supported.
+// If anyone ever adds an apply code path here, this test fails — that
+// is the point. See docs/SAFETY_INVARIANTS.md.
+func TestDrift_ApplyRejected_AllScopes(t *testing.T) {
+	h := Setup(t)
+	owner, projectID, cellID, hostID, _ := desiredFixture(t, h)
+	syncDrift(t, h, owner.AccessToken, projectID)
+
+	// Every mutating drift/reconcile route gated by applyRejected. Keep this
+	// list in lock-step with the applyRejected callers in
+	// synapse/internal/api/drift.go — a new endpoint that accepts a body
+	// without going through applyRejected is a contract break.
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"projectRecompute", "/v1/projects/" + projectID + "/drift/recompute"},
+		{"projectDryRun", "/v1/projects/" + projectID + "/reconcile/dry_run"},
+		{"cellRecompute", "/v1/cells/" + cellID + "/drift/recompute"},
+		{"cellDryRun", "/v1/cells/" + cellID + "/reconcile/dry_run"},
+		{"hostRecompute", "/v1/hosts/" + hostID + "/drift/recompute"},
+		{"hostDryRun", "/v1/hosts/" + hostID + "/reconcile/dry_run"},
+	}
+	body := map[string]any{"apply": true}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			env := h.AssertStatus(http.MethodPost, tc.path, owner.AccessToken, body, http.StatusBadRequest)
+			if env.Code != "apply_not_supported" {
+				t.Errorf("%s: code = %q, want apply_not_supported", tc.path, env.Code)
+			}
+		})
+	}
+
+	// Negative guard against over-gating: a body WITHOUT apply must still
+	// succeed. If applyRejected ever starts rejecting plain bodies, the
+	// dashboard's dry-run button breaks — catch that here.
+	var ok dryRunResult
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projectID+"/reconcile/dry_run",
+		owner.AccessToken, map[string]any{}, http.StatusOK, &ok)
+	if ok.OperationRun.ID == "" {
+		t.Fatalf("empty body should still produce an operation run")
+	}
+}
