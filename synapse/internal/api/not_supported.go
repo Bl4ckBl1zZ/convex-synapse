@@ -37,9 +37,11 @@ func NotSupportedMiddleware(next http.Handler) http.Handler {
 }
 
 // isNotSupportedPath returns true for every cloud-OpenAPI path Synapse
-// has intentionally cut. The patterns below are the same ones documented
-// in docs/HANDOFF.md "Hard out of scope"; new entries here must also be
-// added to the scorecard so the operator-visible doc stays honest.
+// has intentionally cut. The catalog is mirrored in docs/ROADMAP.md
+// "Compatibility scorecard" + the "Maybe never" section; new entries here
+// must also be added to the scorecard so the operator-visible doc stays
+// honest. (Historical context: the original out-of-scope rationale lives
+// in docs/archive/HANDOFF_OPENAPI_PUSH.md.)
 //
 // Matching is done in three layers:
 //   1. exact /v1/<path> matches for one-off cuts (validate_referral_code)

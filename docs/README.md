@@ -39,4 +39,10 @@ engine. **Observe + diagnose + plan only — it never applies changes.**
 | [HA_TESTING.md](HA_TESTING.md) | HA-per-deployment testing. |
 | [HOST_DOMAIN_WILDCARD.md](HOST_DOMAIN_WILDCARD.md) | Custom domains / wildcard TLS. |
 | [V0_5_PLAN.md](V0_5_PLAN.md) · [V0_6_INSTALLER_PLAN.md](V0_6_INSTALLER_PLAN.md) | Version plans. |
-| [HANDOFF.md](HANDOFF.md) · [SCREENSHOTS.md](SCREENSHOTS.md) | Handoff notes, screenshots. |
+| [SCREENSHOTS.md](SCREENSHOTS.md) | Visual tour of the dashboard. |
+
+## Historical / archived
+
+| Doc | What's in it |
+|---|---|
+| [archive/HANDOFF_OPENAPI_PUSH.md](archive/HANDOFF_OPENAPI_PUSH.md) | v0.6.1-era handoff to close the OpenAPI gap. All Priority-1 items shipped (see API.md). |

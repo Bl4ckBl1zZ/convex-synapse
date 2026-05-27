@@ -130,6 +130,10 @@ The Host should flip to `online` in the dashboard within one heartbeat
 interval (~15s), showing agentVersion, dockerVersion, CPU/RAM/disk, and a live
 `lastHeartbeatAt`.
 
+> A `setup.sh` install helper + packaged agent binary are tracked in
+> [`ROADMAP_CELL_CONTROL_PLANE.md`](ROADMAP_CELL_CONTROL_PLANE.md) §Next —
+> today's install is the manual systemd steps above.
+
 ## Agent lifecycle (instance-admin)
 
 - **List a host's agents:** `GET /v1/hosts/{id}/agents` — agent id, status,
@@ -152,10 +156,3 @@ interval (~15s), showing agentVersion, dockerVersion, CPU/RAM/disk, and a live
 - Adoption tokens are single-use and expire; used/expired/revoked tokens return
   a clear error code without leaking the hash.
 
-## TODO (future blocks)
-
-- systemd install helper in `setup.sh` / a `synapse-agent install-service`
-  subcommand (today the install is the manual steps above).
-- desired-state + reconcile (apply mode) — gated, non-destructive first.
-- persist `offline` via a reaper if a stored status is ever needed for queries
-  (today effectiveStatus is computed on read).
