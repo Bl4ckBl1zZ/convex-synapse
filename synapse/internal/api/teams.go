@@ -1001,9 +1001,11 @@ func (h *TeamsHandler) listDeployments(w http.ResponseWriter, r *http.Request) {
 		rows, err = h.DB.Query(r.Context(), `
 			SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
 			       d.deployment_url, d.is_default, d.reference, d.creator_user_id, d.created_at,
-			       d.adopted
+			       d.adopted,
+			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote
 			  FROM deployments d
 			  JOIN projects p ON p.id = d.project_id
+			  LEFT JOIN hosts h ON h.id = d.host_id
 			 WHERE p.team_id = $1
 			   AND d.status <> 'deleted'
 			 ORDER BY d.created_at ASC, d.id ASC
@@ -1031,9 +1033,11 @@ func (h *TeamsHandler) listDeployments(w http.ResponseWriter, r *http.Request) {
 		rows, err = h.DB.Query(r.Context(), `
 			SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
 			       d.deployment_url, d.is_default, d.reference, d.creator_user_id, d.created_at,
-			       d.adopted
+			       d.adopted,
+			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote
 			  FROM deployments d
 			  JOIN projects p ON p.id = d.project_id
+			  LEFT JOIN hosts h ON h.id = d.host_id
 			 WHERE p.team_id = $1
 			   AND d.status <> 'deleted'
 			   AND (d.created_at, d.id) > ($2, $3)
@@ -1051,9 +1055,10 @@ func (h *TeamsHandler) listDeployments(w http.ResponseWriter, r *http.Request) {
 	deployments := make([]models.Deployment, 0, limit)
 	for rows.Next() {
 		var d models.Deployment
-		var url, ref, creator *string
+		var url, ref, creator, hostName, hostTailnet *string
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Name, &d.DeploymentType, &d.Status,
-			&url, &d.IsDefault, &ref, &creator, &d.CreatedAt, &d.Adopted); err != nil {
+			&url, &d.IsDefault, &ref, &creator, &d.CreatedAt, &d.Adopted,
+			&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote); err != nil {
 			logErr("scan deployment", err)
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to scan deployments")
 			return
@@ -1066,6 +1071,12 @@ func (h *TeamsHandler) listDeployments(w http.ResponseWriter, r *http.Request) {
 		}
 		if creator != nil {
 			d.CreatorUserID = *creator
+		}
+		if hostName != nil {
+			d.HostName = *hostName
+		}
+		if hostTailnet != nil {
+			d.HostTailnetAddr = *hostTailnet
 		}
 		// Same rewrite the create/get handlers apply — turn the
 		// container-internal "http://127.0.0.1:<port>" into something

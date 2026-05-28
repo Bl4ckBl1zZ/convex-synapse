@@ -908,16 +908,36 @@ func (h *Harness) SeedDeployment(projectID, name, depType, status string, isDefa
 	// loadDeployment scans container_id straight into a string (not *string), so
 	// we have to insert a non-NULL value here. Use a placeholder; the
 	// FakeDocker doesn't care what's there.
+	// Resolve (or seed) the self-host id. The cells.Backfill that
+	// normally seeds this row on first server boot doesn't run in the
+	// test harness — we mirror the migration-time guard so SeedDeployment
+	// works even when no test has touched the hosts table. Idempotent
+	// via the partial unique index hosts_one_synapse_host_idx.
+	var hostID string
+	if err := h.DB.QueryRow(h.rootCtx,
+		`INSERT INTO hosts (name, provider, region, status, is_synapse_host)
+		     SELECT 'synapse-host', 'self-hosted', '', 'online', TRUE
+		      WHERE NOT EXISTS (SELECT 1 FROM hosts WHERE is_synapse_host = TRUE)
+		     RETURNING id`,
+	).Scan(&hostID); err != nil {
+		// Either ErrNoRows (the row already existed → re-select) or a real
+		// DB error. Try the SELECT either way and fail only if THAT errors.
+		if selErr := h.DB.QueryRow(h.rootCtx,
+			`SELECT id FROM hosts WHERE is_synapse_host = TRUE LIMIT 1`,
+		).Scan(&hostID); selErr != nil {
+			h.T.Fatalf("seed deployment: resolve self-host: %v / %v", err, selErr)
+		}
+	}
 	var id string
 	err := h.DB.QueryRow(h.rootCtx, `
 		INSERT INTO deployments (project_id, name, deployment_type, status, host_port,
 		                          admin_key, instance_secret, is_default, creator_user_id,
-		                          deployment_url, container_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		                          deployment_url, container_id, host_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id
 	`, projectID, name, depType, status, sqlNull(hostPort), adminKey, "fake-secret-"+randHex(8),
 		isDefault, sqlNullStr(creatorUserID), fmt.Sprintf("http://127.0.0.1:%d", hostPort),
-		"fake-container-"+name).Scan(&id)
+		"fake-container-"+name, hostID).Scan(&id)
 	if err != nil {
 		h.T.Fatalf("seed deployment: %v", err)
 	}

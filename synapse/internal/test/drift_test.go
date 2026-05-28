@@ -210,6 +210,14 @@ func TestHost_SelfHostOnlineDespiteStaleHeartbeat(t *testing.T) {
 	var host models.Host
 	h.DoJSON(http.MethodPost, "/v1/hosts", owner.AccessToken, map[string]any{"name": "self", "region": "local"}, http.StatusCreated, &host)
 	// mark it the self-host with a long-stale heartbeat (would be offline otherwise)
+	// Bloco 14.1 / Phase 4: migration 000026 self-seeds the is_synapse_host
+	// row, so there might already BE a self-host. Use UPDATE on the row we
+	// just created via /v1/hosts (which is NOT the self-host) AND clear the
+	// flag on any pre-existing self-host first to satisfy the
+	// hosts_one_synapse_host_idx partial unique index.
+	if _, err := h.DB.Exec(h.rootCtx, `UPDATE hosts SET is_synapse_host = false WHERE is_synapse_host = true AND id::text <> $1`, host.ID); err != nil {
+		t.Fatalf("clear pre-existing self-host: %v", err)
+	}
 	if _, err := h.DB.Exec(h.rootCtx, `UPDATE hosts SET is_synapse_host = true, last_heartbeat_at = now() - make_interval(hours => 17) WHERE id::text = $1`, host.ID); err != nil {
 		t.Fatalf("mark self-host: %v", err)
 	}

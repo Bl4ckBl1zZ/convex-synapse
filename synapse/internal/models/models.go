@@ -106,7 +106,19 @@ type Deployment struct {
 	ReplicaCount int        `json:"replicaCount,omitempty"`
 	CreatedAt    time.Time  `json:"createTime"`
 	LastDeployAt *time.Time `json:"lastDeployTime,omitempty"`
-	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
+	// HostID is the hosts.id this deployment is provisioned on. NOT NULL
+	// from migration 000026; pre-v1.18 deployments backfilled to the
+	// self-host id. Set explicitly via the create_deployment body when an
+	// operator places a deployment on a remote host (Phase 4).
+	HostID string `json:"hostId,omitempty"`
+	// HostName / HostTailnetAddr / HostIsRemote come from the JOIN with
+	// hosts in list/get handlers. Empty / zero when loaded via a query
+	// that doesn't join. JSON: omitempty keeps the legacy v1.17- shape
+	// decodable.
+	HostName        string     `json:"hostName,omitempty"`
+	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
+	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
+	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
 }
 
 // DeploymentReplicaStatus enumerates the per-replica lifecycle states.

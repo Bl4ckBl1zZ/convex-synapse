@@ -719,12 +719,14 @@ func (h *ProjectsHandler) listDeployments(w http.ResponseWriter, r *http.Request
 	var err error
 	if cursor == "" {
 		rows, err = h.DB.Query(r.Context(), `
-			SELECT id, project_id, name, deployment_type, status,
-			       deployment_url, is_default, reference, creator_user_id, created_at,
-			       adopted
-			  FROM deployments
-			 WHERE project_id = $1 AND status <> 'deleted'
-			 ORDER BY created_at ASC, id ASC
+			SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
+			       d.deployment_url, d.is_default, d.reference, d.creator_user_id, d.created_at,
+			       d.adopted,
+			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote
+			  FROM deployments d
+			  LEFT JOIN hosts h ON h.id = d.host_id
+			 WHERE d.project_id = $1 AND d.status <> 'deleted'
+			 ORDER BY d.created_at ASC, d.id ASC
 			 LIMIT $2
 		`, p.ID, limit+1)
 	} else {
@@ -742,14 +744,16 @@ func (h *ProjectsHandler) listDeployments(w http.ResponseWriter, r *http.Request
 			return
 		}
 		rows, err = h.DB.Query(r.Context(), `
-			SELECT id, project_id, name, deployment_type, status,
-			       deployment_url, is_default, reference, creator_user_id, created_at,
-			       adopted
-			  FROM deployments
-			 WHERE project_id = $1
-			   AND status <> 'deleted'
-			   AND (created_at, id) > ($2, $3)
-			 ORDER BY created_at ASC, id ASC
+			SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
+			       d.deployment_url, d.is_default, d.reference, d.creator_user_id, d.created_at,
+			       d.adopted,
+			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote
+			  FROM deployments d
+			  LEFT JOIN hosts h ON h.id = d.host_id
+			 WHERE d.project_id = $1
+			   AND d.status <> 'deleted'
+			   AND (d.created_at, d.id) > ($2, $3)
+			 ORDER BY d.created_at ASC, d.id ASC
 			 LIMIT $4
 		`, p.ID, cursorAt, cursor, limit+1)
 	}
@@ -763,9 +767,10 @@ func (h *ProjectsHandler) listDeployments(w http.ResponseWriter, r *http.Request
 	deployments := make([]models.Deployment, 0, limit)
 	for rows.Next() {
 		var d models.Deployment
-		var url, ref, creator *string
+		var url, ref, creator, hostName, hostTailnet *string
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Name, &d.DeploymentType, &d.Status,
-			&url, &d.IsDefault, &ref, &creator, &d.CreatedAt, &d.Adopted); err != nil {
+			&url, &d.IsDefault, &ref, &creator, &d.CreatedAt, &d.Adopted,
+			&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote); err != nil {
 			logErr("scan deployment", err)
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to scan deployments")
 			return
@@ -778,6 +783,12 @@ func (h *ProjectsHandler) listDeployments(w http.ResponseWriter, r *http.Request
 		}
 		if creator != nil {
 			d.CreatorUserID = *creator
+		}
+		if hostName != nil {
+			d.HostName = *hostName
+		}
+		if hostTailnet != nil {
+			d.HostTailnetAddr = *hostTailnet
 		}
 		// Same rewrite the create/get handlers apply — turn the
 		// container-internal "http://127.0.0.1:<port>" into something

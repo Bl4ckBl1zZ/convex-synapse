@@ -29,6 +29,10 @@ type deploymentJSON struct {
 	CreateTime     time.Time  `json:"createTime"`
 	LastDeployTime *time.Time `json:"lastDeployTime,omitempty"`
 	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
+	HostID          string     `json:"hostId,omitempty"`
+	HostName        string     `json:"hostName,omitempty"`
+	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
+	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
 }
 
 // fakeConvexBackend stands in for a real Convex backend during adoption
