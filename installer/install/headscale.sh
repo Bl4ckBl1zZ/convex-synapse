@@ -267,27 +267,16 @@ headscale::_wait_healthy() {
 # ---- user + API key -------------------------------------------------
 
 # headscale::ensure_user  creates the default user/namespace if it
-# doesn't exist. We parse `headscale users list` (plain-text table)
-# rather than `-o json | jq` because the headscale image is distroless
-# and ships no jq.
+# doesn't exist. Existence is checked via headscale::_user_id (which
+# parses `headscale users list -o json` with jq on the HOST — the
+# headscale container is distroless and has no jq, but the JSON comes
+# out to the host where jq lives). The old awk table-parse missed an
+# existing user on a real box (the version-update WRN line + column
+# drift), so ensure_user tried to re-create 'synapse' and hit a
+# duplicate-key error. The JSON check is format-stable.
 headscale::ensure_user() {
     local user="${1:-$HEADSCALE_DEFAULT_USER}"
-    local out
-    out="$(headscale::_compose exec -T headscale headscale users list 2>/dev/null || true)"
-    # Headscale 0.28 format: `ID | Name | Username | Email | Created`.
-    # Pre-0.28 had `ID | Name | Created`. Match either Name (col 2) or
-    # Username (col 3) — both columns CAN carry the operator-supplied
-    # name depending on how the row was created.
-    if printf '%s\n' "$out" | awk -F'|' -v u="$user" '
-        NR == 1 { next }            # header
-        /^-+/   { next }            # separator (if any)
-        {
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
-            if ($2 == u || $3 == u) { found = 1; exit }
-        }
-        END { exit !found }
-    '; then
+    if [[ -n "$(headscale::_user_id "$user")" ]]; then
         return 0
     fi
     headscale::_compose exec -T headscale headscale users create "$user" >/dev/null
@@ -542,26 +531,35 @@ headscale::_control_already_joined() {
 }
 
 # headscale::_user_id <user>
-# Resolves a Headscale username to its numeric user ID by parsing the
-# `headscale users list` table. Headscale 0.28's CLI + API take the
-# numeric ID (not the name) for preauthkey/node ops.
+# Resolves a Headscale username to its numeric user ID. Headscale
+# 0.28's CLI + API take the numeric ID (not the name) for
+# preauthkey/node ops.
+#
+# Parses `headscale users list -o json` with jq on the HOST. The
+# headscale container is distroless (no jq), but `-o json` writes a
+# clean array to stdout that we pipe out and parse host-side, where
+# jq is a hard dependency (preflight installs it). This replaced an
+# awk table-parse that broke on a real box: the version-update WRN
+# line + column layout drift made it miss the existing 'synapse'
+# user, so the control-plane tailnet join failed with "could not
+# resolve user id". JSON is format-stable.
+#
+# Output shape (headscale 0.28): a JSON ARRAY of
+# {"id":<number>,"name":"<user>",...}. We tolerate a {"users":[...]}
+# shape too, and strip any non-JSON preamble (some builds print the
+# version WRN to stdout ahead of the array). Empty stdout when the
+# user isn't found.
 headscale::_user_id() {
     local user="${1:-$HEADSCALE_DEFAULT_USER}"
-    local out
-    out="$(headscale::_compose exec -T headscale headscale users list 2>/dev/null || true)"
-    # Pipe-delimited table: `ID | Name | Username | Email | Created`.
-    # Match the row whose Name (col 2) OR Username (col 3) equals the
-    # requested user, echo its ID (col 1). Same parser shape as
-    # ensure_user. Empty output when not found.
-    printf '%s\n' "$out" | awk -F'|' -v u="$user" '
-        NR == 1 { next }
-        /^-+/   { next }
-        {
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
-            if ($2 == u || $3 == u) { print $1; exit }
-        }'
+    local json
+    json="$(headscale::_compose exec -T headscale headscale users list -o json 2>/dev/null || true)"
+    # Drop anything before the first '[' or '{' so a stray WRN line on
+    # stdout doesn't make jq choke.
+    json="${json#"${json%%[\[{]*}"}"
+    [[ -n "$json" ]] || return 0
+    printf '%s' "$json" | jq -r --arg u "$user" '
+        (if type == "array" then . else .users end)[]
+        | select(.name == $u) | .id' 2>/dev/null | head -1
 }
 
 # headscale::_mint_control_preauth_key

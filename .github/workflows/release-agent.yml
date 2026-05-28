@@ -46,16 +46,28 @@ jobs:
       - name: Resolve version stamp
         id: version
         run: |
+          # `tag` is the release tag (e.g. v1.19.8) — the gh-release
+          # upload target. `version` is the v-LESS form (1.19.8) used
+          # for the asset FILENAME and the binary's main.Version.
+          #
+          # This split is load-bearing: install-agent.sh fetches
+          # synapse-agent-<agentVersion>-linux-<arch>.tar.gz where
+          # agentVersion = the synapse-api version, which is v-less
+          # (e.g. "1.19.8"). v1.19.0–v1.19.7 named the asset with the
+          # v ("synapse-agent-v1.19.7-...") so the agent's v-less fetch
+          # 404'd. Strip the v here so the names match.
           if [[ -n "${{ inputs.tag }}" ]]; then
-            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            tag="${{ inputs.tag }}"
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            tag="${GITHUB_REF#refs/tags/}"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+            tag="${GITHUB_SHA:0:7}"
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build synapse-agent (${{ matrix.goos }}/${{ matrix.goarch }})
         working-directory: synapse
@@ -98,7 +110,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ steps.version.outputs.version }}" \
+          gh release upload "${{ steps.version.outputs.tag }}" \
             "$archive" "$archive.sha256" \
             --clobber
 

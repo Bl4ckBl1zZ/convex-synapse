@@ -102,29 +102,45 @@ setup() {
     [ "$output" = "https://new.example.org" ]
 }
 
-@test "headscale::_user_id resolves username to numeric ID from the 0.28 users-list table" {
+@test "headscale::_user_id resolves username to numeric ID from JSON (v1.19.8)" {
     # Headscale 0.28's preauthkey CLI/API takes the numeric user ID,
-    # not the name. _user_id parses `headscale users list` to map
-    # synapse → 1. Regression for the v1.19.0/.1/.2 mint failure
-    # ("invalid value for uint64 field user: synapse").
-    # Stub _compose so `headscale users list` returns the 0.28 table.
+    # not the name. v1.19.8 parses `headscale users list -o json` with
+    # jq (format-stable) — the old awk table parse missed an existing
+    # user on a real box (version-update WRN line + column drift), so
+    # the control-plane tailnet join failed with "could not resolve
+    # user id". Stub _compose to return the 0.28 JSON array.
     eval 'headscale::_compose() {
-        cat <<TBL
-ID | Name | Username | Email | Created
-1  |      | synapse  |       | 2026-05-28 19:23:36
-TBL
+        cat <<JSON
+[
+  { "id": 1, "name": "synapse", "created_at": { "seconds": 1779996216, "nanos": 0 } }
+]
+JSON
     }'
     run headscale::_user_id synapse
     [ "$status" -eq 0 ]
     [ "$output" = "1" ]
 }
 
-@test "headscale::_user_id is empty when the user is absent" {
+@test "headscale::_user_id tolerates a WRN line ahead of the JSON" {
+    # Some headscale builds print a "newer version available" WRN to
+    # stdout before the JSON array. _user_id strips any non-JSON
+    # preamble so jq still parses.
     eval 'headscale::_compose() {
-        cat <<TBL
-ID | Name | Username | Email | Created
-1  |      | other    |       | 2026-05-28 19:23:36
-TBL
+        printf "%s\n" "2026-01-01T00:00:00Z WRN An updated version of Headscale ..."
+        cat <<JSON
+[ { "id": 7, "name": "synapse" } ]
+JSON
+    }'
+    run headscale::_user_id synapse
+    [ "$status" -eq 0 ]
+    [ "$output" = "7" ]
+}
+
+@test "headscale::_user_id is empty when the user is absent (JSON)" {
+    eval 'headscale::_compose() {
+        cat <<JSON
+[ { "id": 1, "name": "other" } ]
+JSON
     }'
     run headscale::_user_id synapse
     [ "$status" -eq 0 ]
