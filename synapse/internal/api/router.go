@@ -162,6 +162,15 @@ type RouterDeps struct {
 
 	// Headscale (v1.18+, Remote Hosts). nil when SYNAPSE_HEADSCALE_URL
 	// is empty — Phase 4 handlers detect this and 503 with a hint.
+	// HeadscaleServerURL is the EXTERNAL URL Tailscale clients pass
+	// to `tailscale up --login-server=...` when joining the tailnet.
+	// Surfaced by GET /v1/install_agent/config (public, unauth) so
+	// install-agent.sh can discover it from the operator-supplied
+	// --control-url alone. Empty = Remote Hosts disabled; the
+	// endpoint still 200s with remoteHostsEnabled=false and the
+	// installer refuses with a clear error.
+	HeadscaleServerURL string
+
 	Headscale *headscale.Client
 }
 
@@ -353,6 +362,19 @@ func NewRouter(d RouterDeps) http.Handler {
 		// install_status is also public — the dashboard hits it pre-auth
 		// to decide whether to redirect /login → /setup (first-run wizard).
 		r.Method(http.MethodGet, "/install_status", &InstallStatusHandler{DB: d.DB, Version: d.Version})
+		// install_agent — public bootstrap install-agent.sh hits BEFORE
+		// joining the tailnet to discover the EXTERNAL Headscale URL
+		// (`tailscale up --login-server=...`) + the agent binary
+		// download manifest. Unauth: the host has no agent token yet
+		// (registration happens AFTER it has a tailnet IP). The
+		// response only exposes values already publicly observable
+		// from a curl to the headscale subdomain.
+		installAgentH := &InstallAgentHandler{
+			HeadscaleServerURL: d.HeadscaleServerURL,
+			AgentDownloadBase:  "https://github.com/" + d.GitHubRepo + "/releases/latest/download",
+			AgentVersion:       d.Version,
+		}
+		r.Mount("/install_agent", installAgentH.Routes())
 		// CLI latest version probe (v1.9.4+). Public for the same reason
 		// install_status is public: every operator who can log into the
 		// dashboard is a potential CLI user; gating it behind admin would

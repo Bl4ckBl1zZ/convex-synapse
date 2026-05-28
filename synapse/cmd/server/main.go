@@ -298,9 +298,10 @@ func run() error {
 		// secrets-at-rest. Literal-nil interface when SYNAPSE_STORAGE_KEY
 		// is unset, in which case /v1/admin/dns_credentials/cloudflare
 		// returns 503 crypto_not_configured.
-		ConvexEnv:   convexEnvClient,
-		DNSEnvelope: dnsEnvelope,
-		Headscale:   headscaleClient,
+		ConvexEnv:          convexEnvClient,
+		DNSEnvelope:        dnsEnvelope,
+		Headscale:          headscaleClient,
+		HeadscaleServerURL: cfg.HeadscaleServerURL,
 	})
 
 	// Provisioning worker — dequeues 'provision' jobs inserted by the

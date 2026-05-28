@@ -58,6 +58,15 @@ type agentRegisterReq struct {
 	CPUCores      *int   `json:"cpuCores,omitempty"`
 	MemoryMb      *int64 `json:"memoryMb,omitempty"`
 	DiskGb        *int64 `json:"diskGb,omitempty"`
+
+	// v1.18+ Remote Hosts: install-agent.sh sends these AFTER joining
+	// the Headscale tailnet + generating the SSH keypair. Pre-v1.18
+	// agents omit them — fields stay empty and the host stays
+	// is_remote=false (treated as a local-or-legacy observer).
+	TailnetAddr string `json:"tailnetAddr,omitempty"`
+	SSHPubkey   string `json:"sshPubkey,omitempty"`
+	SSHUser     string `json:"sshUser,omitempty"` // default "synapse-deployer"
+	SSHPort     *int   `json:"sshPort,omitempty"` // default 22
 }
 
 type agentConfigResp struct {
@@ -154,6 +163,37 @@ func (h *AgentsHandler) register(w http.ResponseWriter, r *http.Request) {
 		logErr("apply host facts on register", err)
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to register agent")
 		return
+	}
+
+	// v1.18+ Remote Hosts: if the agent sent tailnet + SSH info, persist
+	// it on the host row + flip is_remote=true. Backwards-compatible:
+	// pre-v1.18 agents omit these fields and the host stays
+	// is_remote=false (local-or-legacy observer mode). NULLIF preserves
+	// the partial-update contract — an agent that sends one of the two
+	// addressing fields but not the other doesn't wipe the persisted
+	// value with an empty string.
+	if strings.TrimSpace(req.TailnetAddr) != "" || strings.TrimSpace(req.SSHPubkey) != "" {
+		sshUser := strings.TrimSpace(req.SSHUser)
+		if sshUser == "" {
+			sshUser = "synapse-deployer"
+		}
+		sshPort := 22
+		if req.SSHPort != nil && *req.SSHPort > 0 {
+			sshPort = *req.SSHPort
+		}
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE hosts
+			   SET tailnet_addr = NULLIF($2, ''),
+			       ssh_pubkey   = NULLIF($3, ''),
+			       ssh_user     = $4,
+			       ssh_port     = $5,
+			       is_remote    = TRUE
+			 WHERE id = $1
+		`, hostID, strings.TrimSpace(req.TailnetAddr), strings.TrimSpace(req.SSHPubkey), sshUser, sshPort); err != nil {
+			logErr("apply remote host fields on register", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to register agent")
+			return
+		}
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {

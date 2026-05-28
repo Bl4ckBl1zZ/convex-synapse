@@ -179,6 +179,13 @@ services:
       # .tmpl as `server_url:`.
       SYNAPSE_HEADSCALE_URL: ${SYNAPSE_HEADSCALE_URL:-}
       SYNAPSE_HEADSCALE_API_KEY: ${SYNAPSE_HEADSCALE_API_KEY:-}
+      # SYNAPSE_HEADSCALE_SERVER_URL: the EXTERNAL URL Tailscale
+      # clients pass to `tailscale up --login-server=...`. Distinct
+      # from SYNAPSE_HEADSCALE_URL (above) which is the docker-
+      # internal API address. Served back to install-agent.sh via
+      # the public /v1/install_agent/config endpoint so the
+      # dashboard one-liner doesn't have to carry it inline.
+      SYNAPSE_HEADSCALE_SERVER_URL: ${SYNAPSE_HEADSCALE_SERVER_URL:-}
     volumes:
       # Synapse provisions sibling containers via the host docker daemon.
       # This mount is unavoidable for the v0 architecture; the alternative is

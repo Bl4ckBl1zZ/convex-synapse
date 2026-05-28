@@ -191,6 +191,11 @@ type SetupOpts struct {
 	// against an httptest.Server stub so they can capture pushed bodies
 	// without spinning a real Convex backend.
 	ConvexEnv *convexenv.Client
+
+	// HeadscaleServerURL mirrors api.RouterDeps.HeadscaleServerURL —
+	// the EXTERNAL Headscale URL surfaced by /v1/install_agent/config.
+	// Empty (default) drives the "Remote Hosts disabled" path.
+	HeadscaleServerURL string
 }
 
 // stubResolverFunc adapts a closure to api.HostDomainResolver.
@@ -312,6 +317,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		EnableDesiredState:  true,
 		EnableObservedState: true,
 		ConvexEnv:           opts.ConvexEnv,
+		HeadscaleServerURL:  opts.HeadscaleServerURL,
 	}
 
 	// HA wiring (only when SetupHA was called). The crypto box is a
