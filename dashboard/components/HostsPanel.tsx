@@ -16,6 +16,7 @@ import {
   type Host,
   type HostAdoptionToken,
   type HostAgentsResponse,
+  type RemoteSetupBundle,
 } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 
@@ -40,6 +41,11 @@ export function HostsPanel() {
   const [tokenHost, setTokenHost] = useState<Host | null>(null);
   const [detailsHost, setDetailsHost] = useState<Host | null>(null);
   const [drainHost, setDrainHost] = useState<Host | null>(null);
+  // v1.18+ Remote Hosts: per-row "Setup remote install" modal. Holds the
+  // host the operator clicked PLUS the lazily-fetched bundle (or error).
+  // Re-mounting via `key={remoteSetupHost?.id}` resets state when the
+  // operator opens it for a different host.
+  const [remoteSetupHost, setRemoteSetupHost] = useState<Host | null>(null);
 
   // Instance-admin gate: hide entirely for non-admins (and unauthenticated).
   if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
@@ -115,6 +121,7 @@ export function HostsPanel() {
                 onToken={() => setTokenHost(host)}
                 onDetails={() => setDetailsHost(host)}
                 onDrain={() => setDrainHost(host)}
+                onRemoteSetup={() => setRemoteSetupHost(host)}
               />
             ))}
           </div>
@@ -141,6 +148,11 @@ export function HostsPanel() {
         host={drainHost}
         onClose={() => setDrainHost(null)}
         onDrained={() => void mutate()}
+      />
+      <RemoteSetupDialog
+        key={remoteSetupHost?.id ?? "remote-setup-closed"}
+        host={remoteSetupHost}
+        onClose={() => setRemoteSetupHost(null)}
       />
     </Card>
   );
@@ -185,11 +197,13 @@ function HostCard({
   onToken,
   onDetails,
   onDrain,
+  onRemoteSetup,
 }: {
   host: Host;
   onToken: () => void;
   onDetails: () => void;
   onDrain: () => void;
+  onRemoteSetup: () => void;
 }) {
   return (
     <Card data-testid="host-card" data-host-name={host.name}>
@@ -224,6 +238,21 @@ function HostCard({
           <Button variant="secondary" size="sm" onClick={onToken}>
             Adoption token
           </Button>
+          {/* v1.18+ Remote Hosts — only meaningful for adoptable hosts.
+              The self-host runs Synapse itself; install-agent.sh there
+              would be a no-op (or worse, try to re-tailnet-join the
+              control plane). Filter on isSynapseHost mirrors what the
+              backend uses to gate /v1/hosts list ordering. */}
+          {!host.isSynapseHost && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onRemoteSetup}
+              data-testid={`setup-remote-${host.name}`}
+            >
+              Setup remote install
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={onDetails}>
             Details
           </Button>
@@ -785,4 +814,161 @@ function formatDate(iso?: string): string {
   } catch {
     return iso;
   }
+}
+
+/* -------------------- remote setup (one-liner) -------------------- */
+
+// RemoteSetupDialog (v1.18+) — fetches the one-click bundle
+// (adoption token + Headscale pre-auth key + pre-rendered
+// install-agent.sh one-liner) the first time the modal renders, then
+// shows the operator the copy-pasteable command. Both plaintext
+// secrets only exist on the wire + in the DOM of the open modal;
+// closing the dialog drops them.
+function RemoteSetupDialog({
+  host,
+  onClose,
+}: {
+  host: Host | null;
+  onClose: () => void;
+}) {
+  const [bundle, setBundle] = useState<RemoteSetupBundle | null>(null);
+  const [pending, setPending] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  if (!host) {
+    return (
+      <Dialog open={false} onClose={onClose}>
+        <></>
+      </Dialog>
+    );
+  }
+
+  const generate = async () => {
+    setFormError(null);
+    setErrorCode(null);
+    setPending(true);
+    try {
+      const b = await api.hosts.remoteSetup(host.id);
+      setBundle(b);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setErrorCode(err.code ?? null);
+        setFormError(err.message);
+      } else {
+        setFormError("Could not generate one-liner");
+      }
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const copy = async () => {
+    if (!bundle) return;
+    const ok = await copyToClipboard(bundle.oneLiner);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } else {
+      setFormError("Could not copy — select the command manually and Ctrl+C");
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={bundle ? `Remote install for ${host.name}` : `Set up ${host.name}`}
+    >
+      <div className="space-y-4" data-testid="remote-setup-dialog">
+        {!bundle && !formError && (
+          <div className="space-y-4">
+            <p className="text-sm text-neutral-300">
+              Generates a one-time bundle so a new VPS can join your
+              tailnet AND register with Synapse in a single SSH paste.
+              Both secrets shown next expire in 1 hour.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={generate} disabled={pending}>
+                {pending ? "Generating…" : "Generate one-liner"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {formError && !bundle && (
+          <div className="space-y-3">
+            <p className="text-xs text-red-400" data-testid="remote-setup-error">
+              {formError}
+            </p>
+            {errorCode === "remote_hosts_disabled" && (
+              <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-400">
+                Run{" "}
+                <code className="rounded bg-neutral-950 px-1 py-0.5 font-mono text-amber-300">
+                  setup.sh --enable-headscale
+                </code>{" "}
+                on the control plane host to opt in.
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={onClose}>
+                Close
+              </Button>
+              <Button onClick={generate} disabled={pending}>
+                Retry
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {bundle && (
+          <div className="space-y-3" data-testid="remote-setup-result">
+            <p className="rounded bg-yellow-900/40 px-3 py-2 text-xs text-yellow-200">
+              This command appears only once. SSH into the new VPS and
+              paste it now — if you lose it, regenerate from this host
+              row.
+            </p>
+            <ol className="list-decimal space-y-1 pl-5 text-xs text-neutral-300">
+              <li>SSH into the new VPS as root (or via sudo)</li>
+              <li>
+                Paste the command below — expires{" "}
+                <span className="font-mono text-neutral-200">
+                  {formatDate(bundle.expiresAt)}
+                </span>
+              </li>
+              <li>Wait ~60s; this host will flip to online here</li>
+            </ol>
+            <div className="flex items-start gap-2">
+              <pre
+                className="flex-1 overflow-x-auto rounded border border-neutral-800/80 bg-neutral-950 p-3 text-[11px] leading-snug text-neutral-100"
+                data-testid="remote-setup-oneliner"
+              >
+                {bundle.oneLiner}
+              </pre>
+            </div>
+            {formError && <p className="text-xs text-red-400">{formError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={copy}
+                data-testid="remote-setup-copy"
+              >
+                {copied ? "Copied!" : "Copy one-liner"}
+              </Button>
+              <Button onClick={onClose}>Done</Button>
+            </div>
+            <p className="text-[11px] text-neutral-500">
+              Tokens are single-use. If you don&apos;t paste within an
+              hour, click &ldquo;Setup remote install&rdquo; again to
+              regenerate.
+            </p>
+          </div>
+        )}
+      </div>
+    </Dialog>
+  );
 }
