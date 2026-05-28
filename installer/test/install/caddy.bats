@@ -338,3 +338,43 @@ EOF
     run grep -c "^old$" "$out"
     assert_output "0"
 }
+
+# ---- install_headscale_block domain-only (v1.19.6 regression) ------
+
+@test "install_headscale_block: renders a block for headscale.<domain> with NO base domain" {
+    # v1.19.6: the headscale Caddy site must be installable on a
+    # domain-only install (SYNAPSE_DOMAIN, no SYNAPSE_BASE_DOMAIN).
+    # Before, the bootstrap gated this on SYNAPSE_BASE_DOMAIN, so
+    # headscale.<domain> fell into the on-demand catch-all, tls_ask
+    # refused it, and `tailscale up` on the remote VPS hung on the
+    # TLS handshake. The function derives the host from
+    # SYNAPSE_HEADSCALE_DOMAIN; assert it renders a real block.
+    detect::has_caddy() { return 0; }
+    cat >"$SYN_MOCK_BIN/fakereload" <<'EOF2'
+#!/usr/bin/env bash
+exit 0
+EOF2
+    chmod +x "$SYN_MOCK_BIN/fakereload"
+    unset SYNAPSE_BASE_DOMAIN
+    SYNAPSE_HEADSCALE_DOMAIN=headscale.synapsepanel.com \
+    SYNAPSE_ACME_EMAIL=admin@synapsepanel.com \
+    CADDY_FILE="$CADDY_FILE" \
+    CADDY_RELOAD="$SYN_MOCK_BIN/fakereload" \
+        caddy::install_headscale_block
+    [ -f "$CADDY_FILE" ]
+    # The headscale host is present as a site block (non-comment).
+    run bash -c "grep -v '^[[:space:]]*#' '$CADDY_FILE' | grep -c 'headscale.synapsepanel.com'"
+    [ "$status" -eq 0 ]
+    [ "$output" -ge 1 ]
+    # And it reverse-proxies the in-network headscale service.
+    run grep -c "synapse-headscale" "$CADDY_FILE"
+    [ "$output" -ge 1 ]
+}
+
+@test "install_headscale_block: no-op when neither base nor headscale domain set" {
+    detect::has_caddy() { return 0; }
+    unset SYNAPSE_BASE_DOMAIN SYNAPSE_HEADSCALE_DOMAIN
+    run caddy::install_headscale_block
+    [ "$status" -eq 0 ]
+    [ ! -s "$CADDY_FILE" ] || ! grep -q headscale "$CADDY_FILE"
+}

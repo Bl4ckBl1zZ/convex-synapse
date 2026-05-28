@@ -418,9 +418,19 @@ headscale::bootstrap() {
     fi
 
     # 9. Caddy block -------------------------------------------------
-    # Only relevant in TLS mode with a base domain — without a base
-    # domain we have nothing to put in front of the proxy.
-    if [[ -n "${SYNAPSE_BASE_DOMAIN:-}" ]] && (( ${NO_TLS:-0} == 0 )); then
+    # v1.19.6: install whenever we're in TLS mode (server_url is
+    # https), NOT only when a base domain is set. The headscale
+    # subdomain derives from SYNAPSE_DOMAIN in v1.19+, so a
+    # domain-only install (no wildcard base) STILL needs its own
+    # Caddy site. Without it, headscale.<domain> falls into the
+    # on-demand TLS catch-all, /v1/internal/tls_ask refuses the cert
+    # (it only approves real deployment subdomains — and refuses
+    # everything when no base domain is configured), no cert issues,
+    # and `tailscale up` on the remote VPS hangs forever on the TLS
+    # handshake. caddy::install_headscale_block self-guards on a
+    # missing hostname, so this is safe even if neither domain var
+    # is set.
+    if (( ${NO_TLS:-0} == 0 )) && [[ "$server_url" == https://* ]]; then
         if declare -F caddy::install_headscale_block >/dev/null; then
             caddy::install_headscale_block || ui::warn \
                 "caddy::install_headscale_block failed — Headscale is up but not fronted by Caddy"
