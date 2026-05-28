@@ -222,6 +222,10 @@ type SetupOpts struct {
 	// crypto_disabled, mirroring the production "operator forgot to
 	// set SYNAPSE_STORAGE_KEY" path.
 	WithCrypto bool
+	// InstallAgentScriptPath points GET /v1/install_agent/script at a
+	// test file. Empty leaves the handler at its "/install-agent.sh"
+	// default (absent in the test env → 503).
+	InstallAgentScriptPath string
 }
 
 // stubResolverFunc adapts a closure to api.HostDomainResolver.
@@ -340,15 +344,16 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		BackendProbe:          opts.BackendProbe,
 		// Bloco 9 — desired/observed state on by default in tests (matches the
 		// production default). Apply is never enabled.
-		EnableDesiredState:  true,
-		EnableObservedState: true,
-		ConvexEnv:           opts.ConvexEnv,
-		HeadscaleServerURL:  opts.HeadscaleServerURL,
-		Headscale:           opts.Headscale,
-		HeadscaleDomain:     opts.HeadscaleDomain,
-		HeadscaleURL:        opts.HeadscaleURL,
-		HeadscaleAPIKey:     opts.HeadscaleAPIKey,
-		HostDomain:          opts.HostDomain,
+		EnableDesiredState:     true,
+		EnableObservedState:    true,
+		ConvexEnv:              opts.ConvexEnv,
+		HeadscaleServerURL:     opts.HeadscaleServerURL,
+		Headscale:              opts.Headscale,
+		HeadscaleDomain:        opts.HeadscaleDomain,
+		HeadscaleURL:           opts.HeadscaleURL,
+		HeadscaleAPIKey:        opts.HeadscaleAPIKey,
+		HostDomain:             opts.HostDomain,
+		InstallAgentScriptPath: opts.InstallAgentScriptPath,
 	}
 
 	// HA wiring (only when SetupHA was called). The crypto box is a

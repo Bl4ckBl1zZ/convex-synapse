@@ -121,3 +121,11 @@ setup() {
         false
     fi
 }
+
+@test "compose: synapse-api mounts install-agent.sh read-only (v1.19.4 remote-hosts one-liner)" {
+    # GET /v1/install_agent/script serves this file for the Remote
+    # Hosts one-liner. Without the mount the endpoint 503s and the
+    # `curl .../v1/install_agent/script | sudo bash` paste fails.
+    run grep -E '^\s*-\s*\./install-agent\.sh:/install-agent\.sh:ro\s*$' "$REPO_ROOT/docker-compose.yml"
+    [ "$status" -eq 0 ]
+}

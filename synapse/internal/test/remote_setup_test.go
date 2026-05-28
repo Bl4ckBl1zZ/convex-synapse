@@ -101,7 +101,7 @@ func TestRemoteSetup_HappyPath(t *testing.T) {
 	if resp.HeadscaleServerURL != "https://headscale.example.com" {
 		t.Errorf("headscaleServerUrl: got %q", resp.HeadscaleServerURL)
 	}
-	if !strings.Contains(resp.OneLiner, "install-agent.sh") ||
+	if !strings.Contains(resp.OneLiner, "/v1/install_agent/script") ||
 		!strings.Contains(resp.OneLiner, "--headscale-auth=hs-key-xyz") ||
 		!strings.Contains(resp.OneLiner, "--adoption-token="+resp.AdoptionToken) ||
 		!strings.Contains(resp.OneLiner, "--control-url=https://synapsepanel.example.com") {

@@ -214,6 +214,13 @@ services:
       # This mount is unavoidable for the v0 architecture; the alternative is
       # rootless docker-in-docker, which is out of scope.
       - /var/run/docker.sock:/var/run/docker.sock
+      # install-agent.sh served at GET /v1/install_agent/script (v1.19.4+).
+      # The Remote Hosts one-liner curls that path; without the script
+      # mounted, the endpoint 503s. Read-only — the api only reads it.
+      # The file ships in the repo + is rsync'd into INSTALL_DIR by the
+      # installer, so the relative ./install-agent.sh resolves next to
+      # this compose file.
+      - ./install-agent.sh:/install-agent.sh:ro
     extra_hosts:
       # host-gateway is a docker 20.10+ magic alias the daemon expands
       # at container-create time to the host's bridge IP. Lets the

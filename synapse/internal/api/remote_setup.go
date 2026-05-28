@@ -137,13 +137,16 @@ func (h *HostsHandler) createRemoteSetup(w http.ResponseWriter, r *http.Request)
 	}
 
 	// 3) Compose the one-liner. control-url is the EXTERNAL Synapse
-	//    origin (h.PublicURL) — install-agent.sh fetches the install
-	//    script AND POSTs the register against the same URL. The
-	//    `bash -s --` form lets us pass flags through `curl | sudo
-	//    bash` without bash interpreting them as its own.
+	//    origin (h.PublicURL) — install-agent.sh is fetched from
+	//    /v1/install_agent/script (served by the api + routed through
+	//    Caddy's /v1/* rule; the bare /install-agent.sh path would
+	//    land on the Next.js dashboard and 404 — the v1.18→v1.19
+	//    gap). The register POSTs against the same origin. The
+	//    `bash -s --` form passes flags through `curl | sudo bash`
+	//    without bash claiming them as its own.
 	controlURL := h.PublicURL
 	oneLiner := fmt.Sprintf(
-		"curl -fsSL %s/install-agent.sh | sudo bash -s -- --control-url=%s --headscale-auth=%s --adoption-token=%s",
+		"curl -fsSL %s/v1/install_agent/script | sudo bash -s -- --control-url=%s --headscale-auth=%s --adoption-token=%s",
 		controlURL, controlURL, pak.Key, adoptionPlain,
 	)
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -39,12 +40,50 @@ type InstallAgentHandler struct {
 	// in the config response, so install-agent.sh can refuse early
 	// instead of 503'ing on the encrypt step inside register.
 	CryptoConfigured bool
+	// ScriptPath is the on-disk location of install-agent.sh inside
+	// the synapse-api container (mounted read-only via
+	// docker-compose). The /v1/install_agent/script route serves its
+	// bytes so the dashboard one-liner can `curl <PublicURL>/v1/
+	// install_agent/script | sudo bash`. Empty → defaults to
+	// "/install-agent.sh" (the compose mount target). Served under
+	// /v1 so Caddy routes it to the api without a routing change —
+	// the root path /install-agent.sh would land on the dashboard
+	// (Next.js) and 404, the v1.18→v1.19 gap this fixes.
+	ScriptPath string
 }
+
+// defaultInstallAgentScriptPath is the compose mount target for
+// install-agent.sh inside the synapse-api container.
+const defaultInstallAgentScriptPath = "/install-agent.sh"
 
 func (h *InstallAgentHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/config", h.config)
+	r.Get("/script", h.script)
 	return r
+}
+
+// script serves the install-agent.sh bytes. Public + unauth: the
+// new VPS has nothing but the operator-supplied --control-url when
+// it runs `curl <url>/v1/install_agent/script | sudo bash`. The
+// script itself carries no secrets — the tokens are passed as flags
+// by the dashboard one-liner, never baked into the script.
+func (h *InstallAgentHandler) script(w http.ResponseWriter, r *http.Request) {
+	path := h.ScriptPath
+	if path == "" {
+		path = defaultInstallAgentScriptPath
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		logErr("install_agent: read script", err)
+		writeError(w, http.StatusServiceUnavailable, "install_agent_script_unavailable",
+			"install-agent.sh is not available on the control plane — ensure docker-compose mounts it into synapse-api")
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 // agentInstallConfig is the install-agent.sh bootstrap payload.

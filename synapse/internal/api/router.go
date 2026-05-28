@@ -196,6 +196,12 @@ type RouterDeps struct {
 	// `headscale.<BaseDomain>` because the dashboard host lives
 	// outside the deployments wildcard.
 	HostDomain string
+	// InstallAgentScriptPath is where install-agent.sh is mounted in
+	// the synapse-api container (docker-compose ro bind mount).
+	// GET /v1/install_agent/script serves its bytes for the Remote
+	// Hosts one-liner. Empty → handler defaults to "/install-agent.sh".
+	// Tests inject a temp file path.
+	InstallAgentScriptPath string
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -401,6 +407,7 @@ func NewRouter(d RouterDeps) http.Handler {
 			AgentDownloadBase:  "https://github.com/" + d.GitHubRepo + "/releases/latest/download",
 			AgentVersion:       d.Version,
 			CryptoConfigured:   d.Crypto != nil,
+			ScriptPath:         d.InstallAgentScriptPath,
 		}
 		r.Mount("/install_agent", installAgentH.Routes())
 		// CLI latest version probe (v1.9.4+). Public for the same reason
