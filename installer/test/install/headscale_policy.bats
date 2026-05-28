@@ -18,6 +18,22 @@ load "../helpers/load"
     [ "$status" -eq 0 ]
 }
 
+@test "headscale.policy.hujson tag owners use the user@ format (Headscale 0.28 policy v2)" {
+    # Regression for v1.19.0/.1: bare "synapse" as a tagOwner is
+    # rejected by Headscale 0.28's policy v2 parser ("Invalid Owner
+    # ... an alias must be a user (containing @), group:, or tag:")
+    # and the container crash-loops, so the API key is never minted
+    # and Remote Hosts stays NOT CONFIGURED. Owners MUST be "synapse@".
+    local tmpl="$INSTALLER_DIR/templates/headscale.policy.hujson"
+    # The owner value must be the @-suffixed user form.
+    run grep -F '"synapse@"' "$tmpl"
+    [ "$status" -eq 0 ]
+    # And the bare form (quote-delimited, no @) must NOT appear as an
+    # owner. Match "synapse" immediately followed by a closing quote.
+    run grep -E '\["synapse"\]' "$tmpl"
+    [ "$status" -ne 0 ]
+}
+
 @test "headscale.policy.hujson allows tag:synapse-control → tag:synapse-remote:22" {
     local tmpl="$INSTALLER_DIR/templates/headscale.policy.hujson"
     # Multi-line hujson — read the file and assert both sides of the
@@ -39,4 +55,51 @@ load "../helpers/load"
     [ "$status" -ne 0 ]
     run grep -F '"dst":    ["*:*"]' "$tmpl"
     [ "$status" -ne 0 ]
+}
+
+@test "headscale::render_config self-heals a poisoned v1.19.0/.1 policy file" {
+    # An existing policy.hujson carrying the broken bare-user tagOwner
+    # MUST be rewritten from the (fixed) template — otherwise an
+    # already-poisoned install can never recover, even via a
+    # dashboard-driven re-Configure. Operator-customized policies
+    # (no broken token) are left untouched by the sibling test below.
+    source "$INSTALLER_DIR/install/headscale.sh"
+    # Minimal stubs so render_config runs without caddy/docker.
+    eval 'caddy::_render() { printf "server_url: x\n"; }'
+    eval 'detect::sudo_cmd() { printf ""; }'
+    eval 'ui::warn() { :; }'
+    eval 'ui::fail() { :; }'
+    INSTALL_DIR="$BATS_TEST_TMPDIR/install"
+    INSTALLER_TEMPLATES="$INSTALLER_DIR/templates"
+    mkdir -p "$INSTALL_DIR/headscale"
+    # Seed the broken policy.
+    cat > "$INSTALL_DIR/headscale/policy.hujson" <<'POL'
+{ "tagOwners": { "tag:synapse-control": ["synapse"] }, "acls": [] }
+POL
+    run headscale::render_config
+    [ "$status" -eq 0 ]
+    # The broken token is gone; the @-form is present.
+    run grep -F '"synapse@"' "$INSTALL_DIR/headscale/policy.hujson"
+    [ "$status" -eq 0 ]
+    run grep -E '\["synapse"\]' "$INSTALL_DIR/headscale/policy.hujson"
+    [ "$status" -ne 0 ]
+}
+
+@test "headscale::render_config leaves an operator-customized policy untouched" {
+    source "$INSTALLER_DIR/install/headscale.sh"
+    eval 'caddy::_render() { printf "server_url: x\n"; }'
+    eval 'detect::sudo_cmd() { printf ""; }'
+    eval 'ui::warn() { :; }'
+    eval 'ui::fail() { :; }'
+    INSTALL_DIR="$BATS_TEST_TMPDIR/install2"
+    INSTALLER_TEMPLATES="$INSTALLER_DIR/templates"
+    mkdir -p "$INSTALL_DIR/headscale"
+    # A custom policy with a proper @-owner and a distinctive marker.
+    cat > "$INSTALL_DIR/headscale/policy.hujson" <<'POL'
+{ "tagOwners": { "tag:custom": ["alice@"] }, "acls": [], "_marker": "keep-me" }
+POL
+    run headscale::render_config
+    [ "$status" -eq 0 ]
+    run grep -F 'keep-me' "$INSTALL_DIR/headscale/policy.hujson"
+    [ "$status" -eq 0 ]
 }

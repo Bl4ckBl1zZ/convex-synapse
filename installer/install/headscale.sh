@@ -218,6 +218,22 @@ headscale::render_config() {
     if [[ ! -e "$policy_out" && -r "$policy_src" ]]; then
         cp "$policy_src" "$policy_out"
         chmod 0644 "$policy_out"
+    elif [[ -e "$policy_out" && -r "$policy_src" ]]; then
+        # v1.19.2 self-heal: v1.19.0/.1 shipped a policy whose tag
+        # owners were the bare user form `["synapse"]`, which
+        # Headscale 0.28's policy v2 parser rejects ("Invalid Owner")
+        # — the container crash-loops and Remote Hosts never goes
+        # live. render_config normally NEVER overwrites an
+        # operator-editable policy, but this exact broken pattern
+        # can only have come from our shipped default, so rewriting
+        # it is safe (and the only way a dashboard-driven re-Configure
+        # can fix an already-poisoned install). We match the precise
+        # broken token so any operator customization is left alone.
+        if grep -qE '\["synapse"\]' "$policy_out"; then
+            ui::warn "Headscale: migrating broken v1.19.0/.1 tag-owner policy (\"synapse\" → \"synapse@\")"
+            cp "$policy_src" "$policy_out"
+            chmod 0644 "$policy_out"
+        fi
     fi
 }
 

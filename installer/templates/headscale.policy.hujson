@@ -25,9 +25,14 @@
 // container. The installer never overwrites an existing policy file
 // (see headscale::render_config in installer/install/headscale.sh).
 {
+  // Headscale 0.28 policy v2: tag owners MUST be a user reference
+  // ending in "@" (Headscale users have no domain, so it's the bare
+  // name + "@"), a "group:" alias, or a "tag:". A bare "synapse"
+  // is rejected at startup with "Invalid Owner" and the container
+  // crash-loops. v1.19.0/.1 shipped the bare form; v1.19.2 fixed it.
   "tagOwners": {
-    "tag:synapse-control": ["synapse"],
-    "tag:synapse-remote":  ["synapse"]
+    "tag:synapse-control": ["synapse@"],
+    "tag:synapse-remote":  ["synapse@"]
   },
   "acls": [
     // Control plane → remote hosts, SSH only.
