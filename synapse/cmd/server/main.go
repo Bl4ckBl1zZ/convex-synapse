@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/Iann29/synapse/internal/api"
 	"github.com/Iann29/synapse/internal/auth"
@@ -27,8 +28,10 @@ import (
 	dockerprov "github.com/Iann29/synapse/internal/docker"
 	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/health"
+	"github.com/Iann29/synapse/internal/hostssh"
 	"github.com/Iann29/synapse/internal/provisioner"
 	"github.com/Iann29/synapse/internal/proxy"
+	"github.com/Iann29/synapse/internal/sshprov"
 )
 
 // Version is overridden at build time via -ldflags.
@@ -261,6 +264,34 @@ func run() error {
 		headscaleClient = headscale.New(cfg.HeadscaleURL, cfg.HeadscaleAPIKey)
 	}
 
+	// Remote Hosts SSH client (v1.18+). Only constructed when crypto is
+	// available — the loader needs the SecretBox to decrypt
+	// hosts.ssh_privkey_encrypted. nil leaves the worker's remote
+	// dispatch path disabled (any job whose host has is_remote=true is
+	// markFailed'd with a clear hint).
+	var sshClient *sshprov.Client
+	if secretBox != nil {
+		secrets := secretBox
+		loader := func(ctx context.Context, hostID string) (ssh.Signer, error) {
+			pemBytes, err := hostssh.LoadPrivKey(ctx, pool, secrets, hostID)
+			if err != nil {
+				return nil, err
+			}
+			signer, perr := ssh.ParsePrivateKey(pemBytes)
+			// Defense-in-depth: scrub the buffer immediately. Go's GC
+			// won't, and the parsed signer doesn't hold a reference to
+			// the source bytes.
+			for i := range pemBytes {
+				pemBytes[i] = 0
+			}
+			if perr != nil {
+				return nil, fmt.Errorf("parse host %s private key: %w", hostID, perr)
+			}
+			return signer, nil
+		}
+		sshClient = sshprov.NewClient(loader)
+	}
+
 	handler := api.NewRouter(api.RouterDeps{
 		Logger:                logger,
 		DB:                    pool,
@@ -333,9 +364,12 @@ func run() error {
 				ProxyEnabled: cfg.ProxyEnabled,
 				BaseDomain:   cfg.BaseDomain,
 			},
-			Logger:    logger,
-			ConvexEnv: convexEnvClient,
-			Crypto:    workerCrypto, // literal-nil interface when HA is off — single-replica jobs don't read it
+			Logger:        logger,
+			ConvexEnv:     convexEnvClient,
+			Crypto:        workerCrypto, // literal-nil interface when HA is off — single-replica jobs don't read it
+			SSH:           sshClient,    // nil → remote dispatch disabled per dockerForJob
+			BackendImage:  cfg.BackendImage,
+			DockerNetwork: cfg.DockerNetwork,
 		}
 		go pworker.Run(rootCtx)
 	}
