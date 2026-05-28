@@ -31,6 +31,15 @@ type remoteSetupBundleResp struct {
 func stubHeadscale(t *testing.T, callsPtr *int) (*httptest.Server, *headscale.Client) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// v1.19.3: CreatePreAuthKey resolves the username → numeric
+		// user ID via ListUsers (GET /api/v1/user) before minting,
+		// to satisfy Headscale 0.28's uint64 `user` field.
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/user" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"users":[{"id":"1","name":"synapse","createdAt":"2024-01-01T00:00:00Z"}]}`))
+			return
+		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/preauthkey" {
 			if callsPtr != nil {
 				*callsPtr++

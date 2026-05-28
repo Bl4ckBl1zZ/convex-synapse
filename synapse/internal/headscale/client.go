@@ -131,8 +131,16 @@ func (c *Client) CreatePreAuthKey(ctx context.Context, opts CreatePreAuthKeyOpts
 	if expiration.IsZero() {
 		expiration = time.Now().Add(defaultExpiration)
 	}
+	// Headscale 0.28 changed the preauthkey `user` field from the
+	// username string to the numeric user ID (uint64). Sending
+	// "synapse" now 400s with `invalid value for uint64 field user`.
+	// Resolve the name → ID before the call. v1.19.3 fix.
+	userID, err := c.resolveUserID(ctx, opts.User)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
-		"user":       opts.User,
+		"user":       userID,
 		"reusable":   opts.Reusable,
 		"ephemeral":  opts.Ephemeral,
 		"expiration": expiration.UTC().Format(time.RFC3339),
@@ -152,11 +160,51 @@ func (c *Client) CreatePreAuthKey(ctx context.Context, opts CreatePreAuthKeyOpts
 	return &wire.PreAuthKey, nil
 }
 
+// resolveUserID maps a Headscale username to its numeric user ID
+// (uint64, surfaced as a string). Headscale 0.28's preauthkey + node
+// endpoints take the numeric ID in the `user` field/param, NOT the
+// username — a v0.28 API change that older Synapse builds didn't
+// track. An all-digit input is assumed to already be an ID and
+// passed through unchanged; an empty input returns empty (the
+// "all users" wildcard for list endpoints).
+func (c *Client) resolveUserID(ctx context.Context, user string) (string, error) {
+	if user == "" || isAllDigits(user) {
+		return user, nil
+	}
+	users, err := c.ListUsers(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, u := range users {
+		if u.Name == user {
+			return u.ID, nil
+		}
+	}
+	return "", fmt.Errorf("headscale: user %q not found", user)
+}
+
+// isAllDigits reports whether s is a non-empty run of ASCII digits.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // ExpirePreAuthKey invalidates a pre-auth key by its server-assigned ID.
 // Headscale v0.28 expects the body shape {user, key} where `key` is the
 // numeric ID (named "key" for historical reasons in the proto).
 func (c *Client) ExpirePreAuthKey(ctx context.Context, user, id string) error {
-	body := map[string]any{"user": user, "key": id}
+	userID, err := c.resolveUserID(ctx, user)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{"user": userID, "key": id}
 	return c.do(ctx, "expire-preauthkey", http.MethodPost, "/api/v1/preauthkey/expire", body, nil)
 }
 
@@ -168,9 +216,13 @@ func (c *Client) ListPreAuthKeys(ctx context.Context, user string) ([]PreAuthKey
 	if err != nil {
 		return nil, err
 	}
+	userID, err := c.resolveUserID(ctx, user)
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
-	if user != "" {
-		q.Set("user", user)
+	if userID != "" {
+		q.Set("user", userID)
 	}
 	u.RawQuery = q.Encode()
 	var wire struct {
@@ -192,9 +244,13 @@ func (c *Client) ListNodes(ctx context.Context, user string) ([]Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	userID, err := c.resolveUserID(ctx, user)
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
-	if user != "" {
-		q.Set("user", user)
+	if userID != "" {
+		q.Set("user", userID)
 	}
 	u.RawQuery = q.Encode()
 	var wire struct {

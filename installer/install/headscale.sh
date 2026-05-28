@@ -531,6 +531,29 @@ headscale::_control_already_joined() {
     [[ -n "$cs" && "$cs" == "$server_url" ]]
 }
 
+# headscale::_user_id <user>
+# Resolves a Headscale username to its numeric user ID by parsing the
+# `headscale users list` table. Headscale 0.28's CLI + API take the
+# numeric ID (not the name) for preauthkey/node ops.
+headscale::_user_id() {
+    local user="${1:-$HEADSCALE_DEFAULT_USER}"
+    local out
+    out="$(headscale::_compose exec -T headscale headscale users list 2>/dev/null || true)"
+    # Pipe-delimited table: `ID | Name | Username | Email | Created`.
+    # Match the row whose Name (col 2) OR Username (col 3) equals the
+    # requested user, echo its ID (col 1). Same parser shape as
+    # ensure_user. Empty output when not found.
+    printf '%s\n' "$out" | awk -F'|' -v u="$user" '
+        NR == 1 { next }
+        /^-+/   { next }
+        {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
+            if ($2 == u || $3 == u) { print $1; exit }
+        }'
+}
+
 # headscale::_mint_control_preauth_key
 # Mints a single-use, NOT-ephemeral pre-auth key tagged tag:synapse-control
 # inside the headscale container. Echoes the plaintext key on stdout.
@@ -538,10 +561,20 @@ headscale::_control_already_joined() {
 headscale::_mint_control_preauth_key() {
     # 1h expiry — long enough for `tailscale up` to claim it, short
     # enough that a forgotten key can't be replayed.
+    #
+    # Headscale 0.28's `preauthkeys create --user` takes a NUMERIC
+    # user ID, not the username (`--user uint`). Resolve the name → ID
+    # first; passing "synapse" 400s with "invalid syntax". v1.19.3 fix.
+    local user_id
+    user_id="$(headscale::_user_id "$HEADSCALE_DEFAULT_USER")"
+    if [[ -z "$user_id" ]]; then
+        ui::fail "headscale: could not resolve user id for '${HEADSCALE_DEFAULT_USER}'"
+        return 2
+    fi
     local raw
     if ! raw="$(headscale::_compose exec -T headscale \
             headscale preauthkeys create \
-            --user "$HEADSCALE_DEFAULT_USER" \
+            --user "$user_id" \
             --tags "$_CONTROL_TAG" \
             --expiration 1h 2>&1)"; then
         ui::fail "headscale preauthkeys create (control) failed: ${raw}"

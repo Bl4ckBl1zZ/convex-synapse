@@ -101,3 +101,32 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "https://new.example.org" ]
 }
+
+@test "headscale::_user_id resolves username to numeric ID from the 0.28 users-list table" {
+    # Headscale 0.28's preauthkey CLI/API takes the numeric user ID,
+    # not the name. _user_id parses `headscale users list` to map
+    # synapse → 1. Regression for the v1.19.0/.1/.2 mint failure
+    # ("invalid value for uint64 field user: synapse").
+    # Stub _compose so `headscale users list` returns the 0.28 table.
+    eval 'headscale::_compose() {
+        cat <<TBL
+ID | Name | Username | Email | Created
+1  |      | synapse  |       | 2026-05-28 19:23:36
+TBL
+    }'
+    run headscale::_user_id synapse
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ]
+}
+
+@test "headscale::_user_id is empty when the user is absent" {
+    eval 'headscale::_compose() {
+        cat <<TBL
+ID | Name | Username | Email | Created
+1  |      | other    |       | 2026-05-28 19:23:36
+TBL
+    }'
+    run headscale::_user_id synapse
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}

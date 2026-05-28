@@ -14,6 +14,13 @@ func TestCreatePreAuthKey_HappyPath(t *testing.T) {
 	var gotAuth, gotPath, gotCT string
 	var gotBody map[string]any
 	tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// v1.19.3: CreatePreAuthKey resolves the username → numeric
+		// user ID via ListUsers before the mint (Headscale 0.28 API).
+		if r.URL.Path == "/api/v1/user" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"users":[{"id":"1","name":"synapse"}]}`))
+			return
+		}
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
 		gotCT = r.Header.Get("Content-Type")
@@ -42,8 +49,8 @@ func TestCreatePreAuthKey_HappyPath(t *testing.T) {
 	if gotCT != "application/json" {
 		t.Errorf("content-type: got %q", gotCT)
 	}
-	if gotBody["user"] != "synapse" {
-		t.Errorf("body.user: got %v", gotBody["user"])
+	if gotBody["user"] != "1" {
+		t.Errorf("body.user: got %v want resolved id \"1\"", gotBody["user"])
 	}
 	if _, ok := gotBody["expiration"]; !ok {
 		t.Errorf("body.expiration should be set (default 1h)")
@@ -52,6 +59,11 @@ func TestCreatePreAuthKey_HappyPath(t *testing.T) {
 
 func TestCreatePreAuthKey_EmptyKey_Errors(t *testing.T) {
 	tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/user" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"users":[{"id":"1","name":"synapse"}]}`))
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"preAuthKey":{"id":"42","key":""}}`))
 	}))
@@ -80,6 +92,11 @@ func TestCreatePreAuthKey_401(t *testing.T) {
 func TestListNodes_FiltersByUser(t *testing.T) {
 	var gotQuery string
 	tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/user" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"users":[{"id":"1","name":"synapse"}]}`))
+			return
+		}
 		gotQuery = r.URL.RawQuery
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"nodes":[{"id":"1","name":"vps-eu-1","ipAddresses":["100.64.0.5"]}]}`))
@@ -90,8 +107,8 @@ func TestListNodes_FiltersByUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(gotQuery, "user=synapse") {
-		t.Errorf("query: got %q", gotQuery)
+	if !strings.Contains(gotQuery, "user=1") {
+		t.Errorf("query: got %q want user=1 (resolved id)", gotQuery)
 	}
 	if len(nodes) != 1 || nodes[0].IPAddresses[0] != "100.64.0.5" {
 		t.Errorf("nodes: got %+v", nodes)
