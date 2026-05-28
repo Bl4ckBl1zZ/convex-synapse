@@ -423,6 +423,51 @@ setup::bootstrap() {
     exec "$target/setup.sh" "$@"
 }
 
+# setup::hydrate_env
+# Re-export persisted .env keys that later phases read from the
+# environment. On a fresh install phase_secrets exports them itself
+# while rendering .env; on a re-run phase_secrets is gated to
+# `[[ ! -f .env ]]` so it skips, leaving phase_install_headscale et
+# al staring at unset SYNAPSE_BASE_DOMAIN even though the value is
+# literally on disk. Hydrate the subset that downstream phases need.
+#
+# Operator-supplied env wins: if KEY is already set (CLI export or
+# leading `KEY=... setup.sh ...`), the persisted value is ignored —
+# the explicit override is the whole point of re-running.
+#
+# secrets::env_get is used instead of `source` because .env values
+# can contain characters (spaces, &, $, backticks) that the shell
+# would mis-parse; env_get reads one key with a quote-stripping
+# regex and never evaluates the value.
+setup::hydrate_env() {
+    local env_file="$INSTALL_DIR/.env"
+    [[ -f "$env_file" ]] || return 0
+    local key val count=0
+    for key in \
+        SYNAPSE_BASE_DOMAIN \
+        SYNAPSE_DOMAIN \
+        SYNAPSE_PUBLIC_URL \
+        SYNAPSE_PUBLIC_IP \
+        SYNAPSE_ACME_EMAIL \
+        SYNAPSE_HEADSCALE_URL \
+        SYNAPSE_HEADSCALE_SERVER_URL \
+        SYNAPSE_HEADSCALE_DOMAIN \
+        SYNAPSE_HEADSCALE_API_KEY
+    do
+        if [[ -n "${!key:-}" ]]; then
+            continue
+        fi
+        val="$(secrets::env_get "$env_file" "$key")"
+        if [[ -n "$val" ]]; then
+            export "$key=$val"
+            count=$((count + 1))
+        fi
+    done
+    if (( count > 0 )); then
+        ui::info "Hydrated $count vars from existing .env"
+    fi
+}
+
 # Source library files. We source ALL of them up-front so undefined
 # functions surface as runtime errors at the right moment, not deep
 # inside a phase.
@@ -941,7 +986,11 @@ phase_verify() {
     # who want a pre-baked demo deployment can re-run setup.sh with
     # SYNAPSE_VERIFY_KEEP=1 (keeps the demo + the self-test admin —
     # the wizard then short-circuits to /login).
-    local verify_args=()
+    # Production safety: --skip-if-installed makes verify::run a no-op
+    # when the database already contains users, so re-runs of setup.sh
+    # (e.g. --enable-headscale, --force, idempotent re-install) never
+    # TRUNCATE operator data. Fresh installs still get the full proof.
+    local verify_args=(--skip-if-installed)
     if [[ -n "${SYNAPSE_VERIFY_KEEP:-}" ]]; then
         verify_args+=(--keep-demo)
     fi
@@ -1190,6 +1239,7 @@ main() {
 
     source_libs
     acquire_lock
+    setup::hydrate_env
     phase_banner
     phase_wizard
     phase_autoinstall_docker

@@ -233,17 +233,27 @@ headscale::_wait_healthy() {
 # ---- user + API key -------------------------------------------------
 
 # headscale::ensure_user  creates the default user/namespace if it
-# doesn't exist. `headscale users list -o json | jq` is the canonical
-# probe; we shell out to grep so we don't require jq inside the
-# container (the headscale image is distroless).
+# doesn't exist. We parse `headscale users list` (plain-text table)
+# rather than `-o json | jq` because the headscale image is distroless
+# and ships no jq.
 headscale::ensure_user() {
     local user="${1:-$HEADSCALE_DEFAULT_USER}"
     local out
-    # `users list` exits 0 even when the user is missing; the absence
-    # signal is just empty output for that name. Plain-text output
-    # has the user name as the first column.
     out="$(headscale::_compose exec -T headscale headscale users list 2>/dev/null || true)"
-    if printf '%s\n' "$out" | awk -v u="$user" 'NR>1 && $2==u { found=1 } END { exit !found }'; then
+    # Headscale 0.28 format: `ID | Name | Username | Email | Created`.
+    # Pre-0.28 had `ID | Name | Created`. Match either Name (col 2) or
+    # Username (col 3) — both columns CAN carry the operator-supplied
+    # name depending on how the row was created.
+    if printf '%s\n' "$out" | awk -F'|' -v u="$user" '
+        NR == 1 { next }            # header
+        /^-+/   { next }            # separator (if any)
+        {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
+            if ($2 == u || $3 == u) { found = 1; exit }
+        }
+        END { exit !found }
+    '; then
         return 0
     fi
     headscale::_compose exec -T headscale headscale users create "$user" >/dev/null

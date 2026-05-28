@@ -124,7 +124,7 @@ verify::check_cli_creds() {
     printf '%s' "$convex_url"
 }
 
-# verify::run <synapse_url> [--keep-demo] [--skip-cli-url-check]
+# verify::run <synapse_url> [--keep-demo] [--skip-cli-url-check] [--skip-if-installed]
 # Full happy-path self-test. Registers a one-shot admin, creates a
 # team, project, deployment, waits for running, validates the CLI
 # credentials URL is publicly reachable. Tears the demo down at the
@@ -135,17 +135,52 @@ verify::check_cli_creds() {
 # operator ran setup.sh with --no-tls and accepts that the install
 # is local-only). Without the flag, a loopback URL is treated as a
 # misconfiguration and the install aborts.
+#
+# --skip-if-installed: PRODUCTION SAFETY. Probe synapse-postgres for
+# existing users BEFORE running the self-test. If users.count > 0,
+# the install is already carrying operator data — return 0 immediately
+# (no-op) instead of executing the destructive TRUNCATE users CASCADE
+# cleanup that follows the self-test on success. setup.sh re-runs
+# (--enable-headscale, --force, idempotent re-install via main())
+# all re-enter phase_verify and MUST NOT wipe production data. The
+# probe is fail-open: if it errors (docker not running, postgres
+# unreachable, query glitch) we assume a fresh install and run the
+# self-test normally so the first-install green-light proof still
+# fires.
 verify::run() {
     local url="$1"
     shift || true
-    local keep=0 skip_url=0
+    local keep=0 skip_url=0 skip_if_installed=0
     while (( $# > 0 )); do
         case "$1" in
             --keep-demo) keep=1 ;;
             --skip-cli-url-check) skip_url=1 ;;
+            --skip-if-installed) skip_if_installed=1 ;;
         esac
         shift
     done
+
+    if (( skip_if_installed )); then
+        # Probe synapse-postgres via the same docker exec pattern as
+        # the TRUNCATE block below (POSTGRES_USER/POSTGRES_DB env
+        # overrides + VERIFY_DOCKER for test injection). -tAq strips
+        # headers/alignment so we get a bare integer on stdout.
+        local probe_user probe_db probe_docker users_count
+        probe_user="${POSTGRES_USER:-synapse}"
+        probe_db="${POSTGRES_DB:-synapse}"
+        probe_docker="${VERIFY_DOCKER:-docker}"
+        if users_count="$("$probe_docker" exec synapse-postgres \
+                psql -U "$probe_user" -d "$probe_db" -tAq -v ON_ERROR_STOP=1 -c \
+                "SELECT COUNT(*) FROM users;" 2>/dev/null)"; then
+            users_count="${users_count//[[:space:]]/}"
+            if [[ "$users_count" =~ ^[0-9]+$ ]] && (( users_count > 0 )); then
+                ui::info "Self-test: skipping (install already has users — protecting prod data)"
+                return 0
+            fi
+        fi
+        # Fall through to full self-test on count==0 or probe error.
+    fi
+
     local email password token team pid dep convex_url
     email="${VERIFY_EMAIL:-admin-$(date +%s)@synapse.local}"
     password="${VERIFY_PASSWORD:-$("${VERIFY_OPENSSL:-openssl}" rand -hex 16)}"

@@ -183,3 +183,112 @@ EOF
     assert_success
     assert_output --partial "Self-test passed"
 }
+
+# ---- run --skip-if-installed (v1.18.5 prod-safety gate) ------------
+#
+# verify::run --skip-if-installed probes synapse-postgres for users
+# BEFORE running the destructive self-test + TRUNCATE. The gate has
+# four observable branches we pin down here:
+#   1. users > 0   → skip (no curl ever called)
+#   2. users == 0  → proceed with full self-test
+#   3. probe fails → fail-open, proceed with full self-test
+#   4. flag absent → legacy behaviour: TRUNCATE still fires
+
+# Reusable state-machine curl stub matching the v0.6 happy path. The
+# heredoc is double-quoted so $SYN_MOCK_CALLS expands at write time;
+# runtime $vars inside the script are backslash-escaped.
+_verify_install_curl_stub() {
+    cat >"$SYN_MOCK_BIN/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+    case "\$arg" in http*) url="\$arg" ;; esac
+done
+printf '%s\n' "\$@" >>"$SYN_MOCK_CALLS/curl"
+case "\$url" in
+    *auth/register)       echo '{"accessToken":"tok-self","refreshToken":"r"}' ;;
+    *teams/create_team)   echo '{"slug":"default","name":"Default","id":"t-1"}' ;;
+    *create_project)      echo '{"projectId":"p-1","projectSlug":"demo","project":{"id":"p-1","name":"Demo"}}' ;;
+    *create_deployment)   echo '{"id":"d-1","name":"happy-cat-self","status":"provisioning"}' ;;
+    */deployments/happy-cat-self/cli_credentials)
+                          echo '{"convexUrl":"https://synapse.example.com/d/happy-cat-self","adminKey":"k","deploymentName":"happy-cat-self"}' ;;
+    */deployments/happy-cat-self/delete)
+                          echo '{}' ;;
+    */deployments/happy-cat-self)
+                          echo '{"status":"running","name":"happy-cat-self"}' ;;
+    *)                    echo '{}'; exit 1 ;;
+esac
+exit 0
+EOF
+    chmod +x "$SYN_MOCK_BIN/curl"
+    cat >"$SYN_MOCK_BIN/openssl" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1 $2" == "rand -hex" ]] && { echo "fixed-pw-fixture"; exit 0; }
+exit 1
+EOF
+    chmod +x "$SYN_MOCK_BIN/openssl"
+}
+
+@test "verify::run --skip-if-installed: skips when users.count > 0" {
+    # docker exec ... psql ... echoes a non-zero user count: prod data
+    # is present, so verify::run must early-return without touching
+    # the API. The mock_cmd-recorded $SYN_MOCK_CALLS/curl file acts as
+    # the sentinel — if it exists, the self-test path was entered.
+    mock_cmd docker 0 '3'
+    mock_cmd curl 0 '{}'
+    VERIFY_CURL="$SYN_MOCK_BIN/curl" \
+    VERIFY_DOCKER="$SYN_MOCK_BIN/docker" \
+        run verify::run http://localhost:8080 --skip-if-installed
+    assert_success
+    assert_output --partial "protecting prod data"
+    assert_file_not_exists "$SYN_MOCK_CALLS/curl"
+}
+
+@test "verify::run --skip-if-installed: runs full self-test when users.count == 0" {
+    # Fresh install: probe returns 0 → proceed. Full state-machine
+    # mock drives the happy path. The presence of $SYN_MOCK_CALLS/curl
+    # proves the self-test code path WAS entered.
+    mock_cmd docker 0 '0'
+    _verify_install_curl_stub
+    VERIFY_CURL="$SYN_MOCK_BIN/curl" \
+    VERIFY_OPENSSL="$SYN_MOCK_BIN/openssl" \
+    VERIFY_DOCKER="$SYN_MOCK_BIN/docker" \
+    VERIFY_EMAIL="self-test@x" \
+        run verify::run http://localhost:8080 --skip-if-installed --keep-demo
+    assert_success
+    assert_output --partial "Self-test passed"
+    assert_file_exists "$SYN_MOCK_CALLS/curl"
+}
+
+@test "verify::run --skip-if-installed: runs full self-test on psql failure (fail-open for fresh install)" {
+    # docker exec exits 1 (postgres unreachable, container missing,
+    # whatever). The fail-open contract says: assume fresh install,
+    # don't block the green-light proof. Self-test must still run.
+    mock_cmd docker 1 ''
+    _verify_install_curl_stub
+    VERIFY_CURL="$SYN_MOCK_BIN/curl" \
+    VERIFY_OPENSSL="$SYN_MOCK_BIN/openssl" \
+    VERIFY_DOCKER="$SYN_MOCK_BIN/docker" \
+    VERIFY_EMAIL="self-test@x" \
+        run verify::run http://localhost:8080 --skip-if-installed --keep-demo
+    assert_success
+    assert_output --partial "Self-test passed"
+    assert_file_exists "$SYN_MOCK_CALLS/curl"
+}
+
+@test "verify::run without --skip-if-installed: still truncates (legacy callers preserved)" {
+    # No --skip-if-installed and no --keep-demo → the legacy TRUNCATE
+    # users CASCADE block at the end of verify::run must still fire.
+    # We assert it by inspecting the docker mock's recorded argv.
+    mock_cmd docker 0 ''
+    _verify_install_curl_stub
+    VERIFY_CURL="$SYN_MOCK_BIN/curl" \
+    VERIFY_OPENSSL="$SYN_MOCK_BIN/openssl" \
+    VERIFY_DOCKER="$SYN_MOCK_BIN/docker" \
+    VERIFY_EMAIL="self-test@x" \
+        run verify::run http://localhost:8080
+    assert_success
+    assert_output --partial "Self-test passed"
+    run cat "$SYN_MOCK_CALLS/docker"
+    assert_output --partial "TRUNCATE users CASCADE;"
+}
