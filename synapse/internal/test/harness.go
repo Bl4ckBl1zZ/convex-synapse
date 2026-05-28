@@ -202,6 +202,15 @@ type SetupOpts struct {
 	// "Remote Hosts disabled" 503 path; tests that exercise the
 	// happy path point a *headscale.Client at an httptest stub.
 	Headscale *headscale.Client
+	// HeadscaleDomain / HeadscaleURL / HeadscaleAPIKey / HostDomain
+	// (v1.19+) mirror RouterDeps so the Admin → Remote Hosts GET
+	// handler can render configured/needs-restart/default-domain
+	// without the test poking at os.Getenv. Tests that don't exercise
+	// the headscale admin surface leave them all at the zero value.
+	HeadscaleDomain string
+	HeadscaleURL    string
+	HeadscaleAPIKey string
+	HostDomain      string
 
 	// WithCrypto wires a real *crypto.SecretBox into RouterDeps +
 	// makes h.Crypto available for round-trip assertions, WITHOUT
@@ -336,6 +345,10 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		ConvexEnv:           opts.ConvexEnv,
 		HeadscaleServerURL:  opts.HeadscaleServerURL,
 		Headscale:           opts.Headscale,
+		HeadscaleDomain:     opts.HeadscaleDomain,
+		HeadscaleURL:        opts.HeadscaleURL,
+		HeadscaleAPIKey:     opts.HeadscaleAPIKey,
+		HostDomain:          opts.HostDomain,
 	}
 
 	// HA wiring (only when SetupHA was called). The crypto box is a
@@ -964,6 +977,71 @@ func (h *Harness) SeedDeployment(projectID, name, depType, status string, isDefa
 		h.T.Fatalf("seed replica: %v", err)
 	}
 	return id
+}
+
+// SeedRemoteDeployment creates a NEW remote host row (is_remote=TRUE
+// + tailnet_addr) and a deployment pinned to it. Used by Phase 4
+// proxy tests to exercise the tailnet-IP upstream path without
+// running install-agent.sh against a real VPS.
+//
+// Returns (deploymentID, hostID). The host row uses a per-call
+// hostName + tailnetAddr to avoid colliding with prior tests in the
+// same fixture.
+func (h *Harness) SeedRemoteDeployment(
+	projectID, name, depType, status, creatorUserID string,
+	hostPort int, adminKey, tailnetAddr string,
+) (string, string) {
+	h.T.Helper()
+	if name == "" {
+		name = "remote-" + randHex(4)
+	}
+	if depType == "" {
+		depType = "dev"
+	}
+	if status == "" {
+		status = "running"
+	}
+	if adminKey == "" {
+		adminKey = "fake-admin-" + randHex(8)
+	}
+	if tailnetAddr == "" {
+		tailnetAddr = "100.64.0." + randHex(1) // small "random" within 100.64.0.0/24
+	}
+	hostName := "remote-host-" + randHex(4)
+	var hostID string
+	if err := h.DB.QueryRow(h.rootCtx, `
+		INSERT INTO hosts (name, provider, region, status, is_synapse_host,
+		                   is_remote, tailnet_addr, ssh_user, ssh_port)
+		VALUES ($1, 'remote-bats', '', 'online', FALSE,
+		        TRUE, $2, 'synapse-deployer', 22)
+		RETURNING id
+	`, hostName, tailnetAddr).Scan(&hostID); err != nil {
+		h.T.Fatalf("seed remote host: %v", err)
+	}
+	var id string
+	if err := h.DB.QueryRow(h.rootCtx, `
+		INSERT INTO deployments (project_id, name, deployment_type, status, host_port,
+		                          admin_key, instance_secret, is_default, creator_user_id,
+		                          deployment_url, container_id, host_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, $10, $11)
+		RETURNING id
+	`, projectID, name, depType, status, sqlNull(hostPort), adminKey,
+		"fake-secret-"+randHex(8), sqlNullStr(creatorUserID),
+		fmt.Sprintf("http://%s:%d", tailnetAddr, hostPort),
+		"fake-container-"+name, hostID).Scan(&id); err != nil {
+		h.T.Fatalf("seed remote deployment: %v", err)
+	}
+	replicaStatus := status
+	if status == "deleted" {
+		replicaStatus = "stopped"
+	}
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO deployment_replicas (deployment_id, replica_index, container_id, host_port, status)
+		VALUES ($1, 0, $2, $3, $4)
+	`, id, "fake-container-"+name, sqlNull(hostPort), replicaStatus); err != nil {
+		h.T.Fatalf("seed remote replica: %v", err)
+	}
+	return id, hostID
 }
 
 func sqlNull(i int) any {

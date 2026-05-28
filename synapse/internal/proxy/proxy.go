@@ -98,8 +98,13 @@ type domainEntry struct {
 // time the entry was minted. Replica order is the picker's preference
 // order (best replica first); the proxy retries down the slice on
 // connection error.
+//
+// v1.19+: cacheEntry also tracks whether the deployment lives on a
+// remote host so ResolveAllSite can refuse early (the remote
+// container only publishes 3210, not 3211).
 type cacheEntry struct {
 	replicas  []string
+	isRemote  bool
 	expiresAt time.Time
 }
 
@@ -159,11 +164,21 @@ func (r *Resolver) ResolveAll(ctx context.Context, name string) ([]string, error
 	r.mu.RUnlock()
 
 	// First: does the deployment exist and is it in a routable state?
-	var haEnabled bool
-	var depStatus string
-	err := r.DB.QueryRow(ctx,
-		`SELECT ha_enabled, status FROM deployments WHERE name = $1`, name,
-	).Scan(&haEnabled, &depStatus)
+	// Pull is_remote + tailnet_addr from the deployment's host row so
+	// the per-replica addressFor() picks the right upstream scheme
+	// (docker DNS for local, tailnet IP for remote).
+	var (
+		haEnabled   bool
+		depStatus   string
+		isRemote    bool
+		tailnetAddr *string
+	)
+	err := r.DB.QueryRow(ctx, `
+		SELECT d.ha_enabled, d.status, COALESCE(h.is_remote, FALSE), h.tailnet_addr
+		  FROM deployments d
+		  LEFT JOIN hosts h ON h.id = d.host_id
+		 WHERE d.name = $1
+	`, name).Scan(&haEnabled, &depStatus, &isRemote, &tailnetAddr)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("deployment %q not found", name)
 	}
@@ -172,6 +187,13 @@ func (r *Resolver) ResolveAll(ctx context.Context, name string) ([]string, error
 	}
 	if depStatus != "running" {
 		return nil, fmt.Errorf("deployment %q is %s, not running", name, depStatus)
+	}
+	// Remote deployments need a tailnet IP on the owning host. Without
+	// it, the proxy has nowhere to route — the install-agent.sh flow
+	// stamps tailnet_addr on register, so an empty value here means
+	// the host hasn't completed adoption.
+	if isRemote && (tailnetAddr == nil || *tailnetAddr == "") {
+		return nil, fmt.Errorf("deployment %q lives on a remote host with no tailnet address", name)
 	}
 
 	// Then: ordered list of running replicas. last_seen_active_at DESC
@@ -225,19 +247,22 @@ func (r *Resolver) ResolveAll(ctx context.Context, name string) ([]string, error
 		if anyReplica {
 			return nil, ErrNoReplicas
 		}
-		fallback, ferr := r.legacyAddress(ctx, name, haEnabled)
+		fallback, ferr := r.legacyAddress(ctx, name, haEnabled, isRemote, tailnetAddr)
 		if ferr != nil {
 			return nil, ErrNoReplicas
 		}
 		addrs = append(addrs, fallback)
 	}
 	for _, rr := range replicas {
-		if rr.hostPort == nil && !r.UseNetworkDNS {
-			// Replica still booting (no port yet) — skip; picker uses
-			// whichever sibling is up.
-			continue
+		if rr.hostPort == nil {
+			// Replica still booting (no port yet). For remote OR
+			// host-port mode we need the port to route at all;
+			// network-DNS mode falls back to the container DNS name.
+			if isRemote || !r.UseNetworkDNS {
+				continue
+			}
 		}
-		addrs = append(addrs, r.addressFor(name, rr.replicaIndex, haEnabled, rr.hostPort))
+		addrs = append(addrs, r.addressFor(name, rr.replicaIndex, haEnabled, rr.hostPort, isRemote, tailnetAddr))
 	}
 	if len(addrs) == 0 {
 		return nil, ErrNoReplicas
@@ -253,6 +278,7 @@ func (r *Resolver) ResolveAll(ctx context.Context, name string) ([]string, error
 	}
 	r.cache[name] = cacheEntry{
 		replicas:  append([]string(nil), addrs...),
+		isRemote:  isRemote,
 		expiresAt: time.Now().Add(ttl),
 	}
 	r.mu.Unlock()
@@ -266,8 +292,6 @@ func (r *Resolver) ResolveAll(ctx context.Context, name string) ([]string, error
 // "convex-<name>:3211". The cloud path is therefore left completely
 // untouched.
 //
-// Host-port mode returns ErrSiteUnsupported — 3211 isn't published on
-// the host there, so there's no address to forward to (documented TODO).
 func (r *Resolver) ResolveAllSite(ctx context.Context, name string) ([]string, error) {
 	if !r.UseNetworkDNS {
 		return nil, ErrSiteUnsupported
@@ -275,6 +299,16 @@ func (r *Resolver) ResolveAllSite(ctx context.Context, name string) ([]string, e
 	cloud, err := r.ResolveAll(ctx, name)
 	if err != nil {
 		return nil, err
+	}
+	// Remote deployments only publish 3210 on the tailnet IP; 3211 is
+	// not exposed by the remote provisioner today. Refuse explicitly
+	// so the caller emits a clear 503 instead of trying to dial a
+	// closed port. (Documented v1.19 limitation; see docs/REMOTE_HOSTS.md.)
+	r.mu.RLock()
+	entry, ok := r.cache[name]
+	r.mu.RUnlock()
+	if ok && entry.isRemote {
+		return nil, ErrSiteUnsupported
 	}
 	out := make([]string, 0, len(cloud))
 	for _, a := range cloud {
@@ -289,10 +323,22 @@ func (r *Resolver) ResolveAllSite(ctx context.Context, name string) ([]string, e
 	return out, nil
 }
 
-// addressFor builds either the docker-DNS or host-port address for one
-// replica. Single-replica (haEnabled=false) keeps the legacy "convex-{name}"
-// container name; HA replicas pick up the "-{idx}" suffix.
-func (r *Resolver) addressFor(name string, replicaIndex int, haEnabled bool, hostPort *int) string {
+// addressFor builds the per-replica upstream address. Three modes:
+//   - remote host (isRemote=true, tailnetAddr set): use the tailnet IP
+//     plus the replica's published host_port. The remote provisioner
+//     binds <tailnet_ip>:<host_port>:3210 inside the container, so the
+//     proxy must talk to that exact pair.
+//   - local + network-DNS (compose mode): "convex-<name>[-N]:3210". HA
+//     replicas carry a "-{idx}" suffix.
+//   - local + host-port: 127.0.0.1:<host_port>.
+//
+// Single-replica (haEnabled=false) keeps the legacy "convex-{name}"
+// container name in DNS mode for backwards compat with operator
+// scripts that filter on it.
+func (r *Resolver) addressFor(name string, replicaIndex int, haEnabled bool, hostPort *int, isRemote bool, tailnetAddr *string) string {
+	if isRemote && tailnetAddr != nil && *tailnetAddr != "" && hostPort != nil {
+		return fmt.Sprintf("%s:%d", *tailnetAddr, *hostPort)
+	}
 	if r.UseNetworkDNS {
 		if !haEnabled {
 			return "convex-" + name + ":3210"
@@ -308,8 +354,9 @@ func (r *Resolver) addressFor(name string, replicaIndex int, haEnabled bool, hos
 // deployment_replicas rows exist for a deployment. This is unreachable
 // in production (the backfill migration creates a replica row for every
 // existing deployment) but avoids a hard failure during a half-applied
-// rollout.
-func (r *Resolver) legacyAddress(ctx context.Context, name string, haEnabled bool) (string, error) {
+// rollout. Remote-host aware: when the deployment lives on a remote
+// host, return the tailnet address paired with the legacy host_port.
+func (r *Resolver) legacyAddress(ctx context.Context, name string, haEnabled bool, isRemote bool, tailnetAddr *string) (string, error) {
 	var hostPort *int
 	var status string
 	err := r.DB.QueryRow(ctx,
@@ -323,6 +370,12 @@ func (r *Resolver) legacyAddress(ctx context.Context, name string, haEnabled boo
 	}
 	if status != "running" {
 		return "", fmt.Errorf("deployment %q is %s, not running", name, status)
+	}
+	if isRemote {
+		if tailnetAddr == nil || *tailnetAddr == "" || hostPort == nil {
+			return "", fmt.Errorf("deployment %q is remote but missing tailnet / host_port", name)
+		}
+		return fmt.Sprintf("%s:%d", *tailnetAddr, *hostPort), nil
 	}
 	if r.UseNetworkDNS {
 		return "convex-" + name + ":3210", nil
@@ -957,7 +1010,10 @@ func (p *HealthProbe) Sweep(ctx context.Context) (int, error) {
 		if r.hostPort == nil && !p.UseNetworkDNS {
 			continue
 		}
-		addr := resolver.addressFor(r.name, r.replicaIndex, r.haEnabled, r.hostPort)
+		// HealthProbe only sweeps HA replicas (d.ha_enabled = true).
+		// HA + Remote Hosts isn't supported in v1.19, so isRemote
+		// is always false here.
+		addr := resolver.addressFor(r.name, r.replicaIndex, r.haEnabled, r.hostPort, false, nil)
 		if p.probeReplica(ctx, client, timeout, addr, r.adminKey) {
 			if _, err := p.DB.Exec(ctx, `
 				UPDATE deployment_replicas

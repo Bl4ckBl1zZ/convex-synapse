@@ -318,3 +318,162 @@ func TestProxy_SiteSubdomain_DispatchesToSiteResolver(t *testing.T) {
 		t.Errorf("site host in host-port mode: status=%d want 501", resp.StatusCode)
 	}
 }
+
+// ---- Remote host routing (v1.19+) ---------------------------------
+//
+// Phase 4 of v1.19 makes the proxy host-aware: deployments pinned to a
+// remote host return `<tailnet_addr>:<host_port>` instead of the
+// local docker DNS / 127.0.0.1 forms. The control plane uses these
+// addresses to SSH/HTTP into the tailnet IP the remote provisioner
+// bound the container to.
+//
+// We exercise these against an httptest upstream that we treat as
+// "the remote container" — the tailnet IP we seed in the host row
+// is whatever the test server happens to be listening on. That's
+// the only way to drive the real proxy.Handler path without a
+// running tailnet.
+
+func TestProxy_RemoteDeployment_RoutesViaTailnetAddress(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Remote Co")
+	project := createProject(t, h, owner.AccessToken, team.Slug, "App")
+
+	// Upstream pretends to be the remote container. The host's
+	// tailnet_addr is set to 127.0.0.1 so the proxy resolves to the
+	// loopback port of this httptest server.
+	var hitPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("remote-upstream-ok:" + r.URL.Path))
+	}))
+	t.Cleanup(upstream.Close)
+
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split upstream URL: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	// Seed a deployment pinned to a remote host whose tailnet IP is
+	// 127.0.0.1. The proxy resolver will compose 127.0.0.1:<port>.
+	h.SeedRemoteDeployment(project.ID, "remote-fox-1234", "dev", "running",
+		owner.ID, port, "k", "127.0.0.1")
+
+	resolver := &proxy.Resolver{DB: h.DB, UseNetworkDNS: false, CacheTTL: time.Second}
+	srv := httptest.NewServer(proxy.Handler(resolver, nil, ""))
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/d/remote-fox-1234/api/check_admin_key")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("status: got %d, want 200; body=%s", resp.StatusCode, string(body))
+	}
+	if hitPath != "/api/check_admin_key" {
+		t.Errorf("remote upstream saw %q; want /api/check_admin_key", hitPath)
+	}
+	if !strings.HasPrefix(string(body), "remote-upstream-ok:") {
+		t.Errorf("body: got %q; want remote-upstream-ok: prefix", string(body))
+	}
+}
+
+// TestProxy_RemoteDeployment_NetworkDNSStillUsesTailnet ensures that
+// even when the control plane runs in compose-network mode (where
+// LOCAL deployments resolve to convex-<name>:3210), REMOTE
+// deployments STILL resolve to <tailnet>:<host_port>. The remote
+// container isn't on the synapse-network bridge — the docker DNS
+// name would not resolve from inside synapse-api.
+func TestProxy_RemoteDeployment_NetworkDNSStillUsesTailnet(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "RemoteDNS Co")
+	project := createProject(t, h, owner.AccessToken, team.Slug, "App")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("via-tailnet"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	_, portStr, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	port, _ := strconv.Atoi(portStr)
+
+	h.SeedRemoteDeployment(project.ID, "remote-bear-5678", "dev", "running",
+		owner.ID, port, "k", "127.0.0.1")
+
+	// UseNetworkDNS=true mimics the control plane running inside
+	// compose. Remote deployments must STILL bypass docker DNS.
+	resolver := &proxy.Resolver{DB: h.DB, UseNetworkDNS: true, CacheTTL: time.Second}
+	addrs, err := resolver.ResolveAll(context.Background(), "remote-bear-5678")
+	if err != nil {
+		t.Fatalf("ResolveAll: %v", err)
+	}
+	if len(addrs) != 1 {
+		t.Fatalf("expected 1 address, got %v", addrs)
+	}
+	want := "127.0.0.1:" + strconv.Itoa(port)
+	if addrs[0] != want {
+		t.Errorf("addr: got %q want %q (must be tailnet, not docker DNS)", addrs[0], want)
+	}
+}
+
+// TestResolveAllSite_RemoteRefuses confirms the v1.19 carve-out:
+// remote deployments don't expose port 3211, so the site resolver
+// must surface ErrSiteUnsupported instead of routing to a closed
+// port. (Documented in docs/REMOTE_HOSTS.md.)
+func TestResolveAllSite_RemoteRefuses(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "SiteRem Co")
+	project := createProject(t, h, owner.AccessToken, team.Slug, "App")
+	h.SeedRemoteDeployment(project.ID, "remote-otter-9999", "dev", "running",
+		owner.ID, 3998, "k", "100.64.0.5")
+
+	// Even with network-DNS enabled, the remote-host carve-out wins.
+	resolver := &proxy.Resolver{DB: h.DB, UseNetworkDNS: true, CacheTTL: time.Second}
+	// First call: cloud path warms the cache + flips isRemote.
+	if _, err := resolver.ResolveAll(context.Background(), "remote-otter-9999"); err != nil {
+		t.Fatalf("ResolveAll: %v", err)
+	}
+	_, err := resolver.ResolveAllSite(context.Background(), "remote-otter-9999")
+	if !errors.Is(err, proxy.ErrSiteUnsupported) {
+		t.Errorf("ResolveAllSite remote: got %v want ErrSiteUnsupported", err)
+	}
+}
+
+// TestProxy_RemoteDeployment_MissingTailnet_503 — a remote host that
+// hasn't completed adoption (tailnet_addr NULL) cannot be routed to.
+// The resolver refuses; the proxy handler 404s upstream (the path is
+// "deployment exists but unreachable" — same shape as a deleted
+// deployment).
+func TestProxy_RemoteDeployment_MissingTailnet_503(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "OrphanedRemote Co")
+	project := createProject(t, h, owner.AccessToken, team.Slug, "App")
+	// Seed the host without a tailnet_addr by going through the
+	// helper and then NULL'ing the column.
+	depID, hostID := h.SeedRemoteDeployment(project.ID, "remote-orphan-7777",
+		"dev", "running", owner.ID, 3998, "k", "100.64.0.6")
+	if _, err := h.DB.Exec(h.rootCtx, `
+		UPDATE hosts SET tailnet_addr = NULL WHERE id = $1
+	`, hostID); err != nil {
+		t.Fatalf("null tailnet: %v", err)
+	}
+	_ = depID
+
+	resolver := &proxy.Resolver{DB: h.DB, UseNetworkDNS: false, CacheTTL: time.Second}
+	_, err := resolver.ResolveAll(context.Background(), "remote-orphan-7777")
+	if err == nil || !strings.Contains(err.Error(), "tailnet") {
+		t.Fatalf("ResolveAll: got %v want error mentioning tailnet", err)
+	}
+}
