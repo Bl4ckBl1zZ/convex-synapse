@@ -65,6 +65,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       label: "DNS credentials",
       testid: "admin-nav-dns-credentials",
     },
+    {
+      href: "/admin/remote-hosts",
+      label: "Remote Hosts",
+      testid: "admin-nav-remote-hosts",
+    },
   ];
 
   return (

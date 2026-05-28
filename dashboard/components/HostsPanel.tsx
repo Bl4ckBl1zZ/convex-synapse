@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import useSWR from "swr";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -907,11 +908,15 @@ function RemoteSetupDialog({
             </p>
             {errorCode === "remote_hosts_disabled" && (
               <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-400">
-                Run{" "}
-                <code className="rounded bg-neutral-950 px-1 py-0.5 font-mono text-amber-300">
-                  setup.sh --enable-headscale
-                </code>{" "}
-                on the control plane host to opt in.
+                Configure Headscale in{" "}
+                <Link
+                  href="/admin/remote-hosts"
+                  className="text-violet-300 underline-offset-2 hover:underline"
+                  data-testid="hosts-panel-remote-hosts-link"
+                >
+                  Admin → Remote Hosts
+                </Link>{" "}
+                to enable this flow.
               </p>
             )}
             <div className="flex justify-end gap-2">

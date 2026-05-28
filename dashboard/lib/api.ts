@@ -429,6 +429,51 @@ export type HostDomainChangeInput = {
   autoConfigureDns?: boolean;
 };
 
+// HeadscaleAdminConfig is the GET /v1/admin/headscale shape (v1.19+).
+// Drives Admin → Remote Hosts: status pills, default-domain pre-fill,
+// DNS-credential availability hint, and the "needs synapse-api
+// restart" banner.
+export type HeadscaleAdminConfig = {
+  enabled: boolean;
+  configured: boolean;
+  remoteProvisioningReady: boolean;
+  needsApiRestart: boolean;
+  updaterAvailable: boolean;
+  updaterReason?: string;
+  domain?: string;
+  serverUrl?: string;
+  internalUrl?: string;
+  baseDomain?: string;
+  hostDomain?: string;
+  publicUrl?: string;
+  publicIp?: string;
+  defaultDomain?: string;
+  dnsCredentialAvailable: boolean;
+};
+
+// Body for POST /v1/admin/headscale/configure. Both fields optional —
+// the backend derives headscale.<SYNAPSE_DOMAIN> when headscaleDomain
+// is empty. autoConfigureDns=true asks Synapse to upsert the matching
+// A record via a stored Cloudflare credential BEFORE dispatching the
+// configure_headscale job; best-effort and falls through to manual
+// DNS on failure.
+export type HeadscaleConfigureInput = {
+  headscaleDomain?: string;
+  autoConfigureDns?: boolean;
+};
+
+// POST /v1/admin/headscale/configure response. Same shape as the
+// host-domain configure response: jobId + statusUrl for polling +
+// dnsAuto outcome when auto-configure was attempted.
+export type HeadscaleConfigureResponse = {
+  jobId: string;
+  statusUrl: string;
+  state: "queued" | "running" | "succeeded" | "failed";
+  domain?: string;
+  serverUrl?: string;
+  dnsAuto?: HostDomainDNSAutoResult;
+};
+
 // Returned once at create time. `adminKey` is the freshly-minted value;
 // `envSnippet` and `exportSnippet` are paste-ready for `.env.local` and
 // shell respectively. The dashboard MUST surface this immediately and
@@ -2310,6 +2355,28 @@ export const api = {
       status(jobId: string): Promise<HostDomainJobStatus> {
         return request<HostDomainJobStatus>(
           `/v1/admin/host_domain/status/${encodeURIComponent(jobId)}`,
+        );
+      },
+    },
+    // Headscale / Remote Hosts (v1.19+). Drives Admin → Remote Hosts.
+    // GET surfaces the current state snapshot so the panel renders
+    // status pills + a sensible default subdomain in the configure
+    // form; POST enqueues a configure_headscale job on the
+    // synapse-updater daemon; status reads the same admin_jobs row
+    // the daemon writes back to.
+    headscale: {
+      get(): Promise<HeadscaleAdminConfig> {
+        return request<HeadscaleAdminConfig>("/v1/admin/headscale");
+      },
+      configure(body: HeadscaleConfigureInput): Promise<HeadscaleConfigureResponse> {
+        return request<HeadscaleConfigureResponse>("/v1/admin/headscale/configure", {
+          method: "POST",
+          body,
+        });
+      },
+      status(jobId: string): Promise<HostDomainJobStatus> {
+        return request<HostDomainJobStatus>(
+          `/v1/admin/headscale/status/${encodeURIComponent(jobId)}`,
         );
       },
     },
