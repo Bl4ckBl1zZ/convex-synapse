@@ -17,9 +17,9 @@ bats_load_library bats-support
 bats_load_library bats-assert
 bats_load_library bats-file
 
-# BATS_TEST_DIRNAME is the dir holding the .bats file. helpers/ lives
-# two levels under installer-agent/.
-INSTALLER_AGENT_DIR="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+# BATS_TEST_DIRNAME is the dir holding the .bats file (installer-agent/test/).
+# installer-agent/ is one level up; REPO_ROOT is two.
+INSTALLER_AGENT_DIR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 # shellcheck disable=SC2034
 REPO_ROOT="$(cd "$INSTALLER_AGENT_DIR/.." && pwd)"
 # shellcheck disable=SC2034
