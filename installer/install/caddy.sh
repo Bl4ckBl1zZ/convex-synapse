@@ -235,3 +235,95 @@ caddy::write_standalone() {
     chmod 0644 "$tmp"
     mv -f "$tmp" "$out"
 }
+
+# caddy::install_headscale_block
+# Renders installer/templates/caddy.headscale.fragment.tmpl with the
+# current SYNAPSE_BASE_DOMAIN + ACME_EMAIL, then upserts it into
+# whichever Caddyfile is in play and reloads Caddy. NO-OP when
+# SYNAPSE_BASE_DOMAIN is empty — without a subdomain we have nothing
+# to put the headscale site on (Headscale doesn't support sub-path
+# deployment, so the path-mux trick the rest of Synapse uses is
+# unavailable here).
+#
+# Modes (mirrors caddy::install_host_block / caddy::write_standalone):
+#
+#   caddy_host:    append to /etc/caddy/Caddyfile + systemctl reload
+#   caddy_compose: append to $SYNAPSE_CADDYFILE_PATH (the bind-mounted
+#                  standalone Caddyfile) + docker compose exec caddy
+#                  caddy reload
+#   nginx_external: print a hint and return 0 — the operator owns
+#                   their nginx config and Headscale needs WebSocket
+#                   passthrough they have to wire by hand.
+caddy::install_headscale_block() {
+    if [[ -z "${SYNAPSE_BASE_DOMAIN:-}" ]]; then
+        return 0
+    fi
+    local tmpl="${1:-$INSTALLER_TEMPLATES/caddy.headscale.fragment.tmpl}"
+    if [[ ! -r "$tmpl" ]]; then
+        echo "caddy::install_headscale_block: $tmpl unreadable" >&2
+        return 2
+    fi
+    # The fragment template carries an {{ACME_EMAIL_BLOCK}} placeholder
+    # that expands to a `tls <email>` directive when an ACME email is
+    # configured. We compute it here rather than baking two templates.
+    local email_block=""
+    if [[ -n "${ACME_EMAIL:-}" ]]; then
+        email_block="tls ${ACME_EMAIL}"
+    fi
+    local rendered
+    rendered="$(ACME_EMAIL_BLOCK="$email_block" caddy::_render "$tmpl")" || return 2
+
+    local mode
+    mode="$(caddy::detect_mode)"
+    case "$mode" in
+        caddy_host)
+            local caddy_file="${CADDY_FILE:-/etc/caddy/Caddyfile}"
+            if ! caddy::upsert_block "$caddy_file" "synapse-headscale" <<<"$rendered"; then
+                echo "caddy::install_headscale_block: upsert failed" >&2
+                return 2
+            fi
+            local reload_cmd="${CADDY_RELOAD:-systemctl reload caddy}"
+            # shellcheck disable=SC2086
+            $reload_cmd
+            ;;
+        caddy_compose)
+            local caddy_file="${SYNAPSE_CADDYFILE_PATH:-$INSTALL_DIR/Caddyfile}"
+            if ! caddy::upsert_block "$caddy_file" "synapse-headscale" <<<"$rendered"; then
+                echo "caddy::install_headscale_block: upsert failed" >&2
+                return 2
+            fi
+            # In compose mode the Caddy container reads the bind-
+            # mounted Caddyfile; trigger a graceful reload so the
+            # new headscale.<base> site activates without dropping
+            # connections on the main {{DOMAIN}} block.
+            local cmd="${CADDY_COMPOSE_RELOAD_CMD:-${COMPOSE_CMD:-docker}}"
+            "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" \
+                exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
+                || "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" restart caddy
+            ;;
+        nginx_external)
+            cat <<EOF >&2
+# === Synapse — add to your nginx config to front Headscale ===
+server {
+    listen 443 ssl http2;
+    server_name headscale.${SYNAPSE_BASE_DOMAIN};
+    location / {
+        proxy_pass http://127.0.0.1:8181;  # or your headscale port
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+# Then: sudo nginx -t && sudo systemctl reload nginx
+EOF
+            ;;
+        *)
+            echo "caddy::install_headscale_block: unknown mode $mode" >&2
+            return 2
+            ;;
+    esac
+}

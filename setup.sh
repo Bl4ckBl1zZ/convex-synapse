@@ -115,6 +115,16 @@ Options:
                              SYNAPSE_BACKEND_S3_* preset in env).
     --no-tls                 Skip Caddy / TLS configuration. Use when
                              a separate ingress fronts Synapse.
+    --enable-headscale       Enable self-hosted Headscale (Tailscale
+                             control plane) for the Remote Hosts
+                             feature. Requires --domain or
+                             --base-domain — Tailscale clients need
+                             a stable HTTPS URL to register against.
+                             Brings up the headscale compose profile,
+                             provisions a dedicated postgres database,
+                             mints an admin API key, and (in TLS
+                             mode) appends a headscale.BASE_DOMAIN block
+                             to the Caddyfile.
     --skip-dns-check         Skip the A-record / public-IP check in
                              preflight (useful when DNS hasn't
                              propagated yet).
@@ -202,6 +212,7 @@ parse_flags() {
     BASE_DOMAIN=""
     ACME_EMAIL=""
     ENABLE_HA=0
+    ENABLE_HEADSCALE=0
     NO_TLS=0
     SKIP_DNS=0
     DOCTOR=0
@@ -240,6 +251,7 @@ parse_flags() {
             --base-domain=*)   BASE_DOMAIN="${1#*=}" ;;
             --acme-email=*)    ACME_EMAIL="${1#*=}" ;;
             --enable-ha)       ENABLE_HA=1 ;;
+            --enable-headscale) ENABLE_HEADSCALE=1 ;;
             --no-tls)          NO_TLS=1 ;;
             --skip-dns-check)  SKIP_DNS=1 ;;
             --non-interactive) export SYNAPSE_NON_INTERACTIVE=1 ;;
@@ -273,6 +285,20 @@ parse_flags() {
     done
     if [[ -z "$ACME_EMAIL" && -n "$DOMAIN" ]]; then
         ACME_EMAIL="admin@$DOMAIN"
+    fi
+    # Headscale needs a stable, externally-reachable URL the Tailscale
+    # clients can register against — that means TLS in front of it,
+    # which in turn means either --domain (we'd front headscale via
+    # the same host) or --base-domain (we put it on a subdomain).
+    # Without either we'd have nothing to render into the server_url
+    # field of headscale's config, and tailscale up would refuse
+    # to register against a bare IP without TLS.
+    if (( ENABLE_HEADSCALE )); then
+        if [[ -z "$DOMAIN" && -z "$BASE_DOMAIN" ]]; then
+            echo "error: --enable-headscale requires --domain or --base-domain" >&2
+            echo "  (Tailscale clients need a stable HTTPS URL to register)" >&2
+            exit 2
+        fi
     fi
 }
 
@@ -416,6 +442,8 @@ source_libs() {
     . "$HERE/installer/install/lifecycle.sh"
     # shellcheck source=installer/install/updater.sh
     . "$HERE/installer/install/updater.sh"
+    # shellcheck source=installer/install/headscale.sh
+    . "$HERE/installer/install/headscale.sh"
 }
 
 # phase_wizard — interactive Q&A when `curl | bash` runs without
@@ -859,6 +887,23 @@ phase_compose_up() {
         docker pull "$backend_image"
 }
 
+
+# phase_install_headscale — opt-in Headscale bootstrap (v1.18+).
+# Runs after phase_compose_up because headscale::bootstrap shells
+# out to `docker compose exec postgres psql` + `docker compose
+# --profile headscale up -d headscale`, both of which need the
+# base stack already up. No-op (with a friendly skip note) when
+# the operator didn't pass --enable-headscale.
+phase_install_headscale() {
+    CURRENT_STEP="install_headscale"
+    if ! headscale::is_enabled; then
+        ui::info "Headscale: skipped (pass --enable-headscale to opt in)"
+        return 0
+    fi
+    ui::step "Installing Headscale (Tailscale control plane)"
+    headscale::bootstrap
+}
+
 phase_verify() {
     CURRENT_STEP="verify"
     ui::step "Self-test: register → team → project → deployment"
@@ -1128,6 +1173,7 @@ main() {
     phase_install_updater
     phase_caddy
     phase_compose_up
+    phase_install_headscale
     phase_verify
     phase_success_screen
 }
