@@ -44,10 +44,10 @@ func (c *Client) GenerateAdminKey(ctx context.Context, instanceName, instanceSec
 func (c *Client) generateAdminKeyOnce(ctx context.Context, instanceName, instanceSecret string) (string, error) {
 	resp, err := c.api.ContainerCreate(ctx,
 		&container.Config{
-			Image:      c.BackendImage,
-			Entrypoint: []string{"/convex/generate_key"},
-			Cmd:        []string{instanceName, instanceSecret},
-			Tty:        false,
+			Image:        c.BackendImage,
+			Entrypoint:   []string{"/convex/generate_key"},
+			Cmd:          []string{instanceName, instanceSecret},
+			Tty:          false,
 			AttachStdout: true,
 			AttachStderr: true,
 		},
