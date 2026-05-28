@@ -32,6 +32,35 @@ With a domain you get TLS via Caddy + Let's Encrypt automatically; without one, 
 
 ![Project page with a deployment provisioned](docs/screenshots/04-project-deployment.png)
 
+## Multi-host (v1.18+)
+
+Run deployments across multiple VPSes from one Synapse control plane.
+One-liner adds a new VPS as a "host"; place deployments via the
+dashboard dropdown.
+
+```bash
+# On the Synapse control plane (one-time):
+setup.sh --enable-headscale
+
+# Dashboard → Hosts → New host → "Setup remote install"
+# Copy the one-liner shown, SSH into the new VPS, paste:
+curl -fsSL https://synapse.example.com/install-agent.sh \
+  | sudo bash -s -- \
+    --control-url=https://synapse.example.com \
+    --headscale-auth=tskey-auth-... \
+    --adoption-token=syn_adopt_...
+
+# Refresh dashboard — host appears online in ~60s.
+# Create a deployment with "Place on host" → vps-eu-1.
+# Synapse central provisions the Convex container there via SSH.
+```
+
+Architecture: Headscale (self-hosted Tailscale control plane) +
+per-host ed25519 SSH keys encrypted at rest + forced-command Docker
+whitelist on the remote sshd. Zero third-party dependency on the
+identity path. Full guide: [`docs/REMOTE_HOSTS.md`](docs/REMOTE_HOSTS.md);
+security model + rotation: [`docs/SECURITY_REMOTE_HOSTS.md`](docs/SECURITY_REMOTE_HOSTS.md).
+
 ## What you can do with this
 
 **Run a personal Convex backend, properly.** Sign up, create a team, spin up dev / preview / prod deployments, point your `npx convex` at them, watch the embedded official Convex Dashboard reflect every function call, every row, every log line — same UI Convex Cloud ships, on infrastructure you own.
@@ -100,6 +129,7 @@ With a domain you get TLS via Caddy + Let's Encrypt automatically; without one, 
 | Scoped access tokens (v1.0+) | user / team / project / app / deployment scope; bearer enforced at every load*ForRequest |
 | Deploy keys (v1.0.3+) | named per-deployment admin keys for CI integrations (Vercel, GitHub Actions, etc) — create from the deployment row, revoke from the dashboard, audit trail per credential |
 | Auto-update from the dashboard (v1.1.0+) | yellow "v1.X.Y available" banner polls GitHub releases hourly; one-click upgrade dispatches `setup.sh --upgrade` via a host-side systemd daemon (unix socket, no TCP exposure), streaming logs back to the modal — no SSH needed for routine upgrades |
+| **Multi-host deployment (v1.18+)** | One-liner agent install brings a VPS into the Synapse fleet; place deployments per-host via dashboard or `synapse deployment create --host=<id>`. SSH-based dispatch over Headscale tailnet, per-host ed25519 keys encrypted at rest. Full guide: [`docs/REMOTE_HOSTS.md`](docs/REMOTE_HOSTS.md). |
 | Audit log | Cloud-vocabulary action names, admin-only read |
 | Multi-node hygiene | retry-on-conflict, advisory-lock workers, `SELECT FOR UPDATE SKIP LOCKED` queue |
 | Auto-installer | `./setup.sh` or `curl \| bash` one-liner brings up the whole stack on a fresh VPS in ~3 min |

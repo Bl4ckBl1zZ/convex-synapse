@@ -102,7 +102,44 @@ is never printed by the agent.
 Default config path: `/etc/synapse-agent/config.json` when running as root,
 else `~/.config/synapse-agent/config.json`.
 
-## Install as a systemd service on a VPS
+## Install on a VPS (v1.18+)
+
+The canonical install is the dashboard-generated one-liner via
+[`install-agent.sh`](../install-agent.sh) — see
+[`docs/REMOTE_HOSTS.md` §Set it up](REMOTE_HOSTS.md#set-it-up) for the
+full operator flow.
+
+```bash
+# On the Synapse control plane (one-time):
+setup.sh --enable-headscale
+
+# In the dashboard → Hosts → New host → "Setup remote install",
+# copy the one-liner, SSH into the new VPS, paste:
+curl -fsSL https://synapse.example.com/install-agent.sh \
+  | sudo bash -s -- \
+    --control-url=https://synapse.example.com \
+    --headscale-auth=tskey-auth-... \
+    --adoption-token=syn_adopt_...
+```
+
+The one-liner installs Tailscale + joins the Headscale tailnet +
+downloads the `synapse-agent` binary from GitHub Releases + creates
+the `synapse-deployer` SSH user + configures the hardened systemd
+unit + registers with Synapse central. The host flips to `online` in
+the dashboard within ~60 s.
+
+The agent itself is the same observe-only binary documented above;
+the v1.18+ install path adds the Headscale + per-host SSH plumbing
+that turns the VPS into a Remote Host the control plane can
+provision deployments onto. See [REMOTE_HOSTS.md](REMOTE_HOSTS.md)
+for the architecture and [SECURITY_REMOTE_HOSTS.md](SECURITY_REMOTE_HOSTS.md)
+for the threat model + rotation playbooks.
+
+## Manual install (advanced — operator forks, observer-only)
+
+For operators who forked the agent, want a build-from-source path,
+or want to adopt a host *without* the v1.18+ Remote Hosts SSH
+channel (observer-only, no remote provisioning).
 
 Build the agent for Linux (from the repo's `synapse/` dir):
 
@@ -130,9 +167,12 @@ The Host should flip to `online` in the dashboard within one heartbeat
 interval (~15s), showing agentVersion, dockerVersion, CPU/RAM/disk, and a live
 `lastHeartbeatAt`.
 
-> A `setup.sh` install helper + packaged agent binary are tracked in
-> [`ROADMAP_CELL_CONTROL_PLANE.md`](ROADMAP_CELL_CONTROL_PLANE.md) §Next —
-> today's install is the manual systemd steps above.
+A host adopted via this manual path stays `is_remote=false` in the
+database: the worker provisions its deployments through the local
+Docker socket, which only works if the control plane runs on that
+host. To turn a manually-adopted box into a Remote Host the control
+plane can SSH into, re-adopt it via the `install-agent.sh` flow
+above (which re-uses the same row by `tailnet_addr` uniqueness).
 
 ## Agent lifecycle (instance-admin)
 
