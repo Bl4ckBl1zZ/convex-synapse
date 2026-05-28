@@ -131,7 +131,7 @@ security model + rotation: [`docs/SECURITY_REMOTE_HOSTS.md`](docs/SECURITY_REMOT
 | Scoped access tokens (v1.0+) | user / team / project / app / deployment scope; bearer enforced at every load*ForRequest |
 | Deploy keys (v1.0.3+) | named per-deployment admin keys for CI integrations (Vercel, GitHub Actions, etc) — create from the deployment row, revoke from the dashboard, audit trail per credential |
 | Auto-update from the dashboard (v1.1.0+) | yellow "v1.X.Y available" banner polls GitHub releases hourly; one-click upgrade dispatches `setup.sh --upgrade` via a host-side systemd daemon (unix socket, no TCP exposure), streaming logs back to the modal — no SSH needed for routine upgrades |
-| **Multi-host deployment (v1.18+)** | One-liner agent install brings a VPS into the Synapse fleet; place deployments per-host via dashboard or `synapse deployment create --host=<id>`. SSH-based dispatch over Headscale tailnet, per-host ed25519 keys encrypted at rest. Full guide: [`docs/REMOTE_HOSTS.md`](docs/REMOTE_HOSTS.md). |
+| **Multi-host deployment (v1.18+, dashboard-driven since v1.19)** | One-liner agent install brings a VPS into the Synapse fleet; place deployments per-host via dashboard or `synapse deployment create --host=<id>`. SSH-based dispatch over Headscale tailnet (tag-based ACL default in v1.19+), per-host ed25519 keys encrypted at rest. v1.19+ surfaces enable/configure under **Admin → Remote Hosts** and routes `<deployment>.<base-domain>` for remote deployments through the central proxy automatically — no laptop tailnet join required. Full guide: [`docs/REMOTE_HOSTS.md`](docs/REMOTE_HOSTS.md). |
 | Audit log | Cloud-vocabulary action names, admin-only read |
 | Multi-node hygiene | retry-on-conflict, advisory-lock workers, `SELECT FOR UPDATE SKIP LOCKED` queue |
 | Auto-installer | `./setup.sh` or `curl \| bash` one-liner brings up the whole stack on a fresh VPS in ~3 min |
@@ -142,14 +142,14 @@ security model + rotation: [`docs/SECURITY_REMOTE_HOSTS.md`](docs/SECURITY_REMOT
 | OpenAPI parity | 100% of self-hosted-relevant subset; ~60 cloud-only paths return structured `404 not_supported_in_self_hosted` |
 | API stability | semver on the `/v1/...` surface; deprecation policy + change log in [`docs/API.md`](docs/API.md) |
 
-**Tests:** current checkout has 317 Go test functions + 50 Playwright e2e
-tests + 396 bats unit cases, all expected green in CI on every push.
+**Tests:** current checkout has 638 Go test functions + 123 Playwright e2e
+tests + 513 bats unit cases, all expected green in CI on every push.
 
 ## Releases
 
 Latest release:
 [`github.com/Iann29/convex-synapse/releases/latest`](https://github.com/Iann29/convex-synapse/releases/latest).
-This checkout's installer version is `1.11.7` (`setup.sh --version`).
+This checkout's installer version is `1.19.0` (`setup.sh --version`).
 
 `./setup.sh --upgrade` queries
 [`/releases/latest`](https://github.com/Iann29/convex-synapse/releases/latest)
