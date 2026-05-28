@@ -1,0 +1,34 @@
+[Unit]
+Description=Synapse Cell Control Plane agent (observe-only)
+Documentation=https://github.com/Iann29/convex-synapse/blob/main/docs/HOSTS_AND_AGENTS.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=synapse-agent
+Group=synapse-agent
+SupplementaryGroups=docker
+ExecStart=/usr/local/bin/synapse-agent run --config /etc/synapse-agent/config.json
+Restart=on-failure
+RestartSec=5s
+
+# Hardening — observe-only agent needs almost nothing from the system.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/synapse-agent
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

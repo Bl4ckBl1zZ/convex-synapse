@@ -111,7 +111,7 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$(git describe --tags
   -o synapse-agent ./cmd/synapse-agent
 ```
 
-Copy `synapse-agent` and `installer/templates/synapse-agent.service` to the VPS, then:
+Copy `synapse-agent` and `installer-agent/templates/synapse-agent.service` to the VPS, then:
 
 ```bash
 sudo install -m 0755 synapse-agent /usr/local/bin/synapse-agent
