@@ -33,6 +33,12 @@ type InstallAgentHandler struct {
 	// log a compatibility line and skip the download when the on-
 	// disk binary already matches.
 	AgentVersion string
+	// CryptoConfigured is true when *crypto.SecretBox is wired
+	// (SYNAPSE_STORAGE_KEY present + valid). Together with a non-
+	// empty HeadscaleServerURL it flips RemoteProvisioningEnabled
+	// in the config response, so install-agent.sh can refuse early
+	// instead of 503'ing on the encrypt step inside register.
+	CryptoConfigured bool
 }
 
 func (h *InstallAgentHandler) Routes() chi.Router {
@@ -61,13 +67,19 @@ type agentInstallConfig struct {
 	// is non-empty. Single-source-of-truth: clients check this
 	// boolean instead of guessing from absence of the URL.
 	RemoteHostsEnabled bool `json:"remoteHostsEnabled"`
+	// RemoteProvisioningEnabled is true ONLY when SYNAPSE_HEADSCALE_URL
+	// AND SYNAPSE_STORAGE_KEY are BOTH configured. install-agent.sh
+	// refuses with a clear hint when this is false (the register call
+	// would otherwise 503 silently on the encrypt step).
+	RemoteProvisioningEnabled bool `json:"remoteProvisioningEnabled"`
 }
 
 func (h *InstallAgentHandler) config(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agentInstallConfig{
-		HeadscaleServerURL: h.HeadscaleServerURL,
-		AgentDownloadURL:   h.AgentDownloadBase + "/synapse-agent-{{version}}-linux-{{arch}}.tar.gz",
-		AgentVersion:       h.AgentVersion,
-		RemoteHostsEnabled: h.HeadscaleServerURL != "",
+		HeadscaleServerURL:        h.HeadscaleServerURL,
+		AgentDownloadURL:          h.AgentDownloadBase + "/synapse-agent-{{version}}-linux-{{arch}}.tar.gz",
+		AgentVersion:              h.AgentVersion,
+		RemoteHostsEnabled:        h.HeadscaleServerURL != "",
+		RemoteProvisioningEnabled: h.HeadscaleServerURL != "" && h.CryptoConfigured,
 	})
 }

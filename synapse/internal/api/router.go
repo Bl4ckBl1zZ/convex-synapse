@@ -350,6 +350,7 @@ func NewRouter(d RouterDeps) http.Handler {
 		PublicURL:           d.PublicURL,
 		EnableObservedState: d.EnableObservedState,
 		EnableDesiredState:  d.EnableDesiredState,
+		Crypto:              d.Crypto,
 	}
 
 	r.Route("/v1", func(r chi.Router) {
@@ -373,6 +374,7 @@ func NewRouter(d RouterDeps) http.Handler {
 			HeadscaleServerURL: d.HeadscaleServerURL,
 			AgentDownloadBase:  "https://github.com/" + d.GitHubRepo + "/releases/latest/download",
 			AgentVersion:       d.Version,
+			CryptoConfigured:   d.Crypto != nil,
 		}
 		r.Mount("/install_agent", installAgentH.Routes())
 		// CLI latest version probe (v1.9.4+). Public for the same reason

@@ -196,6 +196,17 @@ type SetupOpts struct {
 	// the EXTERNAL Headscale URL surfaced by /v1/install_agent/config.
 	// Empty (default) drives the "Remote Hosts disabled" path.
 	HeadscaleServerURL string
+
+	// WithCrypto wires a real *crypto.SecretBox into RouterDeps +
+	// makes h.Crypto available for round-trip assertions, WITHOUT
+	// turning on the HA flag (SetupHA opts into both at once). Used
+	// by Remote Hosts tests that need the encrypt path for the SSH
+	// privkey persist block but don't want HA's full deployment_storage
+	// flow attached. Default false → h.Crypto stays nil and
+	// remote-host registers that carry sshPrivkey 503 with
+	// crypto_disabled, mirroring the production "operator forgot to
+	// set SYNAPSE_STORAGE_KEY" path.
+	WithCrypto bool
 }
 
 // stubResolverFunc adapts a closure to api.HostDomainResolver.
@@ -349,6 +360,22 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		}
 		if deps.HA.BackendS3Region == "" {
 			deps.HA.BackendS3Region = "us-east-1"
+		}
+		deps.Crypto = box
+	}
+
+	// WithCrypto (non-HA harness): wire just the SecretBox so the
+	// Remote Hosts SSH privkey encrypt path works, leaving HA off.
+	// Idempotent with haEnabled — SetupHA already wired box above.
+	if !haEnabled && opts.WithCrypto {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			t.Fatalf("rand key: %v", err)
+		}
+		var berr error
+		box, berr = cryptopkg.New(key)
+		if berr != nil {
+			t.Fatalf("crypto.New: %v", berr)
 		}
 		deps.Crypto = box
 	}
