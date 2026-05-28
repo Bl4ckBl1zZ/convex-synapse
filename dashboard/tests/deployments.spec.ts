@@ -46,9 +46,11 @@ async function seedDeploymentWithDeployKey(
     await c.query(
       `INSERT INTO deployments (project_id, name, deployment_type, status,
                                 admin_key, instance_secret, host_port,
-                                is_default, deployment_url, container_id)
+                                is_default, deployment_url, container_id,
+                                host_id)
        VALUES ($1, $2, 'dev', 'running', 'fake-admin', 'fake-secret',
-               3499, true, 'http://127.0.0.1:3499', $3)`,
+               3499, true, 'http://127.0.0.1:3499', $3,
+               (SELECT id FROM hosts WHERE is_synapse_host LIMIT 1))`,
       [projectId, deploymentName, `fake-container-${deploymentName}`],
     );
     await c.query(

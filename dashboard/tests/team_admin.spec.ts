@@ -31,8 +31,9 @@ async function seedDeployment(teamSlug: string, name: string): Promise<void> {
     const projectId = r.rows[0].id;
     await c.query(
       `INSERT INTO deployments (project_id, name, deployment_type, status,
-                                 admin_key, instance_secret)
-       VALUES ($1, $2, 'dev', 'running', 'fake-admin', 'fake-secret')`,
+                                 admin_key, instance_secret, host_id)
+       VALUES ($1, $2, 'dev', 'running', 'fake-admin', 'fake-secret',
+               (SELECT id FROM hosts WHERE is_synapse_host LIMIT 1))`,
       [projectId, name],
     );
   } finally {
