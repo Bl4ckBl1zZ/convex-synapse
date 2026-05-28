@@ -74,10 +74,25 @@ headscale::_psql() {
 # clients will use to reach this control plane. Caller checks for
 # empty output (returns 0 unconditionally for set -e ergonomics).
 #
-#   1. SYNAPSE_BASE_DOMAIN set       → https://headscale.<base>
-#   2. SYNAPSE_PUBLIC_IP + PORT set  → http://<ip>:<port>
-#   3. else                          → empty (caller errors out)
+# Resolution order (first match wins):
+#   1. SYNAPSE_HEADSCALE_DOMAIN set  → https://<domain>           (explicit override)
+#   2. SYNAPSE_BASE_DOMAIN set       → https://headscale.<base>   (subdomain of deployments base)
+#   3. SYNAPSE_PUBLIC_IP + PORT set  → http://<ip>:<port>         (no-TLS install)
+#   4. else                          → empty (caller errors out)
+#
+# SYNAPSE_HEADSCALE_DOMAIN (v1.18.2+) exists so operators whose
+# control plane lives at one root (`synapsepanel.com`) but whose
+# deployments wildcard at another (`*.app.synapsepanel.com`) can
+# place Headscale outside the on-demand wildcard. Without it the
+# auto-derived `headscale.<base>` falls under the wildcard's
+# `tls { on_demand }` policy, which gates issuance on `tls_ask` —
+# and `tls_ask` only approves real deployments, so the Headscale
+# subdomain never gets a cert.
 headscale::_resolve_server_url() {
+    if [[ -n "${SYNAPSE_HEADSCALE_DOMAIN:-}" ]]; then
+        printf 'https://%s' "${SYNAPSE_HEADSCALE_DOMAIN#.}"
+        return 0
+    fi
     if [[ -n "${SYNAPSE_BASE_DOMAIN:-}" ]]; then
         printf 'https://headscale.%s' "${SYNAPSE_BASE_DOMAIN#.}"
         return 0

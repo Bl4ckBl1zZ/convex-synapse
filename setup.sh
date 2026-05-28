@@ -27,7 +27,7 @@
 
 set -Eeuo pipefail
 
-readonly INSTALLER_VERSION="1.12.1"
+readonly INSTALLER_VERSION="1.12.2"
 readonly INSTALL_DIR_DEFAULT="/opt/synapse"
 readonly LOG_FILE="${SYNAPSE_INSTALL_LOG:-/tmp/synapse-install.log}"
 readonly LOCK_FILE="/var/lock/synapse-installer.lock"
@@ -123,8 +123,15 @@ Options:
                              Brings up the headscale compose profile,
                              provisions a dedicated postgres database,
                              mints an admin API key, and (in TLS
-                             mode) appends a headscale.BASE_DOMAIN block
+                             mode) appends a headscale.<base> block
                              to the Caddyfile.
+    --headscale-domain=<host> Override the Headscale subdomain (v1.18.2+).
+                             Default: headscale.<SYNAPSE_BASE_DOMAIN>.
+                             Use this when your deployments wildcard
+                             (e.g. *.app.example.com) would put Headscale
+                             under an on_demand TLS policy — point it at
+                             a host outside that wildcard
+                             (e.g. headscale.example.com).
     --skip-dns-check         Skip the A-record / public-IP check in
                              preflight (useful when DNS hasn't
                              propagated yet).
@@ -213,6 +220,7 @@ parse_flags() {
     ACME_EMAIL=""
     ENABLE_HA=0
     ENABLE_HEADSCALE=0
+    HEADSCALE_DOMAIN=""
     NO_TLS=0
     SKIP_DNS=0
     DOCTOR=0
@@ -252,6 +260,7 @@ parse_flags() {
             --acme-email=*)    ACME_EMAIL="${1#*=}" ;;
             --enable-ha)       ENABLE_HA=1 ;;
             --enable-headscale) ENABLE_HEADSCALE=1 ;;
+            --headscale-domain=*) HEADSCALE_DOMAIN="${1#*=}" ;;
             --no-tls)          NO_TLS=1 ;;
             --skip-dns-check)  SKIP_DNS=1 ;;
             --non-interactive) export SYNAPSE_NON_INTERACTIVE=1 ;;
@@ -899,6 +908,24 @@ phase_install_headscale() {
     if ! headscale::is_enabled; then
         ui::info "Headscale: skipped (pass --enable-headscale to opt in)"
         return 0
+    fi
+    # v1.18.2+: export the operator's HEADSCALE_DOMAIN override (CLI flag
+    # OR pre-stamped in .env) so headscale::_resolve_server_url +
+    # caddy::install_headscale_block both pick the right hostname.
+    # Without this the auto-derived `headscale.<BASE_DOMAIN>` falls under
+    # any deployments wildcard with on_demand TLS — and tls_ask refuses
+    # to issue certs for non-deployment subdomains, so Headscale never
+    # gets a cert.
+    if [[ -n "${HEADSCALE_DOMAIN:-}" ]]; then
+        export SYNAPSE_HEADSCALE_DOMAIN="$HEADSCALE_DOMAIN"
+        secrets::ensure_env_var "$INSTALL_DIR/.env" \
+            SYNAPSE_HEADSCALE_DOMAIN "$HEADSCALE_DOMAIN"
+    elif [[ -z "${SYNAPSE_HEADSCALE_DOMAIN:-}" ]]; then
+        # On an upgrade re-run with neither CLI flag nor live env, hydrate
+        # from .env so the previous run's override sticks.
+        local persisted
+        persisted="$(secrets::env_get "$INSTALL_DIR/.env" SYNAPSE_HEADSCALE_DOMAIN)"
+        [[ -n "$persisted" ]] && export SYNAPSE_HEADSCALE_DOMAIN="$persisted"
     fi
     ui::step "Installing Headscale (Tailscale control plane)"
     headscale::bootstrap

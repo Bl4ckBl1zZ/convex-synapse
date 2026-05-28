@@ -1,9 +1,10 @@
 # Headscale (Tailscale control plane) reverse-proxy. Activated when
-# SYNAPSE_HEADSCALE_ENABLED=true AND SYNAPSE_BASE_DOMAIN is set.
-# Caddy issues a Let's Encrypt cert for headscale.<base-domain>
-# automatically. Tailscale client WebSockets require Caddy 2.x's
-# default reverse_proxy (no extra config needed).
-headscale.{{SYNAPSE_BASE_DOMAIN}} {
+# SYNAPSE_HEADSCALE_ENABLED=true AND a hostname is resolvable.
+# Hostname comes from SYNAPSE_HEADSCALE_DOMAIN (explicit override,
+# v1.18.2+) OR falls back to headscale.<SYNAPSE_BASE_DOMAIN>.
+# Caddy issues a Let's Encrypt cert automatically. Tailscale client
+# WebSockets require Caddy 2.x's default reverse_proxy (no extra config).
+{{SYNAPSE_HEADSCALE_HOST}} {
     {{ACME_EMAIL_BLOCK}}
     reverse_proxy synapse-headscale:8080 {
         header_up X-Real-IP {remote_host}

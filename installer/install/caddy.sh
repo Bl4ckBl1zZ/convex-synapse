@@ -255,8 +255,18 @@ caddy::write_standalone() {
 #                   their nginx config and Headscale needs WebSocket
 #                   passthrough they have to wire by hand.
 caddy::install_headscale_block() {
-    if [[ -z "${SYNAPSE_BASE_DOMAIN:-}" ]]; then
+    # Bail when neither SYNAPSE_BASE_DOMAIN nor SYNAPSE_HEADSCALE_DOMAIN
+    # is set — without a hostname we have nothing to render. The block
+    # is also rendered with whichever is set (override wins) so the
+    # operator can place Headscale outside any deployments wildcard.
+    if [[ -z "${SYNAPSE_BASE_DOMAIN:-}" && -z "${SYNAPSE_HEADSCALE_DOMAIN:-}" ]]; then
         return 0
+    fi
+    local headscale_host
+    if [[ -n "${SYNAPSE_HEADSCALE_DOMAIN:-}" ]]; then
+        headscale_host="${SYNAPSE_HEADSCALE_DOMAIN#.}"
+    else
+        headscale_host="headscale.${SYNAPSE_BASE_DOMAIN#.}"
     fi
     local tmpl="${1:-$INSTALLER_TEMPLATES/caddy.headscale.fragment.tmpl}"
     if [[ ! -r "$tmpl" ]]; then
@@ -265,13 +275,19 @@ caddy::install_headscale_block() {
     fi
     # The fragment template carries an {{ACME_EMAIL_BLOCK}} placeholder
     # that expands to a `tls <email>` directive when an ACME email is
-    # configured. We compute it here rather than baking two templates.
+    # configured. ACME_EMAIL may be empty when the operator only
+    # passed --base-domain (no --domain); fall back to SYNAPSE_ACME_EMAIL
+    # from .env so the headscale block always gets standard ACME (not
+    # the unsuitable on_demand wildcard).
+    local effective_email="${ACME_EMAIL:-${SYNAPSE_ACME_EMAIL:-}}"
     local email_block=""
-    if [[ -n "${ACME_EMAIL:-}" ]]; then
-        email_block="tls ${ACME_EMAIL}"
+    if [[ -n "$effective_email" ]]; then
+        email_block="tls ${effective_email}"
     fi
     local rendered
-    rendered="$(ACME_EMAIL_BLOCK="$email_block" caddy::_render "$tmpl")" || return 2
+    rendered="$(SYNAPSE_HEADSCALE_HOST="$headscale_host" \
+                ACME_EMAIL_BLOCK="$email_block" \
+                caddy::_render "$tmpl")" || return 2
 
     local mode
     mode="$(caddy::detect_mode)"
