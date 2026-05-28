@@ -183,6 +183,16 @@ type Config struct {
 	EnableObservedState   bool
 	EnableReconcileDryRun bool
 	AgentApply            bool
+
+	// Headscale (v1.18+, Remote Hosts). HeadscaleURL is the internal
+	// HTTP API the synapse-api container hits (e.g.
+	// http://synapse-headscale:8080). HeadscaleAPIKey is the admin
+	// Bearer token minted by `headscale apikeys create` at install
+	// time. Empty values disable Remote Hosts entirely — the
+	// dashboard hides the "Add host" button and the
+	// install-agent.sh download endpoint 503s with a clear hint.
+	HeadscaleURL    string
+	HeadscaleAPIKey string
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -283,6 +293,9 @@ func Load() (*Config, error) {
 		// Hard-disabled in Bloco 9. Apply is not implemented; this flag exists
 		// so the surface is explicit and defaults to false.
 		AgentApply: getEnvDefault("SYNAPSE_AGENT_APPLY", "false") == "true",
+
+		HeadscaleURL:    strings.TrimRight(os.Getenv("SYNAPSE_HEADSCALE_URL"), "/"),
+		HeadscaleAPIKey: os.Getenv("SYNAPSE_HEADSCALE_API_KEY"),
 	}, nil
 }
 

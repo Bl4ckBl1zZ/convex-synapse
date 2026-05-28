@@ -15,6 +15,7 @@ import (
 	"github.com/Iann29/synapse/internal/convexenv"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
 	"github.com/Iann29/synapse/internal/geo"
+	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/middleware"
 )
 
@@ -158,6 +159,10 @@ type RouterDeps struct {
 	// disables env sync — minimal test harnesses + legacy wirings
 	// degrade gracefully (the helpers log + skip instead of panicking).
 	ConvexEnv *convexenv.Client
+
+	// Headscale (v1.18+, Remote Hosts). nil when SYNAPSE_HEADSCALE_URL
+	// is empty — Phase 4 handlers detect this and 503 with a hint.
+	Headscale *headscale.Client
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the

@@ -25,6 +25,7 @@ import (
 	"github.com/Iann29/synapse/internal/db"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
+	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/health"
 	"github.com/Iann29/synapse/internal/provisioner"
 	"github.com/Iann29/synapse/internal/proxy"
@@ -253,6 +254,13 @@ func run() error {
 	// the env-sync paths; production always constructs one.
 	convexEnvClient := convexenv.NewClient()
 
+	// Headscale client (v1.18+, Remote Hosts). nil when not
+	// configured — Phase 4 handlers detect this and 503 with a hint.
+	var headscaleClient *headscale.Client
+	if cfg.HeadscaleURL != "" && cfg.HeadscaleAPIKey != "" {
+		headscaleClient = headscale.New(cfg.HeadscaleURL, cfg.HeadscaleAPIKey)
+	}
+
 	handler := api.NewRouter(api.RouterDeps{
 		Logger:                logger,
 		DB:                    pool,
@@ -292,6 +300,7 @@ func run() error {
 		// returns 503 crypto_not_configured.
 		ConvexEnv:   convexEnvClient,
 		DNSEnvelope: dnsEnvelope,
+		Headscale:   headscaleClient,
 	})
 
 	// Provisioning worker — dequeues 'provision' jobs inserted by the
