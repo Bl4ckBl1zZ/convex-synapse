@@ -42,6 +42,7 @@ import (
 	synapsedns "github.com/Iann29/synapse/internal/dns"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
 	"github.com/Iann29/synapse/internal/geo"
+	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/provisioner"
 )
 
@@ -196,6 +197,11 @@ type SetupOpts struct {
 	// the EXTERNAL Headscale URL surfaced by /v1/install_agent/config.
 	// Empty (default) drives the "Remote Hosts disabled" path.
 	HeadscaleServerURL string
+	// Headscale (v1.18+ Remote Hosts) wires the API client used by
+	// POST /v1/hosts/{id}/remote_setup. nil (default) drives the
+	// "Remote Hosts disabled" 503 path; tests that exercise the
+	// happy path point a *headscale.Client at an httptest stub.
+	Headscale *headscale.Client
 
 	// WithCrypto wires a real *crypto.SecretBox into RouterDeps +
 	// makes h.Crypto available for round-trip assertions, WITHOUT
@@ -329,6 +335,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		EnableObservedState: true,
 		ConvexEnv:           opts.ConvexEnv,
 		HeadscaleServerURL:  opts.HeadscaleServerURL,
+		Headscale:           opts.Headscale,
 	}
 
 	// HA wiring (only when SetupHA was called). The crypto box is a

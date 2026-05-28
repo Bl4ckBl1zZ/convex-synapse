@@ -320,10 +320,12 @@ func NewRouter(d RouterDeps) http.Handler {
 	operationsH := &OperationsHandler{DB: d.DB, Projects: projectsH}
 	projectsH.Operations = operationsH
 	hostsH := &HostsHandler{
-		DB:           d.DB,
-		PublicURL:    d.PublicURL,
-		StaleAfter:   d.AgentStaleAfter,
-		OfflineAfter: d.AgentOfflineAfter,
+		DB:                 d.DB,
+		PublicURL:          d.PublicURL,
+		StaleAfter:         d.AgentStaleAfter,
+		OfflineAfter:       d.AgentOfflineAfter,
+		Headscale:          d.Headscale,
+		HeadscaleServerURL: d.HeadscaleServerURL,
 	}
 	// Bloco 9b — Drift Engine + dry-run planner. Shares the host-liveness
 	// thresholds (they decide whether observed state can be trusted) and reuses

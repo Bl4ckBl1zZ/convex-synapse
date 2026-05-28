@@ -362,23 +362,28 @@ const (
 // there's one (the VPS Synapse runs on, marked IsSynapseHost); agent-adopted
 // VPSs arrive in a later block. Secrets never live here.
 type Host struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Provider        string            `json:"provider"`
-	Region          string            `json:"region"`
-	PublicIP        string            `json:"publicIp,omitempty"`
-	PrivateIP       string            `json:"privateIp,omitempty"`
-	Labels          map[string]string `json:"labels"`
-	Status          string            `json:"status"`
-	AgentVersion    string            `json:"agentVersion,omitempty"`
-	DockerVersion   string            `json:"dockerVersion,omitempty"`
-	CPUCores        *int              `json:"cpuCores,omitempty"`
-	MemoryMB        *int64            `json:"memoryMb,omitempty"`
-	DiskGB          *int64            `json:"diskGb,omitempty"`
-	IsSynapseHost   bool              `json:"isSynapseHost"`
-	LastHeartbeatAt *time.Time        `json:"lastHeartbeatAt,omitempty"`
-	CreatedAt       time.Time         `json:"createdAt"`
-	UpdatedAt       time.Time         `json:"updatedAt"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Provider      string            `json:"provider"`
+	Region        string            `json:"region"`
+	PublicIP      string            `json:"publicIp,omitempty"`
+	PrivateIP     string            `json:"privateIp,omitempty"`
+	Labels        map[string]string `json:"labels"`
+	Status        string            `json:"status"`
+	AgentVersion  string            `json:"agentVersion,omitempty"`
+	DockerVersion string            `json:"dockerVersion,omitempty"`
+	CPUCores      *int              `json:"cpuCores,omitempty"`
+	MemoryMB      *int64            `json:"memoryMb,omitempty"`
+	DiskGB        *int64            `json:"diskGb,omitempty"`
+	IsSynapseHost bool              `json:"isSynapseHost"`
+	// IsRemote (v1.18+ Remote Hosts) is true for hosts adopted via
+	// install-agent.sh — i.e. machines the control plane reaches over
+	// SSH+Tailscale instead of the local Docker socket. False for the
+	// self-host and for legacy local-only registrations.
+	IsRemote        bool       `json:"isRemote"`
+	LastHeartbeatAt *time.Time `json:"lastHeartbeatAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 	// EffectiveStatus (Bloco 6.5) is computed at read time from
 	// LastHeartbeatAt + the stale/offline thresholds — NOT stored. The API
 	// always sets it; `Status` remains the last-known stored signal. Clients
