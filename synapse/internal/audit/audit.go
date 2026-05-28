@@ -150,11 +150,16 @@ const (
 	ActionUpdateHost              = "updateHost"
 	ActionDrainHost               = "drainHost"
 	ActionCreateHostAdoptionToken = "createHostAdoptionToken"
-	ActionCreateCell              = "createCell"
-	ActionUpdateCell              = "updateCell"
-	ActionDrainCell               = "drainCell"
-	ActionDeleteCell              = "deleteCell"
-	ActionAttachDeploymentToCell  = "attachDeploymentToCell"
+	// Remote Hosts (v1.18+). Bundle action emitted when the dashboard's
+	// "Setup remote install" button mints an adoption token + a Headscale
+	// pre-auth key in one shot. The plaintext token/key never appear in
+	// metadata — only the host id/name + the shared expiry.
+	ActionMintRemoteSetup        = "mintRemoteSetup"
+	ActionCreateCell             = "createCell"
+	ActionUpdateCell             = "updateCell"
+	ActionDrainCell              = "drainCell"
+	ActionDeleteCell             = "deleteCell"
+	ActionAttachDeploymentToCell = "attachDeploymentToCell"
 	// Agent lifecycle (Bloco 6.5).
 	ActionRevokeHostAgent      = "revokeHostAgent"
 	ActionRotateHostAgentToken = "rotateHostAgentToken"

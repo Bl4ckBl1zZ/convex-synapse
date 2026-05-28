@@ -32,6 +32,7 @@ import (
 	"github.com/Iann29/synapse/internal/deploymenturl"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
 	"github.com/Iann29/synapse/internal/models"
+	"github.com/Iann29/synapse/internal/sshprov"
 )
 
 // Provisioner is the subset of the docker client this package needs. The
@@ -145,6 +146,22 @@ type Worker struct {
 	// post-provision push (legacy and minimal-harness behaviour). Same
 	// process-wide client built once in cmd/server/main.go.
 	ConvexEnv *convexenv.Client
+
+	// SSH dispatches Docker commands to remote VPSes via the
+	// synapse-deployer-exec wrapper on each host. nil when Remote Hosts
+	// is disabled (no SYNAPSE_STORAGE_KEY → no SignerLoader → no Client
+	// constructed in main.go). In that mode dockerForJob markFailed's
+	// any job whose host has is_remote=true with a clear hint.
+	SSH *sshprov.Client
+
+	// BackendImage / DockerNetwork mirror dockerprov.Client's
+	// BackendImage + Network fields. The local *dockerprov.Client
+	// carries them internally; the worker needs them explicitly so
+	// dockerForJob can build a *dockerprov.RemoteClient with matching
+	// values for remote-host jobs. Empty in the test harness, which
+	// never exercises the remote path.
+	BackendImage  string
+	DockerNetwork string
 }
 
 // SecretDecrypter is the *crypto.SecretBox subset the worker needs.
@@ -346,6 +363,16 @@ type claimedJob struct {
 	// Decrypted storage env (Postgres URL + S3) when the deployment
 	// runs in HA mode. nil for SQLite/legacy.
 	Storage *Storage
+
+	// Host placement (v1.18+). HostID is always populated (deployments.
+	// host_id is NOT NULL since migration 000026). HostIsRemote drives
+	// dispatch: false → local *dockerprov.Client; true → *dockerprov.
+	// RemoteClient bound to HostTailnetAddr over SSH.
+	HostID          string
+	HostIsRemote    bool
+	HostTailnetAddr string
+	HostSSHUser     string
+	HostSSHPort     int
 }
 
 // Storage carries the per-deployment Postgres + S3 connection info that
@@ -395,9 +422,11 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 		       d.project_id::text, d.name, d.deployment_type,
 		       d.host_port, d.container_id, d.admin_key, d.instance_secret, d.ha_enabled,
 		       r.replica_index, r.host_port,
-		       j.healthcheck_via_network
+		       j.healthcheck_via_network,
+		       d.host_id::text, h.is_remote, COALESCE(h.tailnet_addr, ''), h.ssh_user, h.ssh_port
 		  FROM provisioning_jobs j
 		  JOIN deployments d ON d.id = j.deployment_id
+		  JOIN hosts       h ON h.id = d.host_id
 		  LEFT JOIN deployment_replicas r ON r.id = j.replica_id
 		 WHERE j.status = 'pending'
 		 ORDER BY j.created_at ASC
@@ -407,7 +436,8 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 		&j.ProjectID, &j.Name, &j.DeploymentType,
 		&deploymentHostPort, &deploymentContainerID, &j.AdminKey, &j.InstanceSecret, &j.HAEnabled,
 		&replicaIndex, &replicaHostPort,
-		&j.HealthcheckViaNetwork)
+		&j.HealthcheckViaNetwork,
+		&j.HostID, &j.HostIsRemote, &j.HostTailnetAddr, &j.HostSSHUser, &j.HostSSHPort)
 	_ = replicaID
 	if errors.Is(err, pgx.ErrNoRows) {
 		return claimedJob{}, false
@@ -710,7 +740,15 @@ func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) 
 		}
 	}
 
-	info, err := w.Docker.Provision(ctx, spec)
+	// v1.18+: route to local Docker or *dockerprov.RemoteClient based
+	// on the host's is_remote flag. dockerForJob markFailed's the job
+	// and returns nil on misconfiguration (remote host + Remote Hosts
+	// disabled, missing tailnet, etc.) — bail in that case.
+	dispatcher := w.dockerForJob(j, logger)
+	if dispatcher == nil {
+		return
+	}
+	info, err := dispatcher.Provision(ctx, spec)
 	if err != nil {
 		logger.Error("provisioner: provision failed",
 			"job_id", j.JobID, "deployment", j.Name, "replica", j.ReplicaIndex, "err", err)
@@ -736,7 +774,7 @@ func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) 
 		// in either mode.
 		logger.Warn("provisioner: deployment no longer provisioning; cleaning up",
 			"deployment_id", j.DeploymentID, "name", j.Name)
-		if destroyErr := w.Docker.Destroy(ctx, j.Name); destroyErr != nil {
+		if destroyErr := dispatcher.Destroy(ctx, j.Name); destroyErr != nil {
 			logger.Warn("provisioner: cleanup destroy failed",
 				"deployment_id", j.DeploymentID, "err", destroyErr)
 		}
@@ -1336,4 +1374,47 @@ func (w *Worker) computeSiteOrigin(ctx context.Context, deploymentID, name strin
 	d := &models.Deployment{Name: name}
 	domain := deploymenturl.LookupActiveSiteDomain(ctx, w.DB, deploymentID)
 	return computer.Site(d, domain)
+}
+
+// jobDispatcher is the narrow Provision+Destroy subset runJob needs.
+// Both *dockerprov.Client (local docker socket) and
+// *dockerprov.RemoteClient (SSH-to-tailnet wrapper) satisfy it. The
+// wider Provisioner interface above stays in place for HA paths the
+// remote dispatcher doesn't implement in v1.18.
+type jobDispatcher interface {
+	Provision(ctx context.Context, spec dockerprov.DeploymentSpec) (*dockerprov.DeploymentInfo, error)
+	Destroy(ctx context.Context, deploymentName string) error
+}
+
+// dockerForJob returns the dispatcher appropriate for this job's host:
+// the local *dockerprov.Client for self-host placements, or a fresh
+// *dockerprov.RemoteClient bound to the host's tailnet IP for remote
+// placements. On configuration error (Remote Hosts disabled, host
+// lacks tailnet, etc.) the helper markFailed's the job and returns
+// nil; the caller MUST bail.
+func (w *Worker) dockerForJob(j claimedJob, logger *slog.Logger) jobDispatcher {
+	if !j.HostIsRemote {
+		return w.Docker
+	}
+	if w.SSH == nil {
+		logger.Error("provisioner: remote host but Remote Hosts disabled (sshprov.Client nil)",
+			"deployment_id", j.DeploymentID, "host_id", j.HostID)
+		w.markFailed(j.JobID, j.DeploymentID,
+			"remote host configured but Remote Hosts disabled — set SYNAPSE_HEADSCALE_URL + SYNAPSE_STORAGE_KEY and restart")
+		return nil
+	}
+	if j.HostTailnetAddr == "" {
+		logger.Error("provisioner: remote host has no tailnet_addr",
+			"deployment_id", j.DeploymentID, "host_id", j.HostID)
+		w.markFailed(j.JobID, j.DeploymentID,
+			"host has no tailnet address — install-agent.sh never finished registering this host")
+		return nil
+	}
+	target := sshprov.Target{
+		HostID:      j.HostID,
+		TailnetAddr: j.HostTailnetAddr,
+		User:        j.HostSSHUser,
+		Port:        j.HostSSHPort,
+	}
+	return dockerprov.NewRemoteClient(w.SSH, target, w.BackendImage, w.DockerNetwork)
 }

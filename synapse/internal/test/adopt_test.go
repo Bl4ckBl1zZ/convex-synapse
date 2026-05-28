@@ -13,22 +13,26 @@ import (
 // tests because DisallowUnknownFields means we can't decode into a partial
 // struct without listing every field that may appear.
 type deploymentJSON struct {
-	ID             string     `json:"id"`
-	ProjectID      string     `json:"projectId"`
-	Name           string     `json:"name"`
-	DeploymentType string     `json:"deploymentType"`
-	Status         string     `json:"status"`
-	DeploymentURL  string     `json:"deploymentUrl,omitempty"`
-	SiteURL        string     `json:"siteUrl,omitempty"`
-	IsDefault      bool       `json:"isDefault"`
-	Reference      string     `json:"reference,omitempty"`
-	Creator        string     `json:"creator,omitempty"`
-	Adopted        bool       `json:"adopted,omitempty"`
-	HAEnabled      bool       `json:"haEnabled,omitempty"`
-	ReplicaCount   int        `json:"replicaCount,omitempty"`
-	CreateTime     time.Time  `json:"createTime"`
-	LastDeployTime *time.Time `json:"lastDeployTime,omitempty"`
-	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
+	ID              string     `json:"id"`
+	ProjectID       string     `json:"projectId"`
+	Name            string     `json:"name"`
+	DeploymentType  string     `json:"deploymentType"`
+	Status          string     `json:"status"`
+	DeploymentURL   string     `json:"deploymentUrl,omitempty"`
+	SiteURL         string     `json:"siteUrl,omitempty"`
+	IsDefault       bool       `json:"isDefault"`
+	Reference       string     `json:"reference,omitempty"`
+	Creator         string     `json:"creator,omitempty"`
+	Adopted         bool       `json:"adopted,omitempty"`
+	HAEnabled       bool       `json:"haEnabled,omitempty"`
+	ReplicaCount    int        `json:"replicaCount,omitempty"`
+	CreateTime      time.Time  `json:"createTime"`
+	LastDeployTime  *time.Time `json:"lastDeployTime,omitempty"`
+	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
+	HostID          string     `json:"hostId,omitempty"`
+	HostName        string     `json:"hostName,omitempty"`
+	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
+	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
 }
 
 // fakeConvexBackend stands in for a real Convex backend during adoption

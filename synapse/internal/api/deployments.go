@@ -907,16 +907,19 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 	// 'provisioning' (the goroutine fills them in once Provision succeeds);
 	// scanning straight into the non-pointer fields blows up on NULL, so
 	// we go through pointers and dereference defensively below.
+	var hostName, hostTailnet *string
 	err := db.QueryRow(ctx, `
 		SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
 		       d.deployment_url, d.is_default, d.reference, d.creator_user_id,
 		       d.created_at, d.admin_key, d.instance_secret, d.host_port, d.container_id, d.adopted,
 		       d.ha_enabled, d.replica_count, d.last_deploy_at,
+		       d.host_id::text, h.name, h.tailnet_addr, h.is_remote,
 		       p.id, p.team_id, p.name, p.slug, p.is_demo, p.created_at,
 		       t.id, t.name, t.slug, t.creator_user_id, t.default_region, t.suspended, t.created_at
 		  FROM deployments d
 		  JOIN projects p ON p.id = d.project_id
 		  JOIN teams t ON t.id = p.team_id
+		  LEFT JOIN hosts h ON h.id = d.host_id
 		 WHERE d.name = $1
 		   AND d.status <> 'deleted'
 	`, name).Scan(
@@ -924,6 +927,7 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 		&url, &d.IsDefault, &ref, &creator,
 		&d.CreatedAt, &d.AdminKey, &d.InstanceSecret, &hostPort, &containerID, &d.Adopted,
 		&d.HAEnabled, &d.ReplicaCount, &d.LastDeployAt,
+		&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote,
 		&p.ID, &p.TeamID, &p.Name, &p.Slug, &p.IsDemo, &p.CreatedAt,
 		&t.ID, &t.Name, &t.Slug, &t.CreatorUserID, &t.DefaultRegion, &t.Suspended, &t.CreatedAt,
 	)
@@ -944,6 +948,12 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 	}
 	if hostPort != nil {
 		d.HostPort = *hostPort
+	}
+	if hostName != nil {
+		d.HostName = *hostName
+	}
+	if hostTailnet != nil {
+		d.HostTailnetAddr = *hostTailnet
 	}
 	p.TeamSlug = t.Slug
 	return &d, &p, &t, nil
@@ -1192,6 +1202,13 @@ type createDeploymentReq struct {
 	// optional; any field left empty falls back to the value configured
 	// at the Synapse-process level (SYNAPSE_BACKEND_POSTGRES_URL etc).
 	HAOverrides *haOverrides `json:"haOverrides,omitempty"`
+
+	// HostID, optional. The hosts.id this deployment should be
+	// provisioned on (v1.18+ Remote Hosts). Empty → defaults to the
+	// self-host (the row with is_synapse_host=true). Must reference an
+	// existing host that isn't draining; remote hosts additionally
+	// require a stored SSH key (re-run install-agent.sh otherwise).
+	HostID string `json:"hostId,omitempty"`
 }
 
 type haOverrides struct {
@@ -1270,6 +1287,54 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	// v1.18+ Remote Hosts: resolve and validate the target host. Empty
+	// hostId → default to the self-host. An explicit hostId must
+	// reference an existing host that's not draining; remote hosts
+	// additionally require a stored SSH key (otherwise the provisioner
+	// worker would fail at dispatch time with a confusing error).
+	hostID := strings.TrimSpace(req.HostID)
+	if hostID == "" {
+		if err := h.DB.QueryRow(r.Context(),
+			`SELECT id FROM hosts WHERE is_synapse_host = TRUE LIMIT 1`,
+		).Scan(&hostID); err != nil {
+			logErr("locate self-host", err)
+			writeError(w, http.StatusInternalServerError, "internal",
+				"Self-host not registered yet — try again in a moment")
+			return
+		}
+	} else {
+		var (
+			hostName   string
+			hostStatus string
+			isRemote   bool
+			hasSSHKey  bool
+		)
+		err := h.DB.QueryRow(r.Context(),
+			`SELECT name, status, is_remote, ssh_privkey_encrypted IS NOT NULL
+			   FROM hosts WHERE id::text = $1`, hostID,
+		).Scan(&hostName, &hostStatus, &isRemote, &hasSSHKey)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "host_not_found",
+				"No host with id "+hostID+" — register one via install-agent.sh first")
+			return
+		}
+		if err != nil {
+			logErr("validate host_id", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to validate host")
+			return
+		}
+		if hostStatus == "draining" {
+			writeError(w, http.StatusBadRequest, "host_draining",
+				"Host "+hostName+" is draining — new deployments refused. Pick another host.")
+			return
+		}
+		if isRemote && !hasSSHKey {
+			writeError(w, http.StatusBadRequest, "host_not_provisioned",
+				"Host "+hostName+" has no SSH key on record — re-run install-agent.sh to repair")
+			return
+		}
+	}
+
 	// INSTANCE_SECRET is independent of name/port so we generate it once and
 	// keep it across retries. The admin key, by contrast, is derived from
 	// (name, secret) via Convex's `generate_key` — if we regenerate the name
@@ -1336,12 +1401,12 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 		if txErr = tx.QueryRow(r.Context(), `
 			INSERT INTO deployments (project_id, name, deployment_type, status, host_port,
 			                          admin_key, instance_secret, is_default, reference,
-			                          creator_user_id, ha_enabled, replica_count)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12)
+			                          creator_user_id, ha_enabled, replica_count, host_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13)
 			RETURNING id, created_at
 		`, projectID, name, req.Type, models.DeploymentStatusProvisioning, primaryPort,
 			adminKey, instanceSecret, req.IsDefault, req.Reference, uid,
-			req.HA, replicaCount,
+			req.HA, replicaCount, hostID,
 		).Scan(&d.ID, &d.CreatedAt); txErr != nil {
 			return txErr
 		}
@@ -1408,6 +1473,24 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 		d.HostPort = ports[0]
 	}
 	d.AdminKey = adminKey
+	d.HostID = hostID
+	// Best-effort: enrich the response with host_name + tailnet_addr so
+	// the dashboard renders "deployment X on vps-eu-1" without a second
+	// round-trip. Failure → leave the fields empty; the canonical row
+	// still has host_id populated.
+	var hostName, hostTailnet *string
+	var hostIsRemote bool
+	if err := h.DB.QueryRow(r.Context(),
+		`SELECT name, tailnet_addr, is_remote FROM hosts WHERE id::text = $1`, hostID,
+	).Scan(&hostName, &hostTailnet, &hostIsRemote); err == nil {
+		if hostName != nil {
+			d.HostName = *hostName
+		}
+		if hostTailnet != nil {
+			d.HostTailnetAddr = *hostTailnet
+		}
+		d.HostIsRemote = hostIsRemote
+	}
 
 	// The provisioner.Worker on this (or any) Synapse process will dequeue
 	// the job and drive Docker.Provision. The dashboard's existing SWR
@@ -1605,12 +1688,17 @@ func (h *DeploymentsHandler) adoptDeployment(w http.ResponseWriter, r *http.Requ
 		// instance_secret is NOT NULL in the schema; adopted rows don't have
 		// one (Synapse never generated it), so we store an empty string.
 		// Nothing in the codebase uses instance_secret on adopted=true rows.
+		// Adopted deployments default to the self-host (operator owns the
+		// container lifecycle externally; placement is a logical attribution
+		// for the topology view, not a routing decision \u2014 Synapse never
+		// dispatches `docker run` to an adopted row).
 		err := h.DB.QueryRow(r.Context(), `
 			INSERT INTO deployments (project_id, name, deployment_type, status,
 			                          admin_key, instance_secret, deployment_url,
 			                          is_default, reference, creator_user_id,
-			                          adopted)
-			VALUES ($1, $2, $3, $4, $5, '', $6, $7, NULLIF($8, ''), $9, true)
+			                          adopted, host_id)
+			VALUES ($1, $2, $3, $4, $5, '', $6, $7, NULLIF($8, ''), $9, true,
+			        (SELECT id FROM hosts WHERE is_synapse_host = TRUE LIMIT 1))
 			RETURNING id, created_at
 		`, projectID, insertName, req.DeploymentType, models.DeploymentStatusRunning,
 			req.AdminKey, req.DeploymentURL, req.IsDefault, req.Reference, uid,
@@ -1752,17 +1840,20 @@ func (h *DeploymentsHandler) getProjectDeployment(w http.ResponseWriter, r *http
 	query := `
 		SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
 		       d.deployment_url, d.is_default, d.reference, d.creator_user_id, d.created_at,
-		       d.adopted
+		       d.adopted,
+		       d.host_id::text, h.name, h.tailnet_addr, h.is_remote
 		  FROM deployments d
+		  LEFT JOIN hosts h ON h.id = d.host_id
 		 WHERE ` + joinAnd(where) + `
 		 ORDER BY d.is_default DESC, d.created_at DESC
 		 LIMIT 1
 	`
 	var d models.Deployment
-	var url, refDB, creator *string
+	var url, refDB, creator, hostName, hostTailnet *string
 	err := h.DB.QueryRow(r.Context(), query, args...).Scan(
 		&d.ID, &d.ProjectID, &d.Name, &d.DeploymentType, &d.Status,
 		&url, &d.IsDefault, &refDB, &creator, &d.CreatedAt, &d.Adopted,
+		&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "deployment_not_found", "No matching deployment")
@@ -1781,6 +1872,12 @@ func (h *DeploymentsHandler) getProjectDeployment(w http.ResponseWriter, r *http
 	}
 	if creator != nil {
 		d.CreatorUserID = *creator
+	}
+	if hostName != nil {
+		d.HostName = *hostName
+	}
+	if hostTailnet != nil {
+		d.HostTailnetAddr = *hostTailnet
 	}
 	d.DeploymentURL = h.publicDeploymentURL(r.Context(), &d)
 	d.SiteURL = h.siteDeploymentURL(r.Context(), &d)

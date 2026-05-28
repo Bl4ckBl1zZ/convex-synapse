@@ -106,7 +106,19 @@ type Deployment struct {
 	ReplicaCount int        `json:"replicaCount,omitempty"`
 	CreatedAt    time.Time  `json:"createTime"`
 	LastDeployAt *time.Time `json:"lastDeployTime,omitempty"`
-	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
+	// HostID is the hosts.id this deployment is provisioned on. NOT NULL
+	// from migration 000026; pre-v1.18 deployments backfilled to the
+	// self-host id. Set explicitly via the create_deployment body when an
+	// operator places a deployment on a remote host (Phase 4).
+	HostID string `json:"hostId,omitempty"`
+	// HostName / HostTailnetAddr / HostIsRemote come from the JOIN with
+	// hosts in list/get handlers. Empty / zero when loaded via a query
+	// that doesn't join. JSON: omitempty keeps the legacy v1.17- shape
+	// decodable.
+	HostName        string     `json:"hostName,omitempty"`
+	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
+	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
+	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
 }
 
 // DeploymentReplicaStatus enumerates the per-replica lifecycle states.
@@ -350,23 +362,28 @@ const (
 // there's one (the VPS Synapse runs on, marked IsSynapseHost); agent-adopted
 // VPSs arrive in a later block. Secrets never live here.
 type Host struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Provider        string            `json:"provider"`
-	Region          string            `json:"region"`
-	PublicIP        string            `json:"publicIp,omitempty"`
-	PrivateIP       string            `json:"privateIp,omitempty"`
-	Labels          map[string]string `json:"labels"`
-	Status          string            `json:"status"`
-	AgentVersion    string            `json:"agentVersion,omitempty"`
-	DockerVersion   string            `json:"dockerVersion,omitempty"`
-	CPUCores        *int              `json:"cpuCores,omitempty"`
-	MemoryMB        *int64            `json:"memoryMb,omitempty"`
-	DiskGB          *int64            `json:"diskGb,omitempty"`
-	IsSynapseHost   bool              `json:"isSynapseHost"`
-	LastHeartbeatAt *time.Time        `json:"lastHeartbeatAt,omitempty"`
-	CreatedAt       time.Time         `json:"createdAt"`
-	UpdatedAt       time.Time         `json:"updatedAt"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Provider      string            `json:"provider"`
+	Region        string            `json:"region"`
+	PublicIP      string            `json:"publicIp,omitempty"`
+	PrivateIP     string            `json:"privateIp,omitempty"`
+	Labels        map[string]string `json:"labels"`
+	Status        string            `json:"status"`
+	AgentVersion  string            `json:"agentVersion,omitempty"`
+	DockerVersion string            `json:"dockerVersion,omitempty"`
+	CPUCores      *int              `json:"cpuCores,omitempty"`
+	MemoryMB      *int64            `json:"memoryMb,omitempty"`
+	DiskGB        *int64            `json:"diskGb,omitempty"`
+	IsSynapseHost bool              `json:"isSynapseHost"`
+	// IsRemote (v1.18+ Remote Hosts) is true for hosts adopted via
+	// install-agent.sh — i.e. machines the control plane reaches over
+	// SSH+Tailscale instead of the local Docker socket. False for the
+	// self-host and for legacy local-only registrations.
+	IsRemote        bool       `json:"isRemote"`
+	LastHeartbeatAt *time.Time `json:"lastHeartbeatAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 	// EffectiveStatus (Bloco 6.5) is computed at read time from
 	// LastHeartbeatAt + the stale/offline thresholds — NOT stored. The API
 	// always sets it; `Status` remains the last-known stored signal. Clients

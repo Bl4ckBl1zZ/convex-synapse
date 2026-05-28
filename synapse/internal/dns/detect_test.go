@@ -29,9 +29,9 @@ func (s stubResolver) LookupNS(_ context.Context, _ string) ([]*net.NS, error) {
 // Missing entries simulate the real-world empty/NXDOMAIN behaviour
 // of net.LookupNS against a non-delegated subdomain.
 type perNameResolver struct {
-	answers   map[string][]string
-	notFound  map[string]bool // names that should return *net.DNSError IsNotFound
-	calls     []string
+	answers  map[string][]string
+	notFound map[string]bool // names that should return *net.DNSError IsNotFound
+	calls    []string
 }
 
 func (p *perNameResolver) LookupNS(_ context.Context, name string) ([]*net.NS, error) {

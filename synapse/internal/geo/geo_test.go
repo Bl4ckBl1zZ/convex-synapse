@@ -12,14 +12,14 @@ import (
 
 func TestFlagEmoji(t *testing.T) {
 	cases := map[string]string{
-		"DE": "🇩🇪",
-		"US": "🇺🇸",
-		"BR": "🇧🇷",
-		"SG": "🇸🇬",
-		"":   "",
-		"D":  "",
+		"DE":  "🇩🇪",
+		"US":  "🇺🇸",
+		"BR":  "🇧🇷",
+		"SG":  "🇸🇬",
+		"":    "",
+		"D":   "",
 		"DEU": "",
-		"d1": "",
+		"d1":  "",
 	}
 	for in, want := range cases {
 		if got := flagEmoji(in); got != want {
@@ -30,24 +30,24 @@ func TestFlagEmoji(t *testing.T) {
 
 func TestProviderFromOrg(t *testing.T) {
 	cases := map[string]string{
-		"AS24940 Hetzner Online GmbH":       "Hetzner",
-		"AS14061 DigitalOcean, LLC":         "DigitalOcean",
-		"AS16509 Amazon.com, Inc.":          "AWS",
-		"AS15169 Google LLC":                "Google Cloud",
-		"AS8075 Microsoft Corporation":      "Azure",
-		"AS16276 OVH SAS":                   "OVH",
-		"AS20473 Vultr Holdings, LLC":       "Vultr",
-		"AS63949 Akamai Connected Cloud":    "Linode",
-		"AS31898 Oracle Corporation":        "Oracle Cloud",
-		"AS13335 Cloudflare, Inc.":          "Cloudflare",
-		"AS54113 Fastly":                    "Fastly",
+		"AS24940 Hetzner Online GmbH":             "Hetzner",
+		"AS14061 DigitalOcean, LLC":               "DigitalOcean",
+		"AS16509 Amazon.com, Inc.":                "AWS",
+		"AS15169 Google LLC":                      "Google Cloud",
+		"AS8075 Microsoft Corporation":            "Azure",
+		"AS16276 OVH SAS":                         "OVH",
+		"AS20473 Vultr Holdings, LLC":             "Vultr",
+		"AS63949 Akamai Connected Cloud":          "Linode",
+		"AS31898 Oracle Corporation":              "Oracle Cloud",
+		"AS13335 Cloudflare, Inc.":                "Cloudflare",
+		"AS54113 Fastly":                          "Fastly",
 		"AS47583 Hostinger International Limited": "Hostinger",
-		"AS12876 Scaleway S.A.S.":           "Scaleway",
-		"AS51167 Contabo GmbH":              "Contabo",
-		"AS60781 Leaseweb Netherlands B.V.": "Leaseweb",
-		"AS8560 IONOS SE":                   "IONOS",
+		"AS12876 Scaleway S.A.S.":                 "Scaleway",
+		"AS51167 Contabo GmbH":                    "Contabo",
+		"AS60781 Leaseweb Netherlands B.V.":       "Leaseweb",
+		"AS8560 IONOS SE":                         "IONOS",
 		// Unknown providers fall through with the ASN stripped.
-		"AS99999 Tiny Cloud Co.":            "Tiny Cloud Co.",
+		"AS99999 Tiny Cloud Co.": "Tiny Cloud Co.",
 		// Empty org returns empty string.
 		"": "",
 	}

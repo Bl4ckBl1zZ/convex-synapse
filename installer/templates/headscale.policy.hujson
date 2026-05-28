@@ -1,0 +1,11 @@
+{
+  // Permissive default — Phase 1 only needs Headscale reachable.
+  // Tag-based ACLs land in Phase 3 (SSH remote provisioning).
+  "acls": [
+    {
+      "action": "accept",
+      "src":    ["*"],
+      "dst":    ["*:*"]
+    }
+  ]
+}

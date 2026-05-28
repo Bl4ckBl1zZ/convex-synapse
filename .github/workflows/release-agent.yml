@@ -1,0 +1,112 @@
+name: release-agent
+
+# Triggered by repo version tags (piggyback on the main release cycle).
+# Building the agent on every push to main would waste runners; ONLY
+# tagged releases get binaries. install-agent.sh always fetches
+# /releases/latest, so untagged commits don't break the public flow.
+on:
+  push:
+    tags:
+      - 'v*'
+  # Also allow manual dispatch for hot-fix builds + dry runs.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v1.18.0). When empty, builds the workflow's commit SHA."
+        required: false
+        type: string
+
+jobs:
+  build-and-upload:
+    name: build agent + upload to release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # required for gh release upload
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux only for v1.18.0 — Tailscale + Docker + systemd are the
+        # operator-side requirements. macOS / Windows agents are
+        # tracked for v1.19+ (operators don't run Convex backends on
+        # those today; the host-side requirement is Linux).
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: synapse/go.mod
+          cache-dependency-path: synapse/go.sum
+
+      - name: Resolve version stamp
+        id: version
+        run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build synapse-agent (${{ matrix.goos }}/${{ matrix.goarch }})
+        working-directory: synapse
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          # Static binary, stripped (-s -w shaves ~30% off).
+          go build \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }}" \
+            -o synapse-agent-${{ matrix.goos }}-${{ matrix.goarch }} \
+            ./cmd/synapse-agent
+
+      - name: Stage release tarball
+        run: |
+          mkdir -p stage
+          cp synapse/synapse-agent-${{ matrix.goos }}-${{ matrix.goarch }} stage/synapse-agent
+          cp installer-agent/templates/synapse-agent.service stage/synapse-agent.service
+          cp LICENSE stage/LICENSE
+          cat > stage/README.md <<EOF
+          # synapse-agent ${{ steps.version.outputs.version }}
+
+          Observe-only agent for the Synapse Cell Control Plane.
+
+          See: https://github.com/Iann29/convex-synapse/blob/main/docs/HOSTS_AND_AGENTS.md
+
+          Install via install-agent.sh — see:
+          https://github.com/Iann29/convex-synapse/blob/main/docs/REMOTE_HOSTS.md
+
+          ${{ matrix.goos }}/${{ matrix.goarch }} build.
+          EOF
+          ARCHIVE="synapse-agent-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          tar -C stage -czf "$ARCHIVE" .
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload to GitHub Release (on tag push)
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.version.outputs.version }}" \
+            "$archive" "$archive.sha256" \
+            --clobber
+
+      - name: Upload as workflow artifact (always, for diagnostics)
+        uses: actions/upload-artifact@v7
+        with:
+          name: synapse-agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ env.archive }}
+            ${{ env.archive }}.sha256
+          retention-days: 14

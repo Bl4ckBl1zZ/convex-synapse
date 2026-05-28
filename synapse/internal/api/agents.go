@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Iann29/synapse/internal/auth"
+	"github.com/Iann29/synapse/internal/hostssh"
 	"github.com/Iann29/synapse/internal/models"
 )
 
@@ -36,6 +37,11 @@ type AgentsHandler struct {
 	// applyAllowed is ALWAYS false in this block regardless of these.
 	EnableObservedState bool
 	EnableDesiredState  bool
+	// Crypto encrypts the SSH private key install-agent.sh sends at
+	// register time (v1.18+ Remote Hosts). Nil when SYNAPSE_STORAGE_KEY
+	// isn't set; the register handler rejects remote-host registrations
+	// (those carrying sshPrivkey) with 503 crypto_disabled in that case.
+	Crypto SecretEncrypter
 }
 
 func (h *AgentsHandler) Routes() chi.Router {
@@ -58,6 +64,20 @@ type agentRegisterReq struct {
 	CPUCores      *int   `json:"cpuCores,omitempty"`
 	MemoryMb      *int64 `json:"memoryMb,omitempty"`
 	DiskGb        *int64 `json:"diskGb,omitempty"`
+
+	// v1.18+ Remote Hosts: install-agent.sh sends these AFTER joining
+	// the Headscale tailnet + generating the SSH keypair. Pre-v1.18
+	// agents omit them — fields stay empty and the host stays
+	// is_remote=false (treated as a local-or-legacy observer).
+	TailnetAddr string `json:"tailnetAddr,omitempty"`
+	SSHPubkey   string `json:"sshPubkey,omitempty"`
+	SSHUser     string `json:"sshUser,omitempty"` // default "synapse-deployer"
+	SSHPort     *int   `json:"sshPort,omitempty"` // default 22
+	// v1.18 Phase 3: PEM-encoded ed25519 private key the agent generated
+	// on the VPS. Sent ONCE here over HTTPS; Synapse encrypts via
+	// crypto.SecretBox + persists in hosts.ssh_privkey_encrypted. Never
+	// returned by any API. Pre-Phase-3 agents omit this field.
+	SSHPrivkey string `json:"sshPrivkey,omitempty"`
 }
 
 type agentConfigResp struct {
@@ -154,6 +174,80 @@ func (h *AgentsHandler) register(w http.ResponseWriter, r *http.Request) {
 		logErr("apply host facts on register", err)
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to register agent")
 		return
+	}
+
+	// v1.18+ Remote Hosts: if the agent sent tailnet + SSH info, persist
+	// it on the host row + flip is_remote=true. Backwards-compatible:
+	// pre-v1.18 agents omit these fields and the host stays
+	// is_remote=false (local-or-legacy observer mode). NULLIF preserves
+	// the partial-update contract — an agent that sends one of the two
+	// addressing fields but not the other doesn't wipe the persisted
+	// value with an empty string.
+	if strings.TrimSpace(req.TailnetAddr) != "" || strings.TrimSpace(req.SSHPubkey) != "" {
+		sshUser := strings.TrimSpace(req.SSHUser)
+		if sshUser == "" {
+			sshUser = "synapse-deployer"
+		}
+		sshPort := 22
+		if req.SSHPort != nil && *req.SSHPort > 0 {
+			sshPort = *req.SSHPort
+		}
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE hosts
+			   SET tailnet_addr = NULLIF($2, ''),
+			       ssh_pubkey   = NULLIF($3, ''),
+			       ssh_user     = $4,
+			       ssh_port     = $5,
+			       is_remote    = TRUE
+			 WHERE id = $1
+		`, hostID, strings.TrimSpace(req.TailnetAddr), strings.TrimSpace(req.SSHPubkey), sshUser, sshPort); err != nil {
+			logErr("apply remote host fields on register", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to register agent")
+			return
+		}
+	}
+
+	// v1.18 Phase 3: encrypted SSH privkey persistence. install-agent.sh
+	// sends the PEM-encoded ed25519 private key once; we encrypt with the
+	// existing crypto.SecretBox + persist. Decryption happens on demand in
+	// sshprov.Client.Dial() (Phase 3B) when Synapse central provisions a
+	// Convex container on this remote host. Persist is gated on the same
+	// trim check as the addressing fields above so a malformed pre-Phase-3
+	// agent that sets sshPrivkey="" doesn't trip the crypto_disabled path.
+	// Preserve the PEM exactly as sent (no TrimSpace) — OpenSSH private-
+	// key encoding includes a trailing newline that ssh-keygen libraries
+	// expect. Empty / whitespace-only privkeys are gated below.
+	rawPrivkey := req.SSHPrivkey
+	if strings.TrimSpace(rawPrivkey) != "" {
+		if h.Crypto == nil {
+			writeError(w, http.StatusServiceUnavailable, "crypto_disabled",
+				"SYNAPSE_STORAGE_KEY must be configured to accept remote-host SSH keys")
+			return
+		}
+		ciphertext, err := h.Crypto.EncryptString(rawPrivkey)
+		if err != nil {
+			logErr("encrypt host ssh privkey", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to register agent")
+			return
+		}
+		// Fingerprint failure is non-fatal: we still persist the ciphertext
+		// (it's the source of truth Phase 3B needs); fingerprint is a
+		// dashboard convenience that can be backfilled by a future
+		// migration if a malformed pubkey ever sneaks through.
+		fp, fpErr := hostssh.Fingerprint([]byte(strings.TrimSpace(req.SSHPubkey)))
+		if fpErr != nil {
+			logErr("fingerprint host ssh pubkey", fpErr)
+		}
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE hosts
+			   SET ssh_privkey_encrypted   = $2,
+			       ssh_privkey_fingerprint = NULLIF($3, '')
+			 WHERE id = $1
+		`, hostID, ciphertext, fp); err != nil {
+			logErr("apply host ssh privkey on register", err)
+			writeError(w, http.StatusInternalServerError, "internal", "Failed to register agent")
+			return
+		}
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {

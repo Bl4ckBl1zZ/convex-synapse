@@ -129,6 +129,30 @@ export type Deployment = {
   // present + true means the row is backed by Postgres + S3 with N replicas.
   haEnabled?: boolean;
   replicaCount?: number;
+  // v1.18+ Remote Hosts join: when the deployment row points at a host
+  // other than the self-host, the backend includes the host's name +
+  // remote flag so the row can render an "on vps-eu-1" badge. Absent /
+  // empty when the deployment runs on the self-host.
+  hostId?: string;
+  hostName?: string;
+  hostTailnetAddr?: string;
+  hostIsRemote?: boolean;
+};
+
+// RemoteSetupBundle is the one-click "Setup remote install" payload
+// returned by POST /v1/hosts/{id}/remote_setup (v1.18+ Remote Hosts).
+// `adoptionToken` + `headscaleAuthKey` are PLAINTEXT and returned
+// exactly once — the modal shows them inside the rendered one-liner
+// and never re-fetches. `expiresAt` is RFC3339 UTC; both tokens
+// expire at the same instant (~1h after mint). The bundle endpoint
+// 503s with code remote_hosts_disabled when Headscale isn't wired.
+export type RemoteSetupBundle = {
+  adoptionToken: string;
+  headscaleAuthKey: string;
+  controlUrl: string;
+  headscaleServerUrl: string;
+  oneLiner: string;
+  expiresAt: string;
 };
 
 // Body shape for POST /v1/projects/{id}/adopt_deployment.
@@ -613,6 +637,10 @@ export type Host = {
   // True for the single host the control plane itself runs on (the synthetic
   // "primary" host the backfill creates). Agent-adopted VPSs are false.
   isSynapseHost: boolean;
+  // isRemote (v1.18+ Remote Hosts) — true when the host was adopted via
+  // install-agent.sh and is reached over SSH+Tailscale. False for the
+  // self-host and legacy local-only registrations.
+  isRemote?: boolean;
   lastHeartbeatAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -1494,6 +1522,11 @@ export const api = {
         // backed by Postgres + S3. Refused with 400 ha_disabled when
         // SYNAPSE_HA_ENABLED is not set on the cluster.
         ha?: boolean;
+        // hostId (v1.18+ Remote Hosts) places the new deployment on a
+        // specific host row. Omit (or empty string) to default to the
+        // self-host. Backend returns 400 host_not_found / host_draining
+        // / host_not_provisioned on misconfiguration.
+        hostId?: string;
       }
     ): Promise<Deployment> {
       return request<Deployment>(
@@ -2032,6 +2065,17 @@ export const api = {
       return request<HostAdoptionToken>(
         `/v1/hosts/${encodeURIComponent(id)}/adoption_token`,
         { method: "POST", body },
+      );
+    },
+    // remoteSetup (v1.18+ Remote Hosts) mints the dashboard's one-click
+    // bundle: an adoption token + a Headscale pre-auth key + a
+    // pre-rendered install-agent.sh one-liner. Both plaintext secrets
+    // are returned exactly once. 503 with code remote_hosts_disabled
+    // when the control plane wasn't started with --enable-headscale.
+    remoteSetup(id: string): Promise<RemoteSetupBundle> {
+      return request<RemoteSetupBundle>(
+        `/v1/hosts/${encodeURIComponent(id)}/remote_setup`,
+        { method: "POST", body: {} },
       );
     },
     // Agent lifecycle (Bloco 6.5), all instance-admin.

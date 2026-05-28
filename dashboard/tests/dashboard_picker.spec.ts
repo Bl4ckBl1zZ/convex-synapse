@@ -32,8 +32,10 @@ async function seedDeployment(
     await c.query(
       `INSERT INTO deployments (project_id, name, deployment_type, status,
                                  admin_key, instance_secret, host_port,
-                                 is_default, deployment_url, container_id)
-       VALUES ($1, $2, $3, 'running', $4, 'fake-secret', $5, $6, $7, $8)`,
+                                 is_default, deployment_url, container_id,
+                                 host_id)
+       VALUES ($1, $2, $3, 'running', $4, 'fake-secret', $5, $6, $7, $8,
+               (SELECT id FROM hosts WHERE is_synapse_host LIMIT 1))`,
       [
         projectId,
         name,

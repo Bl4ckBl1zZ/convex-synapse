@@ -24,7 +24,7 @@ import { HostsPanel } from "@/components/HostsPanel";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
 import { DeployKeysPanel } from "@/components/DeployKeysPanel";
-import { ApiError, api, type Cell, type Deployment, type Project } from "@/lib/api";
+import { ApiError, api, type Cell, type Deployment, type Host, type Project } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 
 type Params = { team: string; project: string };
@@ -166,6 +166,16 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
     if (c.primaryDeploymentId) cellByDeploymentId.set(c.primaryDeploymentId, c);
   }
 
+  // v1.18+ Remote Hosts: powers the "Place on host" dropdown in the
+  // create-deployment dialog AND the per-row "on vps-eu-1" badge.
+  // Instance-admin gated server-side; non-admins get an empty array via
+  // the .catch() so the dropdown silently degrades to "default only".
+  const { data: hostsForPlacement } = useSWR<Host[]>(
+    ["/hosts-for-placement", projectId],
+    () => api.hosts.list().catch(() => [] as Host[]),
+    { shouldRetryOnError: false, revalidateOnFocus: false },
+  );
+
   const [open, setOpen] = useState(false);
   const [type, setType] = useState<"dev" | "prod">("dev");
   // HA mode. Off by default — single-replica deployments are the common
@@ -173,6 +183,9 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
   // submitting with this on returns 400 ha_disabled which we surface
   // inline instead of crashing the dialog.
   const [haMode, setHAMode] = useState(false);
+  // v1.18+ Remote Hosts: hostId override on the new deployment.
+  // Empty string = default to the self-host (backend resolves it).
+  const [hostId, setHostId] = useState<string>("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [openingName, setOpeningName] = useState<string | null>(null);
@@ -197,9 +210,11 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
       await api.projects.createDeployment(projectId, {
         type,
         ha: haMode || undefined,
+        hostId: hostId || undefined,
       });
       setOpen(false);
       setHAMode(false);
+      setHostId("");
       // v1.9.7: the topology panel below uses its own SWR key, so the
       // deployments-list mutate() above doesn't invalidate it. Force a
       // refetch by signalling the global cache — the panel re-renders
@@ -549,6 +564,15 @@ await Promise.all([
                           Cell: {cellByDeploymentId.get(d.id)!.name}
                         </Badge>
                       )}
+                      {d.hostName && d.hostIsRemote && (
+                        <Badge
+                          tone="violet"
+                          title={`Runs on remote host ${d.hostName}`}
+                          data-testid={`deployment-host-${d.name}`}
+                        >
+                          on {d.hostName}
+                        </Badge>
+                      )}
                     </div>
                     {(d.deploymentUrl || d.url) && (
                       <div className="mt-1 space-y-0.5">
@@ -776,6 +800,40 @@ await Promise.all([
                 {" "}credentials. See <code className="text-neutral-300">docs/V0_5_PLAN.md</code>.
               </p>
             )}
+          </div>
+          {/* v1.18+ Remote Hosts. The dropdown silently degrades to
+              "default only" when the operator isn't an instance admin
+              (api.hosts.list 403 caught in the SWR fetcher) OR when
+              Remote Hosts isn't wired (no agent-adopted hosts → only
+              the self-host shows, which is filtered out below). */}
+          <div className="space-y-2">
+            <label htmlFor="create-deployment-host" className="block text-xs text-neutral-400">
+              Place on host
+            </label>
+            <select
+              id="create-deployment-host"
+              value={hostId}
+              onChange={(e) => setHostId(e.target.value)}
+              data-testid="deployment-place-on-host"
+              className="block h-9 w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
+            >
+              <option value="">Default (this control plane)</option>
+              {(hostsForPlacement ?? [])
+                .filter(
+                  (h) =>
+                    !h.isSynapseHost && h.effectiveStatus !== "draining",
+                )
+                .map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name}
+                    {h.isRemote ? " (remote)" : ""} — {h.effectiveStatus ?? h.status}
+                  </option>
+                ))}
+            </select>
+            <p className="text-[11px] text-neutral-500">
+              Defaults to the host running Synapse. Remote hosts appear
+              once an operator runs install-agent.sh on them.
+            </p>
           </div>
           {formError && <p className="text-xs text-red-400">{formError}</p>}
           <div className="flex justify-end gap-2">

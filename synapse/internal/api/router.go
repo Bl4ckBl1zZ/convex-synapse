@@ -15,6 +15,7 @@ import (
 	"github.com/Iann29/synapse/internal/convexenv"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
 	"github.com/Iann29/synapse/internal/geo"
+	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/middleware"
 )
 
@@ -158,6 +159,19 @@ type RouterDeps struct {
 	// disables env sync — minimal test harnesses + legacy wirings
 	// degrade gracefully (the helpers log + skip instead of panicking).
 	ConvexEnv *convexenv.Client
+
+	// Headscale (v1.18+, Remote Hosts). nil when SYNAPSE_HEADSCALE_URL
+	// is empty — Phase 4 handlers detect this and 503 with a hint.
+	// HeadscaleServerURL is the EXTERNAL URL Tailscale clients pass
+	// to `tailscale up --login-server=...` when joining the tailnet.
+	// Surfaced by GET /v1/install_agent/config (public, unauth) so
+	// install-agent.sh can discover it from the operator-supplied
+	// --control-url alone. Empty = Remote Hosts disabled; the
+	// endpoint still 200s with remoteHostsEnabled=false and the
+	// installer refuses with a clear error.
+	HeadscaleServerURL string
+
+	Headscale *headscale.Client
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -306,10 +320,12 @@ func NewRouter(d RouterDeps) http.Handler {
 	operationsH := &OperationsHandler{DB: d.DB, Projects: projectsH}
 	projectsH.Operations = operationsH
 	hostsH := &HostsHandler{
-		DB:           d.DB,
-		PublicURL:    d.PublicURL,
-		StaleAfter:   d.AgentStaleAfter,
-		OfflineAfter: d.AgentOfflineAfter,
+		DB:                 d.DB,
+		PublicURL:          d.PublicURL,
+		StaleAfter:         d.AgentStaleAfter,
+		OfflineAfter:       d.AgentOfflineAfter,
+		Headscale:          d.Headscale,
+		HeadscaleServerURL: d.HeadscaleServerURL,
 	}
 	// Bloco 9b — Drift Engine + dry-run planner. Shares the host-liveness
 	// thresholds (they decide whether observed state can be trusted) and reuses
@@ -336,6 +352,7 @@ func NewRouter(d RouterDeps) http.Handler {
 		PublicURL:           d.PublicURL,
 		EnableObservedState: d.EnableObservedState,
 		EnableDesiredState:  d.EnableDesiredState,
+		Crypto:              d.Crypto,
 	}
 
 	r.Route("/v1", func(r chi.Router) {
@@ -348,6 +365,20 @@ func NewRouter(d RouterDeps) http.Handler {
 		// install_status is also public — the dashboard hits it pre-auth
 		// to decide whether to redirect /login → /setup (first-run wizard).
 		r.Method(http.MethodGet, "/install_status", &InstallStatusHandler{DB: d.DB, Version: d.Version})
+		// install_agent — public bootstrap install-agent.sh hits BEFORE
+		// joining the tailnet to discover the EXTERNAL Headscale URL
+		// (`tailscale up --login-server=...`) + the agent binary
+		// download manifest. Unauth: the host has no agent token yet
+		// (registration happens AFTER it has a tailnet IP). The
+		// response only exposes values already publicly observable
+		// from a curl to the headscale subdomain.
+		installAgentH := &InstallAgentHandler{
+			HeadscaleServerURL: d.HeadscaleServerURL,
+			AgentDownloadBase:  "https://github.com/" + d.GitHubRepo + "/releases/latest/download",
+			AgentVersion:       d.Version,
+			CryptoConfigured:   d.Crypto != nil,
+		}
+		r.Mount("/install_agent", installAgentH.Routes())
 		// CLI latest version probe (v1.9.4+). Public for the same reason
 		// install_status is public: every operator who can log into the
 		// dashboard is a potential CLI user; gating it behind admin would

@@ -38,22 +38,26 @@ func waitForStatus(t *testing.T, h *Harness, name, want string, timeout time.Dur
 func itoa(i int) string { return strconv.Itoa(i) }
 
 type deploymentResp struct {
-	ID             string     `json:"id"`
-	ProjectID      string     `json:"projectId"`
-	Name           string     `json:"name"`
-	DeploymentType string     `json:"deploymentType"`
-	Status         string     `json:"status"`
-	DeploymentURL  string     `json:"deploymentUrl,omitempty"`
-	SiteURL        string     `json:"siteUrl,omitempty"`
-	IsDefault      bool       `json:"isDefault"`
-	Reference      string     `json:"reference,omitempty"`
-	Creator        string     `json:"creator,omitempty"`
-	Adopted        bool       `json:"adopted,omitempty"`
-	HAEnabled      bool       `json:"haEnabled,omitempty"`
-	ReplicaCount   int        `json:"replicaCount,omitempty"`
-	CreateTime     time.Time  `json:"createTime"`
-	LastDeployTime *time.Time `json:"lastDeployTime,omitempty"`
-	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
+	ID              string     `json:"id"`
+	ProjectID       string     `json:"projectId"`
+	Name            string     `json:"name"`
+	DeploymentType  string     `json:"deploymentType"`
+	Status          string     `json:"status"`
+	DeploymentURL   string     `json:"deploymentUrl,omitempty"`
+	SiteURL         string     `json:"siteUrl,omitempty"`
+	IsDefault       bool       `json:"isDefault"`
+	Reference       string     `json:"reference,omitempty"`
+	Creator         string     `json:"creator,omitempty"`
+	Adopted         bool       `json:"adopted,omitempty"`
+	HAEnabled       bool       `json:"haEnabled,omitempty"`
+	ReplicaCount    int        `json:"replicaCount,omitempty"`
+	CreateTime      time.Time  `json:"createTime"`
+	LastDeployTime  *time.Time `json:"lastDeployTime,omitempty"`
+	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
+	HostID          string     `json:"hostId,omitempty"`
+	HostName        string     `json:"hostName,omitempty"`
+	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
+	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
 }
 
 type deploymentAuthResp struct {
@@ -807,5 +811,262 @@ func TestRestartDeployment(t *testing.T) {
 	env := h.AssertStatus(http.MethodPost, "/v1/deployments/bright-fox-3030/restart", owner.AccessToken, map[string]any{}, http.StatusConflict)
 	if env.Code != "cannot_restart_adopted" {
 		t.Errorf("expected cannot_restart_adopted, got %q", env.Code)
+	}
+}
+
+// ---------- v1.18.0 Phase 4: Remote Hosts placement ----------
+
+// seedRemoteHost inserts a hosts row that looks like one registered via
+// install-agent.sh: is_remote=true, tailnet_addr populated, an encrypted
+// privkey blob present so create_deployment's host_not_provisioned guard
+// doesn't trip. The blob is not a real ciphertext — Phase 4 validation
+// only checks IS NOT NULL, never decrypts. Returns the new host id.
+func seedRemoteHost(t *testing.T, h *Harness, name, tailnetAddr string, draining bool, withSSHKey bool) string {
+	t.Helper()
+	status := "online"
+	if draining {
+		status = "draining"
+	}
+	var pk any
+	if withSSHKey {
+		pk = []byte("not-a-real-ciphertext-but-non-nil")
+	}
+	var id string
+	if err := h.DB.QueryRow(h.rootCtx, `
+		INSERT INTO hosts (name, provider, region, status, is_remote, tailnet_addr,
+		                    ssh_pubkey, ssh_privkey_encrypted, ssh_privkey_fingerprint)
+		VALUES ($1, 'remote-test', '', $2, TRUE, $3,
+		        'ssh-ed25519 AAAA test', $4, 'SHA256:abcd')
+		RETURNING id::text
+	`, name, status, tailnetAddr, pk).Scan(&id); err != nil {
+		t.Fatalf("seed remote host: %v", err)
+	}
+	return id
+}
+
+// TestCreateDeployment_HostIdDefaultsToSelfHost — omitting hostId on
+// create persists the row against the is_synapse_host=true row and the
+// response carries that host's id + name.
+func TestCreateDeployment_HostIdDefaultsToSelfHost(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "DefHost Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "DefHostProj")
+
+	var selfHostID string
+	if err := h.DB.QueryRow(h.rootCtx,
+		`SELECT id::text FROM hosts WHERE is_synapse_host = TRUE LIMIT 1`,
+	).Scan(&selfHostID); err != nil {
+		t.Fatalf("locate self-host: %v", err)
+	}
+
+	var got deploymentResp
+	h.DoJSON(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken,
+		map[string]any{"type": "dev"}, http.StatusCreated, &got)
+
+	if got.HostID != selfHostID {
+		t.Errorf("host_id: got %q want self-host %q", got.HostID, selfHostID)
+	}
+	if got.HostIsRemote {
+		t.Errorf("self-host should report is_remote=false")
+	}
+
+	// Verify the DB row, not just the response shape.
+	var dbHostID string
+	if err := h.DB.QueryRow(h.rootCtx,
+		`SELECT host_id::text FROM deployments WHERE name = $1`, got.Name,
+	).Scan(&dbHostID); err != nil {
+		t.Fatalf("read deployments.host_id: %v", err)
+	}
+	if dbHostID != selfHostID {
+		t.Errorf("persisted host_id: got %q want %q", dbHostID, selfHostID)
+	}
+}
+
+// TestCreateDeployment_AcceptsHostId — operator places a deployment on
+// a seeded remote host. The row persists with the supplied host_id and
+// the response surfaces host_name + host_tailnet_addr from the JOIN.
+func TestCreateDeployment_AcceptsHostId(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "RemoteCo")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "RemoteProj")
+
+	hostID := seedRemoteHost(t, h, "vps-eu-1", "100.64.0.5", false, true)
+
+	var got deploymentResp
+	h.DoJSON(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken,
+		map[string]any{"type": "prod", "hostId": hostID},
+		http.StatusCreated, &got)
+
+	if got.HostID != hostID {
+		t.Errorf("host_id: got %q want %q", got.HostID, hostID)
+	}
+	if got.HostName != "vps-eu-1" {
+		t.Errorf("host_name: got %q want vps-eu-1", got.HostName)
+	}
+	if got.HostTailnetAddr != "100.64.0.5" {
+		t.Errorf("host_tailnet_addr: got %q want 100.64.0.5", got.HostTailnetAddr)
+	}
+	if !got.HostIsRemote {
+		t.Errorf("host_is_remote: got false want true")
+	}
+
+	// Cancel the provisioning job we just enqueued — the test FakeDocker
+	// + worker will run dockerForJob → SSH=nil → markFailed the job with
+	// the "Remote Hosts disabled" hint, which is exactly the correct
+	// behaviour for a test that never wired sshprov. Wait for the row
+	// to settle to 'failed' so cleanup tears down deterministically.
+	waitForStatus(t, h, got.Name, "failed", 5*time.Second)
+}
+
+// TestCreateDeployment_HostNotFound — supplying a UUID that doesn't
+// match any row returns 400 host_not_found with no DB writes.
+func TestCreateDeployment_HostNotFound(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "NotFoundCo")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "NotFoundProj")
+
+	env := h.AssertStatus(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken,
+		map[string]any{"type": "prod", "hostId": "00000000-0000-0000-0000-000000000000"},
+		http.StatusBadRequest)
+	if env.Code != "host_not_found" {
+		t.Errorf("code: got %q want host_not_found", env.Code)
+	}
+
+	// No deployment row should have been written.
+	var n int
+	if err := h.DB.QueryRow(h.rootCtx,
+		`SELECT COUNT(*) FROM deployments WHERE project_id = $1`, proj.ID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count deployments: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 deployments after validation reject, got %d", n)
+	}
+}
+
+// TestCreateDeployment_HostDraining — refuses placement on a draining
+// host. Operator's correct move is to pick another host.
+func TestCreateDeployment_HostDraining(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "DrainingCo")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "DrainingProj")
+
+	hostID := seedRemoteHost(t, h, "vps-drain", "100.64.0.6", true, true)
+
+	env := h.AssertStatus(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken,
+		map[string]any{"type": "prod", "hostId": hostID},
+		http.StatusBadRequest)
+	if env.Code != "host_draining" {
+		t.Errorf("code: got %q want host_draining", env.Code)
+	}
+	if !strings.Contains(env.Message, "vps-drain") {
+		t.Errorf("message should name the host; got %q", env.Message)
+	}
+}
+
+// TestCreateDeployment_RemoteHostMissingSSHKey — is_remote=true but no
+// ssh_privkey_encrypted on the row → host_not_provisioned. Mirrors the
+// production failure mode where install-agent.sh registered the host
+// metadata but the privkey upload step never reached central.
+func TestCreateDeployment_RemoteHostMissingSSHKey(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "NoKeyCo")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "NoKeyProj")
+
+	hostID := seedRemoteHost(t, h, "vps-nokey", "100.64.0.7", false, false)
+
+	env := h.AssertStatus(http.MethodPost, "/v1/projects/"+proj.ID+"/create_deployment",
+		owner.AccessToken,
+		map[string]any{"type": "prod", "hostId": hostID},
+		http.StatusBadRequest)
+	if env.Code != "host_not_provisioned" {
+		t.Errorf("code: got %q want host_not_provisioned", env.Code)
+	}
+	if !strings.Contains(env.Message, "vps-nokey") {
+		t.Errorf("message should name the host; got %q", env.Message)
+	}
+}
+
+// TestListDeployments_IncludesHostFields — after creating one
+// deployment on the self-host and one on a remote host, list_deployments
+// returns host_id + host_name + host_tailnet_addr for each row.
+func TestListDeployments_IncludesHostFields(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "ListHostCo")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "ListHostProj")
+
+	// Self-host placement via SeedDeployment (default routing).
+	h.SeedDeployment(proj.ID, "local-fox-7001", "dev", "running", true, owner.ID, 3270, "")
+	// Remote-host placement: insert the row directly so we control
+	// host_id without going through the worker (which would markFailed
+	// the job since SSH=nil in tests).
+	remoteHostID := seedRemoteHost(t, h, "vps-list", "100.64.0.8", false, true)
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO deployments (project_id, name, deployment_type, status, host_port,
+		                          admin_key, instance_secret, is_default,
+		                          deployment_url, container_id, host_id)
+		VALUES ($1, 'remote-fox-7002', 'prod', 'running', 3271,
+		        'fake-admin', 'fake-secret', FALSE,
+		        'https://remote-fox-7002.example.com', 'fake-container', $2)
+	`, proj.ID, remoteHostID); err != nil {
+		t.Fatalf("seed remote-placed deployment: %v", err)
+	}
+	// Mirror the replica row that SeedDeployment normally creates so
+	// downstream invariants stay consistent.
+	if _, err := h.DB.Exec(h.rootCtx, `
+		INSERT INTO deployment_replicas (deployment_id, replica_index, container_id, host_port, status)
+		SELECT id, 0, 'fake-container', 3271, 'running' FROM deployments WHERE name = 'remote-fox-7002'
+	`); err != nil {
+		t.Fatalf("seed remote replica: %v", err)
+	}
+
+	var list []deploymentResp
+	h.DoJSON(http.MethodGet, "/v1/projects/"+proj.ID+"/list_deployments",
+		owner.AccessToken, nil, http.StatusOK, &list)
+
+	if len(list) != 2 {
+		t.Fatalf("list size: got %d want 2 (%+v)", len(list), list)
+	}
+
+	byName := map[string]deploymentResp{}
+	for _, d := range list {
+		byName[d.Name] = d
+	}
+	local, ok := byName["local-fox-7001"]
+	if !ok {
+		t.Fatalf("local deployment missing from list")
+	}
+	if local.HostID == "" {
+		t.Errorf("local.host_id should be populated (self-host id)")
+	}
+	if local.HostIsRemote {
+		t.Errorf("local.host_is_remote: got true want false")
+	}
+
+	remote, ok := byName["remote-fox-7002"]
+	if !ok {
+		t.Fatalf("remote deployment missing from list")
+	}
+	if remote.HostID != remoteHostID {
+		t.Errorf("remote.host_id: got %q want %q", remote.HostID, remoteHostID)
+	}
+	if remote.HostName != "vps-list" {
+		t.Errorf("remote.host_name: got %q want vps-list", remote.HostName)
+	}
+	if remote.HostTailnetAddr != "100.64.0.8" {
+		t.Errorf("remote.host_tailnet_addr: got %q want 100.64.0.8", remote.HostTailnetAddr)
+	}
+	if !remote.HostIsRemote {
+		t.Errorf("remote.host_is_remote: got false want true")
 	}
 }

@@ -116,6 +116,12 @@ type DeploymentInfo struct {
 	ContainerID   string
 	HostPort      int
 	DeploymentURL string
+	// HostAddr is the network address callers (proxy / Caddy upstream)
+	// should target for this deployment. Empty on local single-host
+	// provisioning (loopback at 127.0.0.1:HostPort is implied); set by
+	// RemoteClient (v1.18 Remote Hosts) to the host's tailnet IP so the
+	// central proxy can route to the right VPS.
+	HostAddr string
 }
 
 // SnapshotMigrationSpec describes the Convex backup/restore hop used when a

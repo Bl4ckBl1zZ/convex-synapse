@@ -14,6 +14,7 @@ import (
 	"github.com/Iann29/synapse/internal/audit"
 	"github.com/Iann29/synapse/internal/auth"
 	"github.com/Iann29/synapse/internal/db"
+	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/models"
 )
 
@@ -47,6 +48,13 @@ type HostsHandler struct {
 	// Bloco 9b — host-scoped drift recompute / latest / reconcile dry-run.
 	// Mounted inside Routes() so they inherit the instance-admin gate.
 	Drift *DriftHandler
+	// Headscale + HeadscaleServerURL (v1.18+ Remote Hosts) drive the
+	// /remote_setup bundle endpoint. Both nil/empty when the operator
+	// didn't run setup.sh --enable-headscale on the control plane —
+	// the handler 503s with remote_hosts_disabled in that case so the
+	// dashboard renders a friendly hint instead of a generic failure.
+	Headscale          *headscale.Client
+	HeadscaleServerURL string
 }
 
 func (h *HostsHandler) staleAfter() time.Duration {
@@ -113,6 +121,12 @@ func (h *HostsHandler) Routes() chi.Router {
 		r.Patch("/", h.updateHost)
 		r.Post("/drain", h.drainHost)
 		r.Post("/adoption_token", h.createAdoptionToken)
+		// v1.18+ Remote Hosts: one-click bundle that mints a Synapse
+		// adoption token AND a Headscale pre-auth key in a single call,
+		// returning a copy-pasteable install-agent.sh one-liner. Lives in
+		// remote_setup.go; gated by the same requireInstanceAdmin
+		// middleware on this router. 503s when Headscale isn't wired.
+		r.Post("/remote_setup", h.createRemoteSetup)
 		r.Get("/agents", h.listHostAgents)
 		// Bloco 9: host-scoped desired / observed state (instance-admin).
 		r.Get("/desired_state", h.getHostDesiredState)
@@ -197,7 +211,7 @@ func (h *HostsHandler) requireInstanceAdmin(next http.Handler) http.Handler {
 // hostColumns is the canonical SELECT list so list + get stay in sync.
 const hostColumns = `id, name, provider, region, public_ip, private_ip, labels,
 	status, agent_version, docker_version, cpu_cores, memory_mb, disk_gb,
-	is_synapse_host, last_heartbeat_at, created_at, updated_at`
+	is_synapse_host, is_remote, last_heartbeat_at, created_at, updated_at`
 
 type scannable interface {
 	Scan(dest ...any) error
@@ -210,7 +224,7 @@ func scanHost(s scannable) (models.Host, error) {
 	if err := s.Scan(
 		&hst.ID, &hst.Name, &hst.Provider, &hst.Region, &publicIP, &privateIP, &labelsRaw,
 		&hst.Status, &agentVer, &dockerVer, &hst.CPUCores, &hst.MemoryMB, &hst.DiskGB,
-		&hst.IsSynapseHost, &hst.LastHeartbeatAt, &hst.CreatedAt, &hst.UpdatedAt,
+		&hst.IsSynapseHost, &hst.IsRemote, &hst.LastHeartbeatAt, &hst.CreatedAt, &hst.UpdatedAt,
 	); err != nil {
 		return models.Host{}, err
 	}

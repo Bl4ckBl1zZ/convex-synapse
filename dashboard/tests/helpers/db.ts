@@ -39,8 +39,20 @@ export async function truncateAll(): Promise<void> {
     // Do not RESTART IDENTITY here. The API process can still have
     // provisioner goroutines finishing jobs from a previous test; reusing
     // provisioning_jobs.id lets those stale goroutines mutate a new job row.
+    await client.query(`TRUNCATE ${TABLES.join(", ")} CASCADE`);
+
+    // v1.18 Remote Hosts made deployments.host_id NOT NULL — every
+    // deployment now references the host it runs on, and the control-plane
+    // self-host row is the implicit default. The synapse server backfills
+    // that row at startup (cmd/server/main.go::backfillCells) but a TRUNCATE
+    // wipes it; reinsert a matching row here so create_deployment can
+    // resolve "(no host_id) → self-host" and direct INSERT seed helpers
+    // (dashboard_picker, deployments, embed_unreachable, team_admin) can
+    // pick it via `(SELECT id FROM hosts WHERE is_synapse_host LIMIT 1)`.
     await client.query(
-      `TRUNCATE ${TABLES.join(", ")} CASCADE`,
+      `INSERT INTO hosts (name, provider, region, status, is_synapse_host)
+       VALUES ('current-host', 'self-hosted', '', 'online', true)
+       ON CONFLICT DO NOTHING`,
     );
   } finally {
     await client.end();

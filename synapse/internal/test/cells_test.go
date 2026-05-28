@@ -110,10 +110,20 @@ func TestHosts_CreateListGet(t *testing.T) {
 		t.Errorf("labels not round-tripped: %+v", created.Labels)
 	}
 
+	// Phase 4: migration 000026 self-seeds the is_synapse_host row, so
+	// listing /v1/hosts now returns BOTH the self-host AND vps-br-1.
+	// Filter to assert the created one exists, not exclusivity.
 	var list hostsListResp
 	h.DoJSON(http.MethodGet, "/v1/hosts", admin.AccessToken, nil, http.StatusOK, &list)
-	if len(list.Items) != 1 || list.Items[0].ID != created.ID {
-		t.Fatalf("expected exactly the created host in list, got %+v", list.Items)
+	found := false
+	for _, h := range list.Items {
+		if h.ID == created.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("created host not in /v1/hosts list, got %+v", list.Items)
 	}
 
 	var got models.Host
@@ -319,8 +329,12 @@ func TestBackfill_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first backfill: %v", err)
 	}
-	if !res.HostCreated || res.CellsCreated != 2 {
-		t.Fatalf("first backfill should create the host + 2 cells, got %+v", res)
+	// Phase 4: migration 000026 may have self-seeded the self-host
+	// already; cells.Backfill is idempotent on the host row but creates
+	// the cells. Accept either {HostCreated: true OR pre-existing} as
+	// long as the 2 cells got created on the first run.
+	if res.CellsCreated != 2 {
+		t.Fatalf("first backfill should create 2 cells, got %+v", res)
 	}
 
 	// Second run is a no-op: no new host, no new cells.

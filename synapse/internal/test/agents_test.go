@@ -1,7 +1,9 @@
 package synapsetest
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"net/http"
 	"strings"
 	"testing"
@@ -385,5 +387,269 @@ func TestAgent_HeartbeatIgnoresBodyHostID(t *testing.T) {
 	}
 	if b.AgentVersion == "lied-1.2.3" {
 		t.Errorf("host B must NOT be updated from a body hostId — tenant/host isolation breach")
+	}
+}
+
+// ---------- v1.18 Remote Hosts contract ----------
+
+// TestAgent_Register_WithRemoteFields_PersistsHostRow locks the v1.18
+// Remote Hosts wire contract: install-agent.sh sends tailnet_addr +
+// ssh_* in the register body; backend persists them on the host row +
+// flips is_remote=true. Pre-v1.18 agents omit these fields and the
+// host stays is_remote=false (covered by the StaysLocal sibling).
+func TestAgent_Register_WithRemoteFields_PersistsHostRow(t *testing.T) {
+	h := Setup(t)
+	_, hostID, tok := mintHostToken(t, h, "vps-eu-1")
+
+	sshPort := 22
+	body := map[string]any{
+		"token":        tok.Token,
+		"hostname":     "vps-eu-1",
+		"os":           "linux",
+		"arch":         "amd64",
+		"agentVersion": "v1.18.0",
+		"tailnetAddr":  "100.64.0.5",
+		"sshPubkey":    "ssh-ed25519 AAAAC3Nz... synapse-deployer@vps-eu-1",
+		"sshUser":      "synapse-deployer",
+		"sshPort":      sshPort,
+	}
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", body, http.StatusCreated, &reg)
+	if reg.HostID != hostID {
+		t.Fatalf("register returned host %s, want %s", reg.HostID, hostID)
+	}
+
+	var (
+		tailnetAddr, sshPubkey, sshUser sql.NullString
+		sshPortDB                       int
+		isRemote                        bool
+	)
+	if err := h.DB.QueryRow(context.Background(),
+		`SELECT tailnet_addr, ssh_pubkey, ssh_user, ssh_port, is_remote FROM hosts WHERE id = $1`,
+		hostID,
+	).Scan(&tailnetAddr, &sshPubkey, &sshUser, &sshPortDB, &isRemote); err != nil {
+		t.Fatalf("load host: %v", err)
+	}
+	if !isRemote {
+		t.Errorf("is_remote should be true after remote-fields register")
+	}
+	if tailnetAddr.String != "100.64.0.5" {
+		t.Errorf("tailnet_addr: got %q, want 100.64.0.5", tailnetAddr.String)
+	}
+	if !strings.HasPrefix(sshPubkey.String, "ssh-ed25519 ") {
+		t.Errorf("ssh_pubkey shape: got %q", sshPubkey.String)
+	}
+	if sshUser.String != "synapse-deployer" {
+		t.Errorf("ssh_user: got %q, want synapse-deployer", sshUser.String)
+	}
+	if sshPortDB != 22 {
+		t.Errorf("ssh_port: got %d, want 22", sshPortDB)
+	}
+}
+
+// TestAgent_Register_WithoutRemoteFields_StaysLocal locks the
+// backward-compat: pre-v1.18 agents that don't send tailnet/ssh fields
+// keep is_remote=false. Important so upgrading existing fleets doesn't
+// silently flip them into remote-provisioning mode.
+func TestAgent_Register_WithoutRemoteFields_StaysLocal(t *testing.T) {
+	h := Setup(t)
+	_, hostID, tok := mintHostToken(t, h, "vps-legacy")
+
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", agentRegisterBody(tok.Token), http.StatusCreated, &reg)
+
+	var (
+		tailnetAddr, sshPubkey sql.NullString
+		isRemote               bool
+	)
+	if err := h.DB.QueryRow(context.Background(),
+		`SELECT tailnet_addr, ssh_pubkey, is_remote FROM hosts WHERE id = $1`,
+		hostID,
+	).Scan(&tailnetAddr, &sshPubkey, &isRemote); err != nil {
+		t.Fatalf("load host: %v", err)
+	}
+	if isRemote {
+		t.Errorf("is_remote should stay false when register omits remote fields")
+	}
+	if tailnetAddr.Valid {
+		t.Errorf("tailnet_addr should stay NULL, got %q", tailnetAddr.String)
+	}
+	if sshPubkey.Valid {
+		t.Errorf("ssh_pubkey should stay NULL, got %q", sshPubkey.String)
+	}
+}
+
+// ---------- /v1/install_agent/config (public, unauth) ----------
+
+type installAgentConfigResult struct {
+	HeadscaleServerURL        string `json:"headscaleServerUrl"`
+	AgentDownloadURL          string `json:"agentDownloadUrl"`
+	AgentVersion              string `json:"agentVersion"`
+	RemoteHostsEnabled        bool   `json:"remoteHostsEnabled"`
+	RemoteProvisioningEnabled bool   `json:"remoteProvisioningEnabled"`
+}
+
+// TestInstallAgent_Config_Disabled covers the default harness: Remote
+// Hosts isn't configured (HeadscaleServerURL empty), but the endpoint
+// still 200s — install-agent.sh gates on remoteHostsEnabled=false to
+// emit a clear "control plane has not enabled Remote Hosts" error
+// instead of a confusing curl failure.
+func TestInstallAgent_Config_Disabled(t *testing.T) {
+	h := Setup(t)
+	var resp installAgentConfigResult
+	h.DoJSON(http.MethodGet, "/v1/install_agent/config", "", nil, http.StatusOK, &resp)
+	if resp.RemoteHostsEnabled {
+		t.Errorf("remoteHostsEnabled should be false when HeadscaleServerURL is empty")
+	}
+	if resp.HeadscaleServerURL != "" {
+		t.Errorf("HeadscaleServerURL should be empty, got %q", resp.HeadscaleServerURL)
+	}
+}
+
+// TestInstallAgent_Config_Enabled covers the configured path: the
+// endpoint echoes back the EXTERNAL Headscale URL + the parameterised
+// download URL pattern install-agent.sh substitutes {{version}} /
+// {{arch}} into.
+func TestInstallAgent_Config_Enabled(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{HeadscaleServerURL: "https://headscale.example.com"})
+	var resp installAgentConfigResult
+	h.DoJSON(http.MethodGet, "/v1/install_agent/config", "", nil, http.StatusOK, &resp)
+	if !resp.RemoteHostsEnabled {
+		t.Errorf("remoteHostsEnabled should be true when HeadscaleServerURL is set")
+	}
+	if resp.HeadscaleServerURL != "https://headscale.example.com" {
+		t.Errorf("HeadscaleServerURL: got %q", resp.HeadscaleServerURL)
+	}
+	if !strings.Contains(resp.AgentDownloadURL, "{{arch}}") {
+		t.Errorf("AgentDownloadURL should carry the {{arch}} substitution placeholder, got %q", resp.AgentDownloadURL)
+	}
+	if !strings.Contains(resp.AgentDownloadURL, "{{version}}") {
+		t.Errorf("AgentDownloadURL should carry the {{version}} substitution placeholder, got %q", resp.AgentDownloadURL)
+	}
+}
+
+// ---------- v1.18 Phase 3: SSH privkey encrypt-at-rest ----------
+
+// TestAgent_Register_WithSSHPrivkey_EncryptsAndPersists verifies the
+// v1.18 Phase 3 contract: install-agent.sh sends the PEM-encoded ed25519
+// private key once, Synapse encrypts with crypto.SecretBox and persists
+// in hosts.ssh_privkey_encrypted. The plaintext NEVER appears in the
+// stored row.
+func TestAgent_Register_WithSSHPrivkey_EncryptsAndPersists(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{WithCrypto: true})
+	_, hostID, tok := mintHostToken(t, h, "vps-eu-1")
+
+	privkeyPlaintext := "-----BEGIN OPENSSH PRIVATE KEY-----\ntest-not-a-real-key\n-----END OPENSSH PRIVATE KEY-----\n"
+	body := map[string]any{
+		"token":       tok.Token,
+		"hostname":    "vps-eu-1",
+		"os":          "linux",
+		"arch":        "amd64",
+		"tailnetAddr": "100.64.0.5",
+		"sshPubkey":   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcfGTm0RvSEFTHvxlTAAAAAAAAAAAAAAAAAAAAAAAA synapse-deployer@vps-eu-1",
+		"sshUser":     "synapse-deployer",
+		"sshPrivkey":  privkeyPlaintext,
+	}
+	var reg agentRegisterResult
+	h.DoJSON(http.MethodPost, "/v1/agents/register", "", body, http.StatusCreated, &reg)
+	if reg.HostID != hostID {
+		t.Fatalf("register returned host %s, want %s", reg.HostID, hostID)
+	}
+
+	var ciphertext []byte
+	var fingerprint sql.NullString
+	if err := h.DB.QueryRow(context.Background(),
+		`SELECT ssh_privkey_encrypted, ssh_privkey_fingerprint FROM hosts WHERE id = $1`,
+		hostID,
+	).Scan(&ciphertext, &fingerprint); err != nil {
+		t.Fatalf("load host: %v", err)
+	}
+	if len(ciphertext) == 0 {
+		t.Fatal("ssh_privkey_encrypted is empty — register did not persist")
+	}
+	// Critical guard: stored bytes must NOT contain the plaintext PEM.
+	if bytes.Contains(ciphertext, []byte("OPENSSH PRIVATE KEY")) ||
+		bytes.Contains(ciphertext, []byte("test-not-a-real-key")) {
+		t.Fatal("ciphertext contains plaintext PEM — encryption is broken")
+	}
+	// Round-trip: decrypt via the same SecretBox the harness wired.
+	if h.Crypto == nil {
+		t.Fatal("harness Crypto nil despite WithCrypto: true")
+	}
+	decrypted, err := h.Crypto.DecryptString(ciphertext)
+	if err != nil {
+		t.Fatalf("decrypt round-trip: %v", err)
+	}
+	if decrypted != privkeyPlaintext {
+		t.Errorf("decrypted plaintext doesn't match input: got %q", decrypted)
+	}
+	// fingerprint shape: best-effort, may be NULL on malformed pubkey input.
+	// The test pubkey above is synthetic — Phase 3B will use a real ed25519
+	// keypair so the fingerprint reliably populates. Don't gate the test
+	// on that downstream-of-encryption convenience field.
+}
+
+// TestAgent_Register_WithSSHPrivkey_NoCrypto_503 verifies the operator-
+// facing error when SYNAPSE_STORAGE_KEY isn't set but a remote-host
+// register includes a private key.
+func TestAgent_Register_WithSSHPrivkey_NoCrypto_503(t *testing.T) {
+	h := Setup(t) // no WithCrypto — h.Crypto == nil
+	_, _, tok := mintHostToken(t, h, "vps-eu-1")
+
+	body := map[string]any{
+		"token":       tok.Token,
+		"hostname":    "vps-eu-1",
+		"tailnetAddr": "100.64.0.5",
+		"sshPubkey":   "ssh-ed25519 AAAAtestpubkey synapse-deployer@vps-eu-1",
+		"sshPrivkey":  "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----\n",
+	}
+	env := h.AssertStatus(http.MethodPost, "/v1/agents/register", "", body, http.StatusServiceUnavailable)
+	if env.Code != "crypto_disabled" {
+		t.Errorf("code: got %q, want crypto_disabled", env.Code)
+	}
+}
+
+// TestInstallAgent_Config_RemoteProvisioningEnabled checks
+// remoteProvisioningEnabled flips true ONLY when both Headscale + crypto
+// are configured. install-agent.sh gates on this to refuse early
+// instead of 503'ing inside register's encrypt step.
+func TestInstallAgent_Config_RemoteProvisioningEnabled(t *testing.T) {
+	cases := []struct {
+		name             string
+		headscale        bool
+		crypto           bool
+		wantProvisioning bool
+	}{
+		{"both", true, true, true},
+		{"headscale_only", true, false, false},
+		{"crypto_only", false, true, false},
+		{"neither", false, false, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			opts := SetupOpts{}
+			if tc.headscale {
+				opts.HeadscaleServerURL = "https://headscale.example.com"
+			}
+			if tc.crypto {
+				opts.WithCrypto = true
+			}
+			h := SetupWithOpts(t, opts)
+			var resp struct {
+				HeadscaleServerURL        string `json:"headscaleServerUrl"`
+				AgentDownloadURL          string `json:"agentDownloadUrl"`
+				AgentVersion              string `json:"agentVersion"`
+				RemoteHostsEnabled        bool   `json:"remoteHostsEnabled"`
+				RemoteProvisioningEnabled bool   `json:"remoteProvisioningEnabled"`
+			}
+			h.DoJSON(http.MethodGet, "/v1/install_agent/config", "", nil, http.StatusOK, &resp)
+			if resp.RemoteProvisioningEnabled != tc.wantProvisioning {
+				t.Errorf("remoteProvisioningEnabled: got %v, want %v", resp.RemoteProvisioningEnabled, tc.wantProvisioning)
+			}
+			if resp.RemoteHostsEnabled != tc.headscale {
+				t.Errorf("remoteHostsEnabled: got %v, want %v (Headscale-only signal)", resp.RemoteHostsEnabled, tc.headscale)
+			}
+		})
 	}
 }

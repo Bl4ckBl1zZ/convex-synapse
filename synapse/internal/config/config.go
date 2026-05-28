@@ -183,6 +183,25 @@ type Config struct {
 	EnableObservedState   bool
 	EnableReconcileDryRun bool
 	AgentApply            bool
+
+	// Headscale (v1.18+, Remote Hosts). HeadscaleURL is the internal
+	// HTTP API the synapse-api container hits (e.g.
+	// http://synapse-headscale:8080). HeadscaleAPIKey is the admin
+	// Bearer token minted by `headscale apikeys create` at install
+	// time. Empty values disable Remote Hosts entirely — the
+	// dashboard hides the "Add host" button and the
+	// install-agent.sh download endpoint 503s with a clear hint.
+	HeadscaleURL    string
+	HeadscaleAPIKey string
+	// HeadscaleServerURL is the EXTERNAL URL Tailscale clients pass to
+	// `tailscale up --login-server=...` when joining the tailnet — the
+	// `server_url:` value in headscale's config.yaml, typically
+	// `https://headscale.<base-domain>`. install-agent.sh fetches this
+	// via the public /v1/install_agent/config bootstrap so the
+	// dashboard one-liner doesn't have to carry it out-of-band.
+	// Distinct from HeadscaleURL (which is the docker-internal API
+	// address synapse-api uses). Empty when Remote Hosts is disabled.
+	HeadscaleServerURL string
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -283,6 +302,10 @@ func Load() (*Config, error) {
 		// Hard-disabled in Bloco 9. Apply is not implemented; this flag exists
 		// so the surface is explicit and defaults to false.
 		AgentApply: getEnvDefault("SYNAPSE_AGENT_APPLY", "false") == "true",
+
+		HeadscaleURL:       strings.TrimRight(os.Getenv("SYNAPSE_HEADSCALE_URL"), "/"),
+		HeadscaleAPIKey:    os.Getenv("SYNAPSE_HEADSCALE_API_KEY"),
+		HeadscaleServerURL: strings.TrimRight(os.Getenv("SYNAPSE_HEADSCALE_SERVER_URL"), "/"),
 	}, nil
 }
 
