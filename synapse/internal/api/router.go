@@ -399,7 +399,11 @@ func NewRouter(d RouterDeps) http.Handler {
 		// real-VPS smoke caught a 404 on every request despite the
 		// handler compiling and the path looking right.
 		r.Route("/internal", func(r chi.Router) {
-			r.Method(http.MethodGet, "/tls_ask", &TLSAskHandler{DB: d.DB, BaseDomain: d.BaseDomain})
+			r.Method(http.MethodGet, "/tls_ask", &TLSAskHandler{
+				DB:               d.DB,
+				BaseDomain:       d.BaseDomain,
+				HeadscaleEnabled: d.HeadscaleServerURL != "",
+			})
 			// list_deployments_for_dashboard — cross-origin endpoint
 			// the upstream Convex Dashboard hits from inside the
 			// /embed/<name> iframe. Public route, but the request

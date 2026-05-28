@@ -161,3 +161,31 @@ func TestTLSAsk_RejectsMultiLabelSiteSubdomain(t *testing.T) {
 		t.Errorf("tls_ask multi-label site: status=%d want 403", resp.StatusCode)
 	}
 }
+
+// v1.18.3+: tls_ask whitelists the literal "headscale" subdomain when
+// SYNAPSE_HEADSCALE_SERVER_URL is non-empty. Otherwise Caddy's on_demand
+// policy under *.<BaseDomain> would refuse to issue a Let's Encrypt
+// cert for headscale.<BaseDomain> (the Headscale subdomain is never a
+// "deployment" so approveIfDeploymentExists 404s it).
+func TestTLSAsk_OkForHeadscaleSubdomainWhenEnabled(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		BaseDomain:         "synapse.example.com",
+		HeadscaleServerURL: "https://headscale.synapse.example.com",
+	})
+	q := url.Values{"domain": {"headscale.synapse.example.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("tls_ask headscale subdomain (enabled): status=%d want 200", resp.StatusCode)
+	}
+}
+
+func TestTLSAsk_404ForHeadscaleSubdomainWhenDisabled(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{BaseDomain: "synapse.example.com"})
+	q := url.Values{"domain": {"headscale.synapse.example.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("tls_ask headscale subdomain (disabled): status=%d want 404", resp.StatusCode)
+	}
+}

@@ -33,6 +33,16 @@ import (
 type TLSAskHandler struct {
 	DB         *pgxpool.Pool
 	BaseDomain string
+
+	// HeadscaleEnabled (v1.18.3+) lets the wildcard subdomain branch
+	// approve cert issuance for the literal "headscale" subdomain
+	// under BaseDomain. Without this whitelist, `headscale.<BaseDomain>`
+	// falls into the same approveIfDeploymentExists check that everything
+	// else does — and "headscale" is not a deployment, so cert issuance
+	// is silently refused and Tailscale clients never see a valid TLS
+	// endpoint. True when SYNAPSE_HEADSCALE_SERVER_URL or
+	// SYNAPSE_HEADSCALE_DOMAIN is set on the running synapse-api.
+	HeadscaleEnabled bool
 }
 
 func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +88,14 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if name == "" {
 				http.Error(w, "empty subdomain", http.StatusBadRequest)
+				return
+			}
+			// v1.18.3+: whitelist the Headscale subdomain. Headscale is a
+			// first-class control-plane service when the operator opted in
+			// via `setup.sh --enable-headscale`; its cert needs to issue
+			// even though there's no deployment named "headscale".
+			if h.HeadscaleEnabled && name == "headscale" {
+				w.WriteHeader(http.StatusOK)
 				return
 			}
 			h.approveIfDeploymentExists(ctx, w, name)
