@@ -316,6 +316,25 @@ caddy::install_headscale_block() {
             "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" \
                 exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
                 || "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" restart caddy
+            # v1.18.4+: when the headscale subdomain ALSO falls under a
+            # wildcard site (e.g. `*.<BASE_DOMAIN>` with on_demand TLS),
+            # Caddyfile's auto-derived `automate` list silently EXCLUDES
+            # the more-specific block. Caddy routes the request but never
+            # preloads the cert from storage — TLS handshake then fails
+            # with "no certificate matching TLS ClientHello" even though
+            # the cert file is on disk. Force-add the host to
+            # tls.certificates.automate via the admin API. Best-effort:
+            # any failure logs and continues so a stricter mode doesn't
+            # block the install.
+            local admin="${CADDY_ADMIN_URL:-localhost:2019}"
+            local automate_json
+            automate_json=$(printf '{"automate":["%s"]}' "$headscale_host")
+            "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" \
+                exec -T caddy curl -sf -X POST \
+                "$admin/config/apps/tls/certificates" \
+                -H "Content-Type: application/json" \
+                -d "$automate_json" 2>/dev/null \
+                || ui::warn "caddy automate POST failed — Headscale TLS may need a Caddy restart"
             ;;
         nginx_external)
             cat <<EOF >&2

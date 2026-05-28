@@ -1,0 +1,5 @@
+# Local build artifacts. The release-agent.yml workflow builds these
+# fresh on every tag — they have no business in git.
+dist/
+*.test
+*.out
