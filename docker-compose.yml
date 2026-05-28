@@ -167,6 +167,18 @@ services:
       SYNAPSE_GITHUB_REPO: ${SYNAPSE_GITHUB_REPO:-Iann29/convex-synapse}
       SYNAPSE_DASHBOARD_UPSTREAM: ${SYNAPSE_DASHBOARD_UPSTREAM:-synapse-convex-dashboard-proxy:80}
       SYNAPSE_DASHBOARD_SHELL_UPSTREAM: ${SYNAPSE_DASHBOARD_SHELL_UPSTREAM:-synapse-dashboard:3000}
+      # Headscale integration (v1.18+, requires `--profile headscale`).
+      # When SYNAPSE_HEADSCALE_URL is non-empty, Synapse-API talks to
+      # the Headscale HTTP API at that URL (Bearer-auth via
+      # SYNAPSE_HEADSCALE_API_KEY) to mint pre-auth keys + list/delete
+      # tailnet nodes for the Remote Hosts feature. Empty = disabled.
+      # The URL here is the INTERNAL docker-network address
+      # (synapse-headscale:8080), NOT the external server_url that
+      # Tailscale clients hit during `tailscale up --login-server=...`
+      # — that one lives in installer/templates/headscale.config.yaml
+      # .tmpl as `server_url:`.
+      SYNAPSE_HEADSCALE_URL: ${SYNAPSE_HEADSCALE_URL:-}
+      SYNAPSE_HEADSCALE_API_KEY: ${SYNAPSE_HEADSCALE_API_KEY:-}
     volumes:
       # Synapse provisions sibling containers via the host docker daemon.
       # This mount is unavoidable for the v0 architecture; the alternative is
@@ -385,12 +397,64 @@ services:
     networks:
       - synapse-network
 
+  # ----------------------------------------------------------------
+  # Headscale (v1.18+, optional). Self-hosted Tailscale control plane,
+  # activated by `setup.sh --enable-headscale` (sets the `headscale`
+  # compose profile). Powers the Remote Hosts feature: Tailscale clients
+  # on operator-added VPSes register here, get an IP in 100.64.0.0/10,
+  # and Synapse central reaches them via that tailnet IP (no public
+  # ports needed on the remote VPS).
+  #
+  # Why we ship Headscale self-hosted instead of using Tailscale's
+  # managed control plane: zero third-party dependency on the identity
+  # path. WireGuard tunnels are still P2P direct between machines (DERP
+  # is a fallback only); only the "who's who" coordination layer
+  # lives on the operator's Synapse host.
+  #
+  # Storage: dedicated 'headscale' database on the same Postgres
+  # cluster as Synapse metadata (auto-migrated on first start).
+  #
+  # No host-port mapping: external traffic comes through Caddy on
+  # `headscale.<base-domain>`. Operators on --no-tls cannot enable
+  # Headscale (setup.sh --enable-headscale requires --domain /
+  # --base-domain — the Tailscale clients need a stable HTTPS URL
+  # to register). `expose: 8080` keeps the port reachable from
+  # Caddy on the synapse-network bridge without publishing it.
+  # ----------------------------------------------------------------
+
+  headscale:
+    image: ghcr.io/juanfont/headscale:v0.28.0
+    container_name: synapse-headscale
+    profiles: ["headscale"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["serve"]
+    expose:
+      - "8080"
+    read_only: true
+    tmpfs:
+      - /var/run/headscale
+    volumes:
+      - ./headscale/config.yaml:/etc/headscale/config.yaml:ro
+      - ./headscale/policy.hujson:/etc/headscale/policy.hujson:ro
+      - synapse-headscale-data:/var/lib/headscale
+    healthcheck:
+      test: ["CMD", "headscale", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synapse-network
+
 volumes:
   synapse-pgdata:
   synapse-backend-pgdata:
   synapse-minio-data:
   synapse-caddy-data:
   synapse-caddy-config:
+  synapse-headscale-data:
 
 networks:
   synapse-network:
