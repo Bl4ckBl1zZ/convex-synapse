@@ -59,7 +59,7 @@
 
 set -Eeuo pipefail
 
-readonly INSTALL_AGENT_VERSION="1.18.0"
+readonly INSTALL_AGENT_VERSION="1.19.5"
 readonly INSTALL_DIR_DEFAULT="/etc/synapse-agent"
 readonly LOG_FILE="${SYNAPSE_AGENT_INSTALL_LOG:-/tmp/synapse-agent-install.log}"
 readonly LOCK_FILE="/run/install-agent.lock"
@@ -350,14 +350,14 @@ phase_bootstrap_config() {
     local resp
     resp="$(agent::bootstrap_config "$CONTROL_URL")"
     HEADSCALE_SERVER_URL="$(printf '%s' "$resp" | jq -r '.headscaleServerUrl // empty')"
-    DOWNLOAD_URL_TEMPLATE="$(printf '%s' "$resp" | jq -r '.downloadUrl // empty')"
+    DOWNLOAD_URL_TEMPLATE="$(printf '%s' "$resp" | jq -r '.agentDownloadUrl // empty')"
     BOOTSTRAP_AGENT_VERSION="$(printf '%s' "$resp" | jq -r '.agentVersion // empty')"
     if [[ -z "$HEADSCALE_SERVER_URL" ]]; then
         ui::fail "Bootstrap config missing headscaleServerUrl"
         return 2
     fi
     if [[ -z "$DOWNLOAD_URL_TEMPLATE" ]]; then
-        ui::fail "Bootstrap config missing downloadUrl"
+        ui::fail "Bootstrap config missing agentDownloadUrl"
         return 2
     fi
     # CLI override > server-decided version.

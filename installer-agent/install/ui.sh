@@ -29,16 +29,27 @@ ui::_color_init() {
 # ui::ok is the install-agent alias for ui::success — the assignment
 # names the helpers `ui::ok` so install-agent.sh sites read naturally.
 # We export both names so callers don't have to care.
-ui::ok()      { ui::_color_init; printf '%s✓%s %s\n' "$UI_GREEN"  "$UI_RESET" "$*"; }
+#
+# ALL operator-facing chatter goes to STDERR, never stdout. This is
+# load-bearing: functions like agent::bootstrap_config + tailscale::
+# wait_ready emit ui:: progress AND return data via stdout
+# (`printf '%s' "$json"`), captured by the caller with
+# `resp="$(agent::bootstrap_config ...)"`. If ui:: wrote to stdout the
+# chatter would pollute the captured value and the downstream `jq`
+# would choke ("Invalid numeric literal …"). Keeping UI on stderr
+# means stdout carries pure data. (v1.19.5 fix — the bug that broke
+# the very first real remote-host install.)
+ui::ok()      { ui::_color_init; printf '%s✓%s %s\n' "$UI_GREEN"  "$UI_RESET" "$*" >&2; }
 ui::success() { ui::ok "$@"; }
-ui::warn()    { ui::_color_init; printf '%s!%s %s\n' "$UI_YELLOW" "$UI_RESET" "$*"; }
+ui::warn()    { ui::_color_init; printf '%s!%s %s\n' "$UI_YELLOW" "$UI_RESET" "$*" >&2; }
 ui::fail()    { ui::_color_init; printf '%s✗%s %s\n' "$UI_RED"    "$UI_RESET" "$*" >&2; }
-ui::info()    { ui::_color_init; printf '%sℹ%s %s\n' "$UI_CYAN"   "$UI_RESET" "$*"; }
+ui::info()    { ui::_color_init; printf '%sℹ%s %s\n' "$UI_CYAN"   "$UI_RESET" "$*" >&2; }
 
 # ui::step — phase header. Blank line above for visual separation.
+# Stderr, same rationale as the helpers above.
 ui::step() {
     ui::_color_init
-    printf '\n%s==>%s %s%s%s\n' "$UI_CYAN" "$UI_RESET" "$UI_BOLD" "$*" "$UI_RESET"
+    printf '\n%s==>%s %s%s%s\n' "$UI_CYAN" "$UI_RESET" "$UI_BOLD" "$*" "$UI_RESET" >&2
 }
 
 # ui::redact <stream-of-text>

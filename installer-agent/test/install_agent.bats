@@ -279,3 +279,33 @@ setup() {
     assert_output --partial "<redacted>"
     refute_output --partial "tskey-secret-xyz"
 }
+
+# ---- bootstrap_config stdout purity (v1.19.5 regression) -----------
+
+@test "agent::bootstrap_config emits ONLY clean JSON to stdout (no ui chatter)" {
+    # The bug that broke the first real remote-host install: ui::step /
+    # ui::ok wrote to stdout, so `resp="$(agent::bootstrap_config ...)"`
+    # captured the chatter + JSON, and the downstream `jq` choked with
+    # "Invalid numeric literal". ui:: now goes to stderr; stdout must be
+    # pure JSON that jq parses cleanly.
+    source "$INSTALLER_AGENT_DIR/install/ui.sh"
+    source "$INSTALLER_AGENT_DIR/install/agent.sh"
+    # Stub curl to return the exact config JSON the backend serves.
+    curl() {
+        printf '%s' '{"headscaleServerUrl":"https://headscale.example.com","agentDownloadUrl":"https://x/{{version}}-{{arch}}.tar.gz","agentVersion":"1.19.5","remoteHostsEnabled":true,"remoteProvisioningEnabled":true}'
+    }
+    export -f curl
+
+    # --separate-stderr mirrors production: `resp="$(...)"` captures
+    # ONLY stdout (stderr is the operator's terminal). ui:: chatter
+    # lives in $stderr; $output must be pure JSON.
+    run --separate-stderr agent::bootstrap_config "https://synapsepanel.com"
+    assert_success
+    local hs
+    hs="$(printf '%s' "$output" | jq -r '.headscaleServerUrl')"
+    [ "$hs" = "https://headscale.example.com" ]
+    # No ui chatter leaked into stdout (it's on stderr).
+    refute_output --partial "==>"
+    refute_output --partial "Fetching"
+    refute_output --partial "received"
+}
