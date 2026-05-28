@@ -69,6 +69,37 @@ type AdminHandler struct {
 	// under /v1/admin. Wired by router.go so the credential handler
 	// inherits requireInstanceAdmin without duplicating the gate.
 	DNSCredentials *DNSCredentialsHandler
+	// HeadscaleEnabled mirrors RouterDeps: true when Synapse boot wired
+	// a non-nil headscale.Client AND a non-empty
+	// SYNAPSE_HEADSCALE_SERVER_URL. The headscale admin GET handler
+	// surfaces this as "Remote Hosts is live"; "configured but not
+	// enabled" implies the operator just ran configure and synapse-api
+	// hasn't restarted yet.
+	HeadscaleEnabled bool
+	// CryptoConfigured is true when *crypto.SecretBox is wired into
+	// RouterDeps (SYNAPSE_STORAGE_KEY present). Surfaced as
+	// remoteProvisioningReady so the dashboard can warn before the
+	// agent-register path 503s on the SSH privkey encrypt step.
+	CryptoConfigured bool
+	// Headscale snapshot fields (v1.19+). The GET /v1/admin/headscale
+	// handler reads these instead of os.Getenv so parallel tests can
+	// inject independent state without env races. Production wiring in
+	// router.go fills them from RouterDeps / os.Getenv at boot.
+	//
+	// HeadscaleDomain mirrors SYNAPSE_HEADSCALE_DOMAIN (operator's
+	// explicit override); HeadscaleServerURL mirrors
+	// SYNAPSE_HEADSCALE_SERVER_URL (the external https URL Tailscale
+	// clients hit); HeadscaleInternalURL mirrors SYNAPSE_HEADSCALE_URL
+	// (synapse-api → headscale API in-network). HeadscaleAPIKeyConfigured
+	// is a presence-only signal — the key itself never leaves the
+	// container. HostDomain mirrors SYNAPSE_DOMAIN so the default
+	// Headscale subdomain derivation prefers the dashboard host over
+	// the deployments wildcard.
+	HeadscaleDomain           string
+	HeadscaleServerURL        string
+	HeadscaleInternalURL      string
+	HeadscaleAPIKeyConfigured bool
+	HostDomain                string
 
 	// Cache for the latest-release fetch. GitHub's unauthenticated API limit
 	// is 60 req/hour; with this 15min cache, a busy dashboard with N admin
@@ -105,6 +136,15 @@ func (h *AdminHandler) Routes() chi.Router {
 	r.Get("/host_domain", h.getHostDomain)
 	r.Post("/host_domain", h.postHostDomain)
 	r.Get("/host_domain/status/{jobID}", h.getHostDomainStatus)
+	// Headscale / Remote Hosts configuration (v1.19+, migration 000027).
+	// Same admin_jobs handoff pattern as host-domain: GET → snapshot;
+	// POST → enqueue + daemon dispatch; status → admin_jobs read-through.
+	// Flat registration (no nested r.Route) so chi exposes the bare
+	// /v1/admin/headscale path without requiring a trailing slash —
+	// mirrors how /host_domain is registered above.
+	r.Get("/headscale", h.getHeadscaleAdmin)
+	r.Post("/headscale/configure", h.postHeadscaleAdmin)
+	r.Get("/headscale/status/{jobID}", h.getHeadscaleStatus)
 	// DNS-provider credentials (v1.5+, migration 000015). Mounted as
 	// a child of /admin so everything below /admin shares the
 	// requireInstanceAdmin gate. Nil means router wired without DNS

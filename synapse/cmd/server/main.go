@@ -333,6 +333,10 @@ func run() error {
 		DNSEnvelope:        dnsEnvelope,
 		Headscale:          headscaleClient,
 		HeadscaleServerURL: cfg.HeadscaleServerURL,
+		HeadscaleURL:       cfg.HeadscaleURL,
+		HeadscaleDomain:    cfg.HeadscaleDomain,
+		HeadscaleAPIKey:    cfg.HeadscaleAPIKey,
+		HostDomain:         cfg.HostDomain,
 	})
 
 	// Provisioning worker — dequeues 'provision' jobs inserted by the

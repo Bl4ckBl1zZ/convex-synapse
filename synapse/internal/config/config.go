@@ -202,6 +202,21 @@ type Config struct {
 	// Distinct from HeadscaleURL (which is the docker-internal API
 	// address synapse-api uses). Empty when Remote Hosts is disabled.
 	HeadscaleServerURL string
+	// HeadscaleDomain mirrors SYNAPSE_HEADSCALE_DOMAIN — the
+	// operator's explicit override of the Headscale subdomain. When
+	// empty the installer derives `headscale.<SYNAPSE_DOMAIN>` (with
+	// a `headscale.<SYNAPSE_BASE_DOMAIN>` fallback). Surfaced to the
+	// Admin → Remote Hosts panel as the operator-facing
+	// configuration knob the configure job rewrites.
+	HeadscaleDomain string
+
+	// HostDomain mirrors SYNAPSE_DOMAIN — the FQDN where the
+	// dashboard + API live (e.g. synapsepanel.com). Distinct from
+	// BaseDomain, which is the wildcard for per-deployment subs
+	// (e.g. app.synapsepanel.com). Surfaced to Admin → Remote Hosts
+	// so the default Headscale subdomain derivation can prefer the
+	// dashboard host over the deployments wildcard.
+	HostDomain string
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -305,7 +320,9 @@ func Load() (*Config, error) {
 
 		HeadscaleURL:       strings.TrimRight(os.Getenv("SYNAPSE_HEADSCALE_URL"), "/"),
 		HeadscaleAPIKey:    os.Getenv("SYNAPSE_HEADSCALE_API_KEY"),
+		HeadscaleDomain:    strings.TrimSpace(os.Getenv("SYNAPSE_HEADSCALE_DOMAIN")),
 		HeadscaleServerURL: strings.TrimRight(os.Getenv("SYNAPSE_HEADSCALE_SERVER_URL"), "/"),
+		HostDomain:         strings.TrimSpace(os.Getenv("SYNAPSE_DOMAIN")),
 	}, nil
 }
 

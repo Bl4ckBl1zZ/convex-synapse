@@ -61,7 +61,7 @@ func (h *HostsHandler) createRemoteSetup(w http.ResponseWriter, r *http.Request)
 	// dashboard's modal renders a friendly error.
 	if h.Headscale == nil || h.HeadscaleServerURL == "" {
 		writeError(w, http.StatusServiceUnavailable, "remote_hosts_disabled",
-			"Remote Hosts not enabled — run setup.sh --enable-headscale on the control plane host")
+			"Remote Hosts not enabled — open Admin → Remote Hosts in the dashboard to configure Headscale")
 		return
 	}
 
@@ -122,6 +122,12 @@ func (h *HostsHandler) createRemoteSetup(w http.ResponseWriter, r *http.Request)
 		Reusable:   false,
 		Ephemeral:  false,
 		Expiration: expiresAt,
+		// v1.19+: tag every remote-host pre-auth key with
+		// tag:synapse-remote so the default ACL (control plane only
+		// reaches remote hosts on port 22) applies the moment the
+		// host joins. Untagged hosts would silently inherit a
+		// permissive default if an operator later widens the policy.
+		ACLTags: []string{"tag:synapse-remote"},
 	})
 	if err != nil {
 		logErr("remote_setup: mint headscale preauth key", err)

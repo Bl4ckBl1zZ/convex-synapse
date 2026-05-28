@@ -172,6 +172,30 @@ type RouterDeps struct {
 	HeadscaleServerURL string
 
 	Headscale *headscale.Client
+
+	// HeadscaleURL is the in-network http://synapse-headscale:8080
+	// API URL the synapse-api container hits. Surfaced to
+	// AdminHandler so GET /v1/admin/headscale can render
+	// configured=true alongside the external server URL. Empty when
+	// the operator hasn't run --configure-headscale yet.
+	HeadscaleURL string
+	// HeadscaleAPIKey is a presence-only signal — the key itself
+	// never leaves the api container. AdminHandler only honours the
+	// boolean (non-empty → configured). Storing the string here
+	// keeps router.go the single source of truth for env parsing.
+	HeadscaleAPIKey string
+	// HeadscaleDomain mirrors SYNAPSE_HEADSCALE_DOMAIN — the
+	// operator's explicit Headscale subdomain override (e.g.
+	// `tailscale-control.example.org`). Surfaced to the Admin →
+	// Remote Hosts panel so the form pre-fills with the operator's
+	// chosen host instead of the auto-derived default.
+	HeadscaleDomain string
+	// HostDomain mirrors SYNAPSE_DOMAIN — the dashboard host. The
+	// headscale admin handler derives the default Headscale subdomain
+	// as `headscale.<HostDomain>`, preferring it over
+	// `headscale.<BaseDomain>` because the dashboard host lives
+	// outside the deployments wildcard.
+	HostDomain string
 }
 
 // DomainCacheInvalidator is the subset of *proxy.Resolver the
@@ -461,16 +485,23 @@ func NewRouter(d RouterDeps) http.Handler {
 			// users.is_instance_admin; we mount inside the authenticated group
 			// so unauthenticated probes still hit the auth 401 path.
 			adminH := &AdminHandler{
-				DB:                 d.DB,
-				Version:            d.Version,
-				UpdaterURL:         d.UpdaterURL,
-				UpdaterToken:       d.UpdaterToken,
-				GitHubRepo:         d.GitHubRepo,
-				GitHubAPIBase:      d.GitHubAPIBase,
-				PublicURL:          d.PublicURL,
-				BaseDomain:         d.BaseDomain,
-				PublicIP:           d.PublicIP,
-				HostDomainResolver: d.HostDomainResolver,
+				DB:                        d.DB,
+				Version:                   d.Version,
+				UpdaterURL:                d.UpdaterURL,
+				UpdaterToken:              d.UpdaterToken,
+				GitHubRepo:                d.GitHubRepo,
+				GitHubAPIBase:             d.GitHubAPIBase,
+				PublicURL:                 d.PublicURL,
+				BaseDomain:                d.BaseDomain,
+				PublicIP:                  d.PublicIP,
+				HostDomainResolver:        d.HostDomainResolver,
+				HeadscaleEnabled:          d.Headscale != nil && d.HeadscaleServerURL != "",
+				CryptoConfigured:          d.Crypto != nil,
+				HeadscaleDomain:           d.HeadscaleDomain,
+				HeadscaleServerURL:        d.HeadscaleServerURL,
+				HeadscaleInternalURL:      d.HeadscaleURL,
+				HeadscaleAPIKeyConfigured: d.HeadscaleAPIKey != "",
+				HostDomain:                d.HostDomain,
 			}
 			// DNS-provider credentials — mounted under /admin and
 			// gated by AdminHandler.requireInstanceAdmin. Same

@@ -142,6 +142,15 @@ const (
 	// for outcome.
 	ActionHostDomainChangeInitiated = "host_domain.change_initiated"
 
+	// Headscale / Remote Hosts configuration flow (v1.19+). Emitted on
+	// a successful POST /v1/admin/headscale/configure — the actual
+	// setup.sh --configure-headscale run is asynchronous, so this captures
+	// "operator clicked apply" not "configure succeeded". Pair with
+	// /v1/admin/headscale/status/<id> for outcome. Metadata carries the
+	// requested Headscale domain only; API keys + pre-auth keys NEVER
+	// appear in audit metadata.
+	ActionHeadscaleConfigureInitiated = "headscale.configure_initiated"
+
 	// Cell Control Plane (feat/cell-control-plane). Synapse-original; verbs
 	// follow the existing "<verb><Noun>" convention. Host actions are
 	// instance-level (TeamID stays empty); Cell actions carry TeamID so they
