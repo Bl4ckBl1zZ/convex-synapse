@@ -20,7 +20,7 @@ module.exports = {
   name: "deployment create",
   summary: "Create a new Convex deployment under the linked project.",
   usage:
-    "synapse deployment create [--type=dev|prod|preview|custom] [--ha] [--default] [--project=<id>] [--yes] [--json]",
+    "synapse deployment create [--type=dev|prod|preview|custom] [--ha] [--default] [--host=<host-uuid>] [--project=<id>] [--yes] [--json]",
   description: `Provisions a real Convex backend container. The backend generates the deployment name (animal-adjective-NNNN); you receive it in the response.
 
 Flags:
@@ -28,9 +28,14 @@ Flags:
   --ha                              Provision HA (2 replicas + Postgres + S3).
                                     Requires SYNAPSE_HA_ENABLED on the host.
   --default                         Mark as the project's default deployment.
+  --host=<host-uuid>                Place this deployment on a specific host
+                                    (v1.18+, Remote Hosts). Default: the
+                                    self-host. Pass a host UUID — find one
+                                    via "synapse hosts list".
   --project=<id>                    Operate on a non-linked project.
   --yes                             Skip the prod-confirmation prompt.
   --json                            Machine-readable output.
+
 
 Examples:
   synapse deployment create
@@ -39,7 +44,7 @@ Examples:
 
   async run(args, ctx) {
     const { flags, rest } = extractFlags(args, {
-      string: ["type", "project"],
+      string: ["type", "project", "host"],
       boolean: ["ha", "default", "yes"],
     });
     if (rest.length > 0) {
@@ -93,6 +98,7 @@ Examples:
     const body = { type };
     if (ha) body.ha = true;
     if (isDefault) body.isDefault = true;
+    if (flags.host) body.hostId = String(flags.host).trim();
     const created = await ctx.api.createDeployment(projectId, body);
 
     ctx.out.result(
