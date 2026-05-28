@@ -147,6 +147,11 @@ Both suites green on every push.
   audit/access_tokens/race/advisorylock/provisioner/HA.
 - Dependency: postgres on `localhost:5432` OR `SYNAPSE_TEST_DB_URL`. Skips
   (doesn't fail) if no postgres is reachable.
+- The harness self-limits postgres connections via a package-level weighted
+  semaphore sized adaptively from the live server (`SHOW max_connections` minus
+  current usage), so "stack up + `go test ./...`" no longer exhausts postgres
+  (was: ~8 tests dying with "sorry, too many clients already" when the
+  docker-compose synapse-api pool competed for the same 100-connection ceiling).
 - Decode every response with `json.DisallowUnknownFields()` so shape drift
   fails loudly.
 - Real-backend HA test (`ha_real_e2e_test.go`) is gated by

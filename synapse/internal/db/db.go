@@ -23,7 +23,13 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if !strings.Contains(dsn, "pool_max_conns") {
 		cfg.MaxConns = 20
 	}
-	cfg.MinConns = 2
+	// Keep 2 warm connections in production. As with MaxConns, an explicit
+	// `pool_min_conns` in the DSN wins (ParseConfig already applied it) — the
+	// integration-test harness sets it to 0 so dozens of idle parallel per-test
+	// pools don't each pin 2 connections and exhaust postgres.
+	if !strings.Contains(dsn, "pool_min_conns") {
+		cfg.MinConns = 2
+	}
 	cfg.MaxConnLifetime = time.Hour
 	cfg.MaxConnIdleTime = 30 * time.Minute
 

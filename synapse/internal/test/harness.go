@@ -33,6 +33,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver for ad-hoc DDL
+	"golang.org/x/sync/semaphore"
 
 	"github.com/Iann29/synapse/internal/api"
 	"github.com/Iann29/synapse/internal/auth"
@@ -49,6 +50,85 @@ import (
 // defaultDSN is the local docker-compose postgres. Override with
 // SYNAPSE_TEST_DB_URL to point at a different server.
 const defaultDSN = "postgres://synapse:synapse@localhost:5432/synapse?sslmode=disable"
+
+// perTestConns is the single source of truth for how many postgres connections
+// one test's pool may hold. It is used in TWO places that MUST agree:
+//   1. the per-test pool DSN (pool_max_conns) — the hard cap pgx enforces, and
+//   2. the weight each test Acquires from the package-level connection budget.
+// Acquiring the full pool max as weight means we can never collectively exceed
+// the budget even if every running test maxes out its pool simultaneously.
+const perTestConns int64 = 4
+
+// Connection budget (the "dev stack competing for connections" trap).
+//
+// `go test` runs up to GOMAXPROCS tests of the synapsetest package in parallel
+// (every Setup calls t.Parallel). Each test opens its own pool. On a 16-core
+// box that's 16 × perTestConns = 64 connections from the tests alone — and when
+// the docker-compose dev stack is up, the synapse-api container is ALSO holding
+// a pool (up to 20) against the SAME postgres, whose max_connections defaults to
+// 100. The concurrent setup spikes (CREATE DATABASE + migrate + pool warmup)
+// then push past the ceiling and tests die with SQLSTATE 53300
+// "sorry, too many clients already".
+//
+// Fix: a package-level weighted semaphore bounds the AGGREGATE test-pool
+// connections regardless of GOMAXPROCS, and is sized ADAPTIVELY from what the
+// live server reports — so "stack up + go test ./..." just works. The budget is
+// computed exactly once (connBudgetOnce) against the ROOT dsn.
+var (
+	connBudgetOnce sync.Once
+	connBudgetSem  *semaphore.Weighted
+)
+
+// fallbackConnBudget is used when we can't query the server (e.g. postgres
+// down — the test will Skip anyway). 64 reserves ~20 for the Synapse app pool,
+// ~10 for postgres internals (superuser/autovacuum), and ~6 for transient
+// migration/setup spikes, while still allowing 64/perTestConns concurrent tests.
+const fallbackConnBudget int64 = 64
+
+// connBudgetMargin keeps 25% headroom for the transient CREATE DATABASE /
+// migrate / pool-warmup connections that overlap with steady-state pools.
+const connBudgetMargin = 0.75
+
+// initConnBudget computes the weighted-semaphore budget once, sizing it from the
+// live server: budget = floor((max_connections - in_use) * margin), floored at
+// perTestConns so at least one test can always run (never deadlock), and falling
+// back to fallbackConnBudget if the query fails. rootDSN must point at the ROOT
+// database (not a per-test DB) — this runs before any test DB exists.
+func initConnBudget(rootDSN string) {
+	connBudgetOnce.Do(func() {
+		budget := fallbackConnBudget
+		if computed, ok := queryConnBudget(rootDSN); ok {
+			budget = computed
+		}
+		if budget < perTestConns {
+			budget = perTestConns
+		}
+		connBudgetSem = semaphore.NewWeighted(budget)
+	})
+}
+
+// queryConnBudget reads max_connections and current usage from the root server.
+func queryConnBudget(rootDSN string) (int64, bool) {
+	root, err := sql.Open("pgx", rootDSN)
+	if err != nil {
+		return 0, false
+	}
+	defer func() { _ = root.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var maxConns int64
+	if err := root.QueryRowContext(ctx, `SHOW max_connections`).Scan(&maxConns); err != nil {
+		return 0, false
+	}
+	var inUse int64
+	if err := root.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity`).Scan(&inUse); err != nil {
+		return 0, false
+	}
+	budget := int64(float64(maxConns-inUse) * connBudgetMargin)
+	return budget, true
+}
 
 // jwtSecret is a fixed 64-char dev secret. Tests don't need rotation.
 const jwtSecret = "test-secret-test-secret-test-secret-test-secret-test-secret-aaa"
@@ -268,6 +348,31 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		t.Skipf("postgres unavailable at %s (set SYNAPSE_TEST_DB_URL to point at a reachable server): %v", redactDSN(rootDSN), err)
 	}
 
+	// Reserve this test's share of the package-level connection budget BEFORE we
+	// spend any connections on CREATE DATABASE / migrate / pool. We acquire the
+	// full pool max (perTestConns) so the aggregate can never exceed the budget
+	// even with every parallel pool maxed out — see the connBudget block above
+	// for why this matters when the dev stack is up. We acquire AFTER the
+	// connectivity Skip so the postgres-down path never touches the semaphore.
+	initConnBudget(rootDSN)
+	acqCtx, acqCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := connBudgetSem.Acquire(acqCtx, perTestConns); err != nil {
+		acqCancel()
+		_ = root.Close()
+		t.Fatalf("acquire connection budget (exceeded?): %v", err)
+	}
+	acqCancel()
+	// Release in a dedicated cleanup registered immediately after a successful
+	// Acquire, so the weight is freed on EVERY exit path — including the t.Fatalf
+	// calls below (CREATE DATABASE / migrate / connect-pool failures, the exact
+	// ones that fire under connection pressure). t.Fatalf → runtime.Goexit only
+	// runs already-registered cleanups, so a release buried in the main cleanup
+	// below would leak on those paths and slowly starve the shared budget.
+	// t.Cleanup is LIFO: registered first here, it runs LAST — after the main
+	// cleanup's pool.Close() — so our connections are already gone before the
+	// slot is handed to a waiting test.
+	t.Cleanup(func() { connBudgetSem.Release(perTestConns) })
+
 	// Each Setup call gets its own database. Running migrations against a
 	// brand-new DB is fast (~200ms on warm postgres) and gives us perfect
 	// isolation between tests run in parallel.
@@ -291,11 +396,17 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 	// flaky "Failed to create user" 500s + lost concurrent inserts). Only the
 	// pool DSN gets this — Migrate keeps the plain DSN (its driver doesn't
 	// understand pool_* params). db.Connect honors an explicit pool_max_conns.
+	// pool_max_conns is the perTestConns hard cap (kept in lockstep with the
+	// semaphore weight via the const). pool_min_conns=0 is CRITICAL: without it
+	// db.Connect defaults MinConns=2, so every idle parallel pool would pin 2
+	// connections and negate the budget. The plain testDSN (no pool_* params)
+	// stays for Migrate, whose driver doesn't understand them.
 	poolSep := "&"
 	if !strings.Contains(testDSN, "?") {
 		poolSep = "?"
 	}
-	pool, err := db.Connect(context.Background(), testDSN+poolSep+"pool_max_conns=4")
+	poolDSN := fmt.Sprintf("%s%spool_max_conns=%d&pool_min_conns=0", testDSN, poolSep, perTestConns)
+	pool, err := db.Connect(context.Background(), poolDSN)
 	if err != nil {
 		dropDatabase(rootDSN, dbName)
 		t.Fatalf("connect pool: %v", err)
