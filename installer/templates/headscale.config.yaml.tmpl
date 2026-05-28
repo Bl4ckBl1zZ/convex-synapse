@@ -68,8 +68,15 @@ policy:
 # MagicDNS: keep OFF for v1.18.0. Adds DNS complexity that isn't
 # required for the SSH-based provisioning flow (Synapse uses
 # tailnet IPs directly, not hostnames). Operators can enable later.
+#
+# Headscale 0.28+ rejects the config at startup with
+#   "dns.nameservers.global must be set when dns.override_local_dns is true"
+# because override_local_dns defaults to TRUE. We don't want to push
+# DNS resolvers onto remote VPSs (would break their existing setups)
+# so set override_local_dns: false explicitly.
 dns:
   magic_dns: false
+  override_local_dns: false
 
 enable_check_updates: false
 ephemeral_node_inactivity_timeout: 30m
