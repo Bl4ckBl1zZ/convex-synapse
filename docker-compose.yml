@@ -80,6 +80,18 @@ services:
       # local dev (no rewrite); setup.sh sets it to "https://<domain>"
       # or "http://<public-ip>:<port>" depending on --no-tls.
       SYNAPSE_PUBLIC_URL: ${SYNAPSE_PUBLIC_URL:-}
+      # SYNAPSE_DOMAIN (v1.19+) — the FQDN where the dashboard + API
+      # live (e.g. synapsepanel.com). Mirror of the operator's setup
+      # answer; distinct from SYNAPSE_BASE_DOMAIN (which is the
+      # wildcard for per-deployment subs). Admin → Remote Hosts uses
+      # it to derive the default Headscale subdomain
+      # (headscale.<SYNAPSE_DOMAIN>) — without this passthrough the
+      # api process would see an empty value and the dashboard's
+      # Remote Hosts panel would refuse with "Host domain required"
+      # even on a properly-configured TLS install. v1.19.0 shipped
+      # without this, surfaced on the first real-VPS smoke; v1.19.1
+      # added the wire-up.
+      SYNAPSE_DOMAIN: ${SYNAPSE_DOMAIN:-}
       # SYNAPSE_BASE_DOMAIN (v1.0+) — wildcard subdomain for per-
       # deployment URLs. When set, deployment URLs become
       # "https://<name>.<base>" and the proxy accepts Host-header
@@ -186,6 +198,17 @@ services:
       # the public /v1/install_agent/config endpoint so the
       # dashboard one-liner doesn't have to carry it inline.
       SYNAPSE_HEADSCALE_SERVER_URL: ${SYNAPSE_HEADSCALE_SERVER_URL:-}
+      # SYNAPSE_HEADSCALE_DOMAIN (v1.19+): the operator's chosen
+      # Headscale subdomain (e.g. headscale.synapsepanel.com), used
+      # as the authoritative source by Admin → Remote Hosts.
+      # Persisted by setup.sh::headscale::bootstrap after the first
+      # configure run; empty on a fresh-install / pre-configure
+      # state. Without this passthrough the v1.19.0 dashboard would
+      # silently fall back to deriving from SYNAPSE_DOMAIN /
+      # SYNAPSE_BASE_DOMAIN on every GET, even after the operator
+      # explicitly stamped an override in .env — clobbering the
+      # form pre-fill.
+      SYNAPSE_HEADSCALE_DOMAIN: ${SYNAPSE_HEADSCALE_DOMAIN:-}
     volumes:
       # Synapse provisions sibling containers via the host docker daemon.
       # This mount is unavoidable for the v0 architecture; the alternative is

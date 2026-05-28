@@ -72,3 +72,32 @@ setup() {
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+@test "headscale::_resolve_server_url backfills from existing SYNAPSE_HEADSCALE_SERVER_URL (v1.19.1 upgrade safety)" {
+    # Regression for the v1.18→v1.19 upgrade footgun. A v1.18 install
+    # that used the auto-derived `headscale.<SYNAPSE_BASE_DOMAIN>` had
+    # SERVER_URL stamped but never SYNAPSE_HEADSCALE_DOMAIN. v1.19
+    # changed the preference to SYNAPSE_DOMAIN over BASE_DOMAIN, so
+    # the next `--configure-headscale` would silently move the
+    # subdomain and break every existing tailnet client. The backfill
+    # check at the top of _resolve_server_url honors the persisted
+    # SERVER_URL, keeping configure-headscale idempotent after upgrade.
+    unset SYNAPSE_HEADSCALE_DOMAIN
+    SYNAPSE_HEADSCALE_SERVER_URL="https://headscale.app.example.com" \
+    SYNAPSE_DOMAIN="example.com" \
+    SYNAPSE_BASE_DOMAIN="app.example.com" \
+        run headscale::_resolve_server_url
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://headscale.app.example.com" ]
+}
+
+@test "headscale::_resolve_server_url HEADSCALE_DOMAIN override still wins over persisted SERVER_URL" {
+    # Operators who explicitly set --headscale-domain= want the new
+    # value, not the persisted one. The override must win the order.
+    SYNAPSE_HEADSCALE_DOMAIN="new.example.org" \
+    SYNAPSE_HEADSCALE_SERVER_URL="https://old.example.com" \
+    SYNAPSE_DOMAIN="example.com" \
+        run headscale::_resolve_server_url
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://new.example.org" ]
+}

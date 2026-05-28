@@ -446,3 +446,72 @@ func TestHeadscaleAdmin_Status_RefusesHostDomainJobID(t *testing.T) {
 		t.Errorf("code: got %q want job_not_found (kind mismatch)", env.Code)
 	}
 }
+
+// TestHeadscaleAdmin_Get_PublicURLFallback_NoSynapseDomain reproduces the
+// v1.19.0 bug: SYNAPSE_DOMAIN wasn't wired into the synapse-api container
+// in docker-compose.yml, so a TLS install with a perfectly good
+// PublicURL=https://synapsepanel.com still rendered "Host domain
+// required" because cfg.HostDomain was empty. v1.19.1 added a
+// PublicURL→Domain fallback (mirroring host_domain.go since v1.4).
+func TestHeadscaleAdmin_Get_PublicURLFallback_NoSynapseDomain(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		PublicURL: "https://synapsepanel.com",
+		// HostDomain deliberately empty — simulates the missing
+		// docker-compose passthrough.
+	})
+	owner := makeAdminUser(t, h)
+
+	var got headscaleAdminResp
+	h.DoJSON(http.MethodGet, "/v1/admin/headscale",
+		owner.AccessToken, nil, http.StatusOK, &got)
+
+	if got.DefaultDomain != "headscale.synapsepanel.com" {
+		t.Errorf("defaultDomain: got %q want headscale.synapsepanel.com (PublicURL fallback)",
+			got.DefaultDomain)
+	}
+}
+
+// TestHeadscaleAdmin_Get_PublicURLFallback_IgnoresIP confirms the
+// fallback skips when PublicURL points at a bare IP (no-tls install) —
+// we must not pretend an IP is a routable domain.
+func TestHeadscaleAdmin_Get_PublicURLFallback_IgnoresIP(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		PublicURL: "http://203.0.113.10:8080",
+	})
+	owner := makeAdminUser(t, h)
+
+	var got headscaleAdminResp
+	h.DoJSON(http.MethodGet, "/v1/admin/headscale",
+		owner.AccessToken, nil, http.StatusOK, &got)
+
+	if got.DefaultDomain != "" {
+		t.Errorf("defaultDomain: got %q want empty (must not derive from an IP)", got.DefaultDomain)
+	}
+}
+
+// TestHeadscaleAdmin_Post_PublicURLFallback_AllowsConfigure confirms the
+// POST path also honors the fallback — a configure request must NOT be
+// refused with host_domain_required when PublicURL carries a real domain.
+func TestHeadscaleAdmin_Post_PublicURLFallback_AllowsConfigure(t *testing.T) {
+	url, tok := stubUpdater(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"started":true}`))
+	})
+	h := SetupWithOpts(t, SetupOpts{
+		UpdaterURL:   url,
+		UpdaterToken: tok,
+		PublicURL:    "https://synapsepanel.com",
+		// HostDomain empty — the v1.19.0 bug state.
+	})
+	owner := makeAdminUser(t, h)
+
+	var got headscaleConfigureResp
+	h.DoJSON(http.MethodPost, "/v1/admin/headscale/configure",
+		owner.AccessToken,
+		map[string]any{}, // derive from fallback
+		http.StatusAccepted, &got)
+
+	if got.Domain != "headscale.synapsepanel.com" {
+		t.Errorf("derived domain: got %q want headscale.synapsepanel.com", got.Domain)
+	}
+}

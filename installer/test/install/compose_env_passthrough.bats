@@ -57,13 +57,35 @@ setup() {
         ["SYNAPSE_UPDATER_STATE_DIR"]="daemon-side state path"
         ["SYNAPSE_UPDATER_LOG_DIR"]="daemon-side log path"
         ["SYNAPSE_POSTGRES_CONTAINER"]="daemon-side docker exec target"
+        # v1.19.1 — surfaced when the test was fixed to actually
+        # iterate. Each is a pre-existing test-only / installer-only
+        # / GET-handler-fallback case. None matter for the v1.19.1
+        # release the test was unblocking; revisit individually.
+        ["SYNAPSE_ACME_EMAIL"]="surfaced via host_domain GET fallback (PublicURL); compose passthrough is a v1.20 follow-up"
+        ["SYNAPSE_HOST_GEO_OVERRIDE"]="test-only override for geo.Resolver, never set in compose env"
+        ["SYNAPSE_HA_BACKEND_POSTGRES_PROBE_URL"]="ha_real_e2e_test.go gated test; never reaches the container"
+        ["SYNAPSE_HA_BACKEND_POSTGRES_URL"]="ha_real_e2e_test.go gated test; never reaches the container"
+        ["SYNAPSE_HA_BACKEND_S3_ACCESS_KEY"]="ha_real_e2e_test.go gated test; never reaches the container"
+        ["SYNAPSE_HA_BACKEND_S3_ENDPOINT"]="ha_real_e2e_test.go gated test; never reaches the container"
+        ["SYNAPSE_HA_BACKEND_S3_SECRET_KEY"]="ha_real_e2e_test.go gated test; never reaches the container"
     )
 
     # Scrape Go side. Match `os.Getenv("SYNAPSE_…")` and
     # `os.LookupEnv("SYNAPSE_…")` and `getEnvDefault("SYNAPSE_…", …)`.
+    #
+    # v1.19.1: switched from `grep -r --include='*.go'` to a portable
+    # find+grep pipeline. The bats image (bats/bats:latest) uses
+    # BusyBox grep which doesn't support --include — the original
+    # form returned ZERO results silently, the for-loop iterated
+    # over nothing, $missing stayed empty, and the test passed
+    # regardless of what was actually missing. Caught after
+    # v1.19.0 shipped without SYNAPSE_DOMAIN /
+    # SYNAPSE_HEADSCALE_DOMAIN wired into compose despite this very
+    # test claiming green for those vars. Real-VPS smoke surfaced
+    # the bug; the fix is making the test actually do its job.
     local go_vars
-    go_vars="$(grep -rhoE '"(SYNAPSE_[A-Z0-9_]+)"' "$REPO_ROOT/synapse/" \
-        --include='*.go' \
+    go_vars="$(find "$REPO_ROOT/synapse/" -name '*.go' -type f -print0 \
+        | xargs -0 grep -hoE '"(SYNAPSE_[A-Z0-9_]+)"' 2>/dev/null \
         | tr -d '"' \
         | sort -u)"
 

@@ -93,6 +93,20 @@ headscale::_resolve_server_url() {
         printf 'https://%s' "${SYNAPSE_HEADSCALE_DOMAIN#.}"
         return 0
     fi
+    # v1.19.1: protect v1.18→v1.19 upgrades from silently moving the
+    # Headscale subdomain. Operators on v1.18 who used the auto-derive
+    # had `headscale.<SYNAPSE_BASE_DOMAIN>` stamped only in
+    # SYNAPSE_HEADSCALE_SERVER_URL (no SYNAPSE_HEADSCALE_DOMAIN
+    # because there was no override). v1.19 changed the preference
+    # order — without this backfill, the first `--configure-headscale`
+    # run after upgrade would derive a DIFFERENT subdomain from
+    # SYNAPSE_DOMAIN, clobber SERVER_URL, and break every existing
+    # tailnet client. Honoring the persisted SERVER_URL keeps it
+    # idempotent.
+    if [[ -n "${SYNAPSE_HEADSCALE_SERVER_URL:-}" ]]; then
+        printf '%s' "$SYNAPSE_HEADSCALE_SERVER_URL"
+        return 0
+    fi
     if [[ -n "${SYNAPSE_DOMAIN:-}" ]]; then
         printf 'https://headscale.%s' "${SYNAPSE_DOMAIN#.}"
         return 0

@@ -98,6 +98,22 @@ func (h *AdminHandler) getHeadscaleAdmin(w http.ResponseWriter, r *http.Request)
 
 	hostDomain := strings.TrimSpace(h.HostDomain)
 	baseDomain := strings.TrimSpace(h.BaseDomain)
+	// v1.19.1: defense in depth. host_domain.go has shipped a
+	// PublicURL→Domain fallback since v1.4 specifically because the
+	// "var lives in .env but never reaches the container" failure
+	// mode bit us before (KVM4 SYNAPSE_STORAGE_KEY) and the
+	// docker-compose passthrough is easy to forget on new vars.
+	// Mirror it here: if SYNAPSE_DOMAIN isn't wired through (the
+	// v1.19.0 bug that shipped a 'Host domain required' banner on
+	// fresh TLS installs), extract the hostname from PublicURL —
+	// which IS wired and stamped to "https://<domain>" by the
+	// installer's TLS path. Skip when PublicURL is an IP (no-tls
+	// installs) so we don't pretend a literal IP is a domain.
+	if hostDomain == "" {
+		if extracted := extractHostFromURL(h.PublicURL); extracted != "" && !looksLikeIP(extracted) {
+			hostDomain = extracted
+		}
+	}
 	defaultDomain := headscaleDefaultDomain(domain, hostDomain, baseDomain)
 
 	updaterErr := h.updaterReachable(r.Context())
@@ -227,6 +243,15 @@ func (h *AdminHandler) postHeadscaleAdmin(w http.ResponseWriter, r *http.Request
 	hostDomain := strings.TrimSpace(h.HostDomain)
 	baseDomain := strings.TrimSpace(h.BaseDomain)
 	persistedDomain := strings.TrimSpace(h.HeadscaleDomain)
+	// v1.19.1: mirror the GET handler's PublicURL→Domain fallback
+	// so a missing SYNAPSE_DOMAIN passthrough doesn't refuse a
+	// legitimate configure request. Same conditions: only when a
+	// real domain (not an IP) shows up in PublicURL.
+	if hostDomain == "" {
+		if extracted := extractHostFromURL(h.PublicURL); extracted != "" && !looksLikeIP(extracted) {
+			hostDomain = extracted
+		}
+	}
 
 	// Headscale needs a stable HTTPS URL on a real domain. Without a
 	// dashboard host AND without a base-domain wildcard there's
