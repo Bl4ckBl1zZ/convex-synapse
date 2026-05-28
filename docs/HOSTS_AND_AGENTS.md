@@ -110,9 +110,12 @@ The canonical install is the dashboard-generated one-liner via
 full operator flow.
 
 ```bash
-# On the Synapse control plane (one-time):
-setup.sh --enable-headscale
-
+# On the Synapse control plane (one-time, v1.19+):
+#   Open Admin → Remote Hosts in the dashboard and click Configure,
+#   or shell-equivalent for automation:
+setup.sh --configure-headscale
+# Pre-v1.19 the install-time opt-in was `setup.sh --enable-headscale`;
+# it still works for fresh installs.
 # In the dashboard → Hosts → New host → "Setup remote install",
 # copy the one-liner, SSH into the new VPS, paste:
 curl -fsSL https://synapse.example.com/install-agent.sh \

@@ -32,15 +32,17 @@ With a domain you get TLS via Caddy + Let's Encrypt automatically; without one, 
 
 ![Project page with a deployment provisioned](docs/screenshots/04-project-deployment.png)
 
-## Multi-host (v1.18+)
+## Multi-host (v1.18+, dashboard-driven since v1.19)
 
 Run deployments across multiple VPSes from one Synapse control plane.
 One-liner adds a new VPS as a "host"; place deployments via the
 dashboard dropdown.
 
 ```bash
-# On the Synapse control plane (one-time):
-setup.sh --enable-headscale
+# On the Synapse control plane (one-time, v1.19+):
+#   Admin → Remote Hosts → Configure (in the dashboard).
+# CLI-equivalent for automation:
+setup.sh --configure-headscale
 
 # Dashboard → Hosts → New host → "Setup remote install"
 # Copy the one-liner shown, SSH into the new VPS, paste:

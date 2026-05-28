@@ -5,24 +5,33 @@ control plane host — multi-region, scale-out, blast-radius
 isolation. One-liner install on each VPS, dashboard handles the
 rest.
 
-> **Status:** shipped in v1.18.0. Validated end-to-end on a Hetzner
-> CPX22 control plane + a CX11 worker reached over a self-hosted
-> Headscale tailnet (the v1.18.0 real-VPS smoke). Caddy dynamic
-> upstream routing for *deployments placed on a remote host* is
-> deferred to v1.19 — operators reach those deployments by tailnet
-> IP:port or via the deployment URL the API renders (which carries
-> the tailnet IP). See [Limitations](#limitations-v1180) below.
+> **Status:** shipped in v1.18.0; v1.19 promoted enablement to the
+> dashboard (Admin → Remote Hosts) and lit up dynamic upstream
+> routing for deployments placed on remote hosts. Validated
+> end-to-end on a Hetzner CPX22 control plane + a CX11 worker
+> reached over a self-hosted Headscale tailnet. The central proxy
+> now forwards `<deployment>.<base-domain>`, `/d/<deployment>`, and
+> `<deployment>.site.<base-domain>` (cloud only — see
+> [Limitations](#limitations-v1190) for the v1.19 site carve-out)
+> to the remote tailnet IP automatically.
 
 ## TL;DR
 
-Run `setup.sh --enable-headscale` on the control plane (one-time).
-For each new VPS: click **Hosts → New host → Setup remote install**
-in the dashboard, copy the one-liner, paste it into the VPS's root
-shell. The VPS joins a private tailnet, generates an ed25519 SSH
-keypair, sends the *private* key to Synapse central (encrypted at
-rest with `crypto.SecretBox`), and registers as `online` within
-~60 s. Place deployments on it from the dashboard's **Place on
-host** dropdown or with `synapse deployment create --host=<uuid>`.
+Open **Admin → Remote Hosts** in the dashboard and click
+**Configure** (v1.19+). For each new VPS afterwards: click **Hosts →
+New host → Setup remote install**, copy the one-liner, paste it
+into the VPS's root shell. The VPS joins a private tailnet,
+generates an ed25519 SSH keypair, sends the *private* key to
+Synapse central (encrypted at rest with `crypto.SecretBox`), and
+registers as `online` within ~60 s. Place deployments on it from
+the dashboard's **Place on host** dropdown or with `synapse
+deployment create --host=<uuid>`.
+
+If you prefer the CLI, `setup.sh --configure-headscale` is the same
+workflow as the dashboard button (operators reaching for it most
+often when the dashboard isn't yet running). The legacy
+`setup.sh --enable-headscale` flag stays as an install-time
+opt-in for fresh installs.
 
 ## Architecture
 
@@ -309,9 +318,17 @@ that layer separately.
 
 ### On the Synapse control plane (one-time)
 
+**Preferred (v1.19+):** open **Admin → Remote Hosts** in the
+dashboard and click **Configure**. The same workflow the dashboard
+drives is available as a CLI repair / automation path:
+
 ```bash
-# Requires --domain or --base-domain (TLS mode). Headscale clients
-# need a stable HTTPS URL for the WebSocket upgrade.
+# v1.19+ — dashboard-equivalent. Requires SYNAPSE_DOMAIN or
+# SYNAPSE_BASE_DOMAIN (TLS mode) — Tailscale clients need a stable
+# HTTPS URL for the WebSocket upgrade.
+setup.sh --configure-headscale [--headscale-domain=<host>]
+
+# Legacy install-time opt-in (still works for fresh installs):
 setup.sh --enable-headscale
 ```
 
@@ -431,22 +448,21 @@ synapse deployment create --type=prod --host=7c2…
   account required — the identity layer ships in the same
   `docker-compose.yml` as Synapse.
 
-## Limitations (v1.18.0)
+## Limitations (v1.19.0)
 
 Honest list. None of these are surprises mid-install — every limit
 errors clearly when the operator hits it.
 
-- **Caddy dynamic upstream for deployments on remote hosts is
-  deferred to v1.19.** A deployment provisioned on a remote VPS is
-  reachable at its tailnet IP:port (the URL the API renders in
-  `deployment.url` includes the tailnet IP). `npx convex deploy`
-  works against that URL because the operator's workstation is
-  *also* on the tailnet (after joining via `tailscale up`).
-  Operators who want public-internet HTTPS for a remote deployment
-  must currently put their own reverse proxy in front of that
-  tailnet IP. The v1.19 work-item adds a Caddy dynamic-upstream
-  lookup so `<name>.<base-domain>` resolves to the right host
-  automatically.
+- **Cloud-path remote routing works; site-path remote does not.**
+  Convex backends expose two HTTP ports: 3210 (cloud / client API)
+  and 3211 (site routes — HTTP actions at their natural paths).
+  The remote provisioner binds `<tailnet-ip>:<host_port>:3210`
+  only; 3211 is not published on the tailnet. The proxy enforces
+  this carve-out by refusing site routing for remote deployments
+  (`ErrSiteUnsupported`). Workarounds: route HTTP actions through
+  `/http/<route>` on the cloud port, or put the remote deployment
+  on the self-host until a follow-up publishes 3211 over the
+  tailnet.
 - **HA-per-deployment is single-host only.** `--enable-ha` provisions
   two replicas; both land on whichever host the deployment was
   placed on. `RemoteClient.RecreateReplica` returns a clear
@@ -513,17 +529,23 @@ the drift commands (`cli/lib/commands/_cellplane.js:resolveScope`).
 POST /v1/hosts/<id>/remote_setup → 503 remote_hosts_disabled
 ```
 
-You didn't run `setup.sh --enable-headscale`, or the flag ran but
-the synapse-api container hasn't picked up the new `.env` yet.
-Verify:
+You haven't enabled Headscale yet — or the synapse-api container
+hasn't picked up the new `.env` after enablement. v1.19+ ships a
+dashboard surface for this; pre-v1.19 it was install-time only.
+Verify and fix:
 
 ```bash
 docker compose exec synapse-api env | grep -E 'SYNAPSE_HEADSCALE_(URL|SERVER_URL|API_KEY)'
 # All three must be non-empty.
 
-# If missing:
+# If missing, the v1.19+ paths (pick one):
+#   1. Dashboard: Admin → Remote Hosts → Configure
+#   2. CLI:
+cd <install-dir> && ./setup.sh --configure-headscale
+# (idempotent re-run; existing secrets in .env are reused)
+
+# Pre-v1.19 fallback (still works):
 cd <install-dir> && ./setup.sh --enable-headscale
-# (idempotent re-run; secrets already in .env are reused).
 ```
 
 ### Host doesn't flip to `online` after the one-liner

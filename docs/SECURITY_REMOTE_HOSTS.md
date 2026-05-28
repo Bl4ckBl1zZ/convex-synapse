@@ -309,19 +309,22 @@ sudo systemctl restart synapse-agent
 ```
 
 ## Hardening checklist (operator)
-
 A defense-in-depth pass operators **should** complete after
-adopting their first remote host. Most are not on by default in
-v1.18.0; explicit choices below.
+adopting their first remote host. Most are not on by default
+before v1.18; v1.19+ ships least-privilege tag-based ACLs and
+control-plane tailnet membership as the new defaults.
 
-1. **Enable Headscale ACLs** restricting tailnet traffic to
-   `(synapse-central → host-1, host-2, …):22` only. Without an
-   ACL, every adopted VPS can reach every other adopted VPS on
-   the tailnet. The hostile-tenant scenario assumes this.
-   Headscale ACL config is documented at
-   <https://headscale.net/usage/configuration/#acls>; edit
-   `<install-dir>/headscale/config.yaml` and restart the
-   container.
+1. **Headscale ACLs are tag-based by default in v1.19+** —
+   `tag:synapse-control` (the central VPS) can only reach
+   `tag:synapse-remote:22`; remote hosts cannot reach each other
+   on the tailnet. The pre-v1.19 default was a permissive
+   `src:["*"], dst:["*:*"]` rule; upgraded installs whose
+   `<install-dir>/headscale/policy.hujson` was operator-edited
+   keep their custom policy untouched — re-render is opt-in via
+   `cp installer/templates/headscale.policy.hujson
+   <install-dir>/headscale/`. To customize further, edit
+   `<install-dir>/headscale/policy.hujson` and restart the
+   headscale container.
 2. **Restrict the VPS's public sshd to your operator IP** (or
    tailnet only). The `Match User synapse-deployer` block does
    not bind public sshd open or shut on its own — operators

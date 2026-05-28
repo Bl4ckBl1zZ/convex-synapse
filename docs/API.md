@@ -94,6 +94,42 @@ not configured or not running.
 Returns the updater daemon's current state/log tail, or `{state:"unavailable",
 error}` when the daemon cannot be reached.
 
+### `GET /v1/admin/headscale` 🔧 (v1.19+)
+
+Returns the current Headscale / Remote Hosts state:
+`{enabled, configured, remoteProvisioningReady, needsApiRestart,
+updaterAvailable, updaterReason?, domain?, serverUrl?, internalUrl?,
+baseDomain?, hostDomain?, publicUrl?, publicIp?, defaultDomain?,
+dnsCredentialAvailable}`. `enabled` is the live signal (runtime
+Headscale client wired); `configured` is the on-disk intent
+(`SYNAPSE_HEADSCALE_*` stamped in `.env`); `needsApiRestart` is true
+when configured but not yet enabled (operator just ran configure,
+synapse-api hasn't picked up the env yet). `defaultDomain` is what
+the dashboard pre-fills in the configure form — prefers
+`headscale.<SYNAPSE_DOMAIN>` over `headscale.<SYNAPSE_BASE_DOMAIN>`
+so a deployments wildcard doesn't trap the Headscale cert.
+
+### `POST /v1/admin/headscale/configure` 🔧 (v1.19+)
+
+Body `{headscaleDomain?, autoConfigureDns?}`. Validates the requested
+hostname (or falls back to `defaultDomain`), optionally upserts the
+matching A record via a stored Cloudflare credential, inserts a
+`configure_headscale` row in `admin_jobs`, and dispatches the
+synapse-updater daemon's `POST /configure_headscale`. Returns 202
+`{jobId, statusUrl, state:"queued", domain, serverUrl, dnsAuto?}`.
+Refuses with `400 host_domain_required` when no SYNAPSE_DOMAIN /
+SYNAPSE_BASE_DOMAIN / explicit override is configurable, `503
+updater_unreachable` when the daemon is down, `409
+configure_in_progress` when another configure job is already
+running on the host.
+
+### `GET /v1/admin/headscale/status/{jobID}` 🔧 (v1.19+)
+
+Returns the same shape as `/v1/admin/host_domain/status/{jobID}`:
+`{id, state, log, error?, createdAt, startedAt?, finishedAt?}`. The
+row is filtered to `kind='configure_headscale'`, so a host-domain
+job id 404s here.
+
 ## Teams
 
 ### `POST /v1/teams/create_team` ✅
@@ -812,3 +848,6 @@ they bump the `--upgrade` target.
 | v1.14.0 | added `POST /v1/deployments/{name}/restart` |
 | v1.15.0 | Site Origin — `role='site'` accepted on `POST /v1/deployments/{name}/domains`; `deployment.siteUrl` field added to deployment JSON; proxy routes `<name>.site.<base>` to Convex port 3211; `/v1/internal/tls_ask` approves the site subdomain branch |
 | v1.16.0 | no `/v1` surface change — adds CLI `domains`/`members`/`upgrade` command families against existing endpoints; backend gains CCP audit-event assertion coverage; HA port alloc race wrapped in retry |
+| v1.17.0 | no `/v1` surface change — installer-only refactors (env hydrator; updater daemon hardening) |
+| v1.18.0 | added Remote Hosts: extended `/v1/hosts` (`is_remote`, `tailnet_addr`), added `POST /v1/hosts/{id}/remote_setup` to mint a one-liner bundle, public `GET /v1/install_agent/config` for `install-agent.sh`, `GET /v1/install-agent.sh` script handler |
+| v1.19.0 | dashboard-driven Remote Hosts setup — `GET /v1/admin/headscale`, `POST /v1/admin/headscale/configure`, `GET /v1/admin/headscale/status/{jobID}` (instance-admin gated; same admin_jobs pattern as host-domain); proxy resolves remote deployments to `<tailnet_addr>:<host_port>` automatically; remote site-routing returns `ErrSiteUnsupported` (3211 not published over tailnet) |
