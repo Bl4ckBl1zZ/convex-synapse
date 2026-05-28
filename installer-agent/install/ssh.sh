@@ -44,6 +44,29 @@ ssh::generate_keypair() {
     cat "$key_path.pub"
 }
 
+# ssh::privkey_content — echo the PEM-encoded private key for the
+# synapse-deployer account on stdout. Caller captures the value into
+# a jq --arg invocation so the multi-line PEM gets JSON-escaped
+# safely (literal "\n" in JSON, not raw newlines that would break
+# parsing).
+#
+# Sent ONCE at register time to Synapse central over HTTPS. The disk
+# copy stays at mode 0600 in $INSTALL_DIR so the operator can recover
+# / rotate later; thereafter the key lives only encrypted-at-rest on
+# Synapse central (crypto.SecretBox, BYTEA column on the hosts row).
+#
+# NEVER echo this to a log file or terminal beyond the immediate
+# curl pipeline — the caller must `unset` any shell variable holding
+# the content right after the POST returns.
+ssh::privkey_content() {
+    local key_path="$INSTALL_DIR/synapse_deployer_ed25519"
+    if [[ ! -f "$key_path" ]]; then
+        ui::fail "SSH private key missing at $key_path — run ssh::generate_keypair first"
+        return 2
+    fi
+    cat "$key_path"
+}
+
 # ssh::configure_sshd <tailnet_ip>
 # Render the drop-in with the tailnet IP baked in (informational; sshd
 # doesn't bind on it — see template comment), validate sshd config, reload.

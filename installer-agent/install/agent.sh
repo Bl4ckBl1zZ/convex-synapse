@@ -143,18 +143,26 @@ agent::register() {
     local host_name
     host_name="$(hostname 2>/dev/null || echo unknown)"
 
+    # v1.18 Phase 3: capture the per-host SSH private key ONCE for the
+    # register payload. Synapse encrypts it via crypto.SecretBox and
+    # persists in hosts.ssh_privkey_encrypted; we never re-send it.
+    # The disk copy at $INSTALL_DIR/synapse_deployer_ed25519 (mode
+    # 0600) stays as the operator-recoverable source of truth.
+    local privkey_content
+    privkey_content="$(ssh::privkey_content)"
     # Build payload via jq so we don't have to hand-escape strings.
     local payload
     payload="$(jq -n \
-        --arg token        "$adoption_token" \
-        --arg hostname     "$host_name" \
-        --arg os           "linux" \
-        --arg arch         "${ARCH:-unknown}" \
-        --arg agentVersion "$agent_version" \
+        --arg token         "$adoption_token" \
+        --arg hostname      "$host_name" \
+        --arg os            "linux" \
+        --arg arch          "${ARCH:-unknown}" \
+        --arg agentVersion  "$agent_version" \
         --arg dockerVersion "$docker_version" \
-        --arg tailnetAddr  "$tailnet_addr" \
-        --arg sshPubkey    "$pubkey" \
-        --arg sshUser      "$ssh_user" \
+        --arg tailnetAddr   "$tailnet_addr" \
+        --arg sshPubkey     "$pubkey" \
+        --arg sshPrivkey    "$privkey_content" \
+        --arg sshUser       "$ssh_user" \
         '{token: $token,
           hostname: $hostname,
           os: $os,
@@ -163,7 +171,14 @@ agent::register() {
           dockerVersion: $dockerVersion,
           tailnetAddr: $tailnetAddr,
           sshPubkey: $sshPubkey,
+          sshPrivkey: $sshPrivkey,
           sshUser: $sshUser}')"
+
+    # Drop the plaintext from the shell env as soon as jq has consumed
+    # it. jq's --arg embeds the value into $payload (JSON-escaped) — we
+    # rely on $payload only from here on, never on $privkey_content.
+    privkey_content=""
+    unset privkey_content
 
     ui::step "Registering with Synapse central"
     local resp http_status
