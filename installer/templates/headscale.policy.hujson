@@ -1,11 +1,40 @@
+// Headscale ACL — v1.19+ tag-based defaults.
+//
+// Two tags own every node in this tailnet:
+//   - tag:synapse-control → the Synapse central VPS (control plane).
+//                            Owns the API key + SSH'es into remote hosts
+//                            to dispatch docker commands.
+//   - tag:synapse-remote  → a host added via Admin → Hosts → Setup
+//                            remote install. Receives docker exec calls
+//                            from the control plane on port 22.
+//
+// Both tags are owned by the synapse Headscale user (the namespace
+// every Synapse-minted pre-auth key uses). Operators MUST NOT mint
+// keys with these tags from outside Synapse — the dashboard's
+// remote_setup endpoint is the only sanctioned mint path.
+//
+// Default policy: least-privilege SSH. Only the control plane can
+// reach remote hosts, and only on port 22 (the Docker dispatch
+// channel). Remote hosts have NO blanket ability to talk to each
+// other or to the control plane back — if a future feature needs
+// cross-remote networking (replicated services, gossip, etc.) it
+// MUST land its own scoped ACL entry rather than reverting to *.
+//
+// To customize: operators MAY edit this file at
+// $INSTALL_DIR/headscale/policy.hujson and restart the headscale
+// container. The installer never overwrites an existing policy file
+// (see headscale::render_config in installer/install/headscale.sh).
 {
-  // Permissive default — Phase 1 only needs Headscale reachable.
-  // Tag-based ACLs land in Phase 3 (SSH remote provisioning).
+  "tagOwners": {
+    "tag:synapse-control": ["synapse"],
+    "tag:synapse-remote":  ["synapse"]
+  },
   "acls": [
+    // Control plane → remote hosts, SSH only.
     {
       "action": "accept",
-      "src":    ["*"],
-      "dst":    ["*:*"]
+      "src":    ["tag:synapse-control"],
+      "dst":    ["tag:synapse-remote:22"]
     }
   ]
 }

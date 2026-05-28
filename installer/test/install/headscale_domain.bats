@@ -24,14 +24,40 @@ setup() {
     [ "$output" = "https://headscale.example.com" ]
 }
 
-@test "headscale::_resolve_server_url falls back to headscale.<BASE_DOMAIN> when no override" {
+@test "headscale::_resolve_server_url prefers SYNAPSE_DOMAIN over SYNAPSE_BASE_DOMAIN (v1.19+)" {
+    # The v1.19+ default: when the operator has both a dashboard
+    # domain (synapsepanel.com) and a deployments wildcard
+    # (app.synapsepanel.com), Headscale lives at headscale.<dashboard>,
+    # NOT headscale.<wildcard>. The wildcard's on-demand TLS would
+    # otherwise refuse to issue a cert because tls_ask gates on real
+    # deployments only.
     unset SYNAPSE_HEADSCALE_DOMAIN
+    SYNAPSE_DOMAIN="synapsepanel.com" \
+    SYNAPSE_BASE_DOMAIN="app.synapsepanel.com" \
+        run headscale::_resolve_server_url
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://headscale.synapsepanel.com" ]
+}
+
+@test "headscale::_resolve_server_url HEADSCALE_DOMAIN override wins over SYNAPSE_DOMAIN" {
+    SYNAPSE_HEADSCALE_DOMAIN="tailscale-control.example.org" \
+    SYNAPSE_DOMAIN="synapsepanel.com" \
+    SYNAPSE_BASE_DOMAIN="app.synapsepanel.com" \
+        run headscale::_resolve_server_url
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://tailscale-control.example.org" ]
+}
+
+@test "headscale::_resolve_server_url falls back to headscale.<BASE_DOMAIN> when no override AND no host domain" {
+    # v1.19+ regression guard: without SYNAPSE_DOMAIN the resolver
+    # MUST still emit a sensible value rather than refusing —
+    # base-domain-only installs are a supported configuration.
+    unset SYNAPSE_HEADSCALE_DOMAIN SYNAPSE_DOMAIN
     SYNAPSE_BASE_DOMAIN="app.example.com" \
         run headscale::_resolve_server_url
     [ "$status" -eq 0 ]
     [ "$output" = "https://headscale.app.example.com" ]
 }
-
 @test "headscale::_resolve_server_url strips leading dot from HEADSCALE_DOMAIN" {
     SYNAPSE_HEADSCALE_DOMAIN=".headscale.example.com" \
         run headscale::_resolve_server_url

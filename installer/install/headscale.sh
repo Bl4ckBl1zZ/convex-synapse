@@ -75,22 +75,26 @@ headscale::_psql() {
 # empty output (returns 0 unconditionally for set -e ergonomics).
 #
 # Resolution order (first match wins):
-#   1. SYNAPSE_HEADSCALE_DOMAIN set  → https://<domain>           (explicit override)
-#   2. SYNAPSE_BASE_DOMAIN set       → https://headscale.<base>   (subdomain of deployments base)
-#   3. SYNAPSE_PUBLIC_IP + PORT set  → http://<ip>:<port>         (no-TLS install)
-#   4. else                          → empty (caller errors out)
+#   1. SYNAPSE_HEADSCALE_DOMAIN set  → https://<domain>             (explicit override)
+#   2. SYNAPSE_DOMAIN set            → https://headscale.<host>     (dashboard host's sibling — v1.19+ default)
+#   3. SYNAPSE_BASE_DOMAIN set       → https://headscale.<base>     (subdomain of deployments base)
+#   4. SYNAPSE_PUBLIC_IP + PORT set  → http://<ip>:<port>           (no-TLS install)
+#   5. else                          → empty (caller errors out)
 #
-# SYNAPSE_HEADSCALE_DOMAIN (v1.18.2+) exists so operators whose
-# control plane lives at one root (`synapsepanel.com`) but whose
-# deployments wildcard at another (`*.app.synapsepanel.com`) can
-# place Headscale outside the on-demand wildcard. Without it the
-# auto-derived `headscale.<base>` falls under the wildcard's
-# `tls { on_demand }` policy, which gates issuance on `tls_ask` —
-# and `tls_ask` only approves real deployments, so the Headscale
-# subdomain never gets a cert.
+# v1.19+ rationale for preferring SYNAPSE_DOMAIN over SYNAPSE_BASE_DOMAIN:
+# operators commonly run the dashboard at synapsepanel.com and the
+# deployments wildcard at app.synapsepanel.com. Defaulting to
+# headscale.app.synapsepanel.com would fall under the on-demand TLS
+# wildcard, which gates issuance on tls_ask — and tls_ask only
+# approves real deployments, so the Headscale subdomain never gets a
+# cert. headscale.<SYNAPSE_DOMAIN> lives outside the wildcard.
 headscale::_resolve_server_url() {
     if [[ -n "${SYNAPSE_HEADSCALE_DOMAIN:-}" ]]; then
         printf 'https://%s' "${SYNAPSE_HEADSCALE_DOMAIN#.}"
+        return 0
+    fi
+    if [[ -n "${SYNAPSE_DOMAIN:-}" ]]; then
+        printf 'https://headscale.%s' "${SYNAPSE_DOMAIN#.}"
         return 0
     fi
     if [[ -n "${SYNAPSE_BASE_DOMAIN:-}" ]]; then
@@ -327,11 +331,21 @@ headscale::bootstrap() {
     local server_url
     server_url="$(headscale::_resolve_server_url)"
     if [[ -z "$server_url" ]]; then
-        ui::fail "Headscale needs SYNAPSE_BASE_DOMAIN or SYNAPSE_PUBLIC_IP+SYNAPSE_HEADSCALE_PORT"
+        ui::fail "Headscale needs SYNAPSE_HEADSCALE_DOMAIN, SYNAPSE_DOMAIN, SYNAPSE_BASE_DOMAIN, or SYNAPSE_PUBLIC_IP+SYNAPSE_HEADSCALE_PORT"
         return 2
     fi
     secrets::set_env_var "$env_file" SYNAPSE_HEADSCALE_SERVER_URL "$server_url"
     export SYNAPSE_HEADSCALE_SERVER_URL="$server_url"
+
+    # v1.19+: stamp SYNAPSE_HEADSCALE_DOMAIN into .env so the chosen
+    # subdomain survives upgrades + dashboard-driven reconfigure jobs.
+    # Skip when the operator left the explicit override empty AND the
+    # derivation used SYNAPSE_PUBLIC_IP (no domain to persist there).
+    if [[ "$server_url" == https://* ]]; then
+        local _hs_domain="${server_url#https://}"
+        secrets::ensure_env_var "$env_file" SYNAPSE_HEADSCALE_DOMAIN "$_hs_domain"
+        export SYNAPSE_HEADSCALE_DOMAIN="$_hs_domain"
+    fi
 
     # 2. internal URL -------------------------------------------------
     # synapse-api talks to headscale over the docker bridge by
@@ -358,6 +372,20 @@ headscale::bootstrap() {
     headscale::ensure_user "$HEADSCALE_DEFAULT_USER"
     ui::info "Minting admin API key (idempotent)"
     headscale::ensure_api_key
+
+    # v1.19+: join the Synapse control plane to its own tailnet so the
+    # central proxy can reach remote-host tailnet IPs. Best-effort —
+    # operators with a hardened distro that refuses /tmp execution
+    # can skip via SYNAPSE_SKIP_CONTROL_TAILSCALE=1 and run
+    # `tailscale up --login-server=$SERVER_URL --auth-key=...` by
+    # hand. The remote provisioner gracefully fails closed with a
+    # clear error in that case.
+    if (( ${SYNAPSE_SKIP_CONTROL_TAILSCALE:-0} == 0 )); then
+        if ! headscale::join_control_plane; then
+            ui::warn "Headscale: control plane tailnet join failed — Remote Hosts central → remote SSH will not work"
+            ui::info "  fix: SSH in and run 'tailscale up --login-server=${server_url} --auth-key=<key>' by hand"
+        fi
+    fi
 
     # 9. Caddy block -------------------------------------------------
     # Only relevant in TLS mode with a base domain — without a base
@@ -391,4 +419,177 @@ headscale::reconcile() {
     fi
     headscale::bootstrap
     headscale::_compose restart headscale
+}
+
+# ---- control-plane tailnet membership (v1.19+) ----------------------
+#
+# The Synapse control plane VPS must join its own Headscale tailnet
+# as a regular Tailscale client so the central proxy + provisioner
+# can reach remote hosts at their 100.x.x.x addresses. Without this
+# step:
+#   - `ssh synapse-deployer@<tailnet-ip>` from synapse-api 502s
+#     because the tailnet IP isn't routable from the control plane;
+#   - the v1.19 dynamic-upstream proxy returns 502 for every remote
+#     deployment.
+#
+# This is idempotent: when the host is already authenticated to the
+# same login-server, we keep its session and return. A different
+# server URL flips us into a refusal — the operator must explicitly
+# acknowledge migration via `tailscale logout` first. Refusal is the
+# safer default; we don't want to silently disconnect the control
+# plane from a working tailnet because someone edited
+# SYNAPSE_HEADSCALE_DOMAIN.
+
+readonly _CONTROL_TAG="tag:synapse-control"
+
+# headscale::_control_hostname  echoes the stable hostname the control
+# plane registers under inside Headscale. Default: synapse-control.
+# Operators can override by exporting SYNAPSE_CONTROL_HOSTNAME before
+# setup.sh — useful when running multiple Synapse instances against
+# the same Headscale (rare).
+headscale::_control_hostname() {
+    printf '%s' "${SYNAPSE_CONTROL_HOSTNAME:-synapse-control}"
+}
+
+# headscale::_install_tailscale  install the tailscale CLI if missing.
+# Mirrors installer-agent/install/tailscale.sh but lives inline here
+# so the control-plane installer doesn't drag in the agent's library
+# layout.
+headscale::_install_tailscale() {
+    if command -v tailscale >/dev/null 2>&1; then
+        return 0
+    fi
+    ui::info "Installing Tailscale CLI (https://tailscale.com/install.sh)"
+    if ! curl -fsSL https://tailscale.com/install.sh | sh >&2; then
+        ui::fail "Tailscale install script failed"
+        return 2
+    fi
+    if ! command -v tailscale >/dev/null 2>&1; then
+        ui::fail "Tailscale install completed but binary not on PATH"
+        return 2
+    fi
+    return 0
+}
+
+# headscale::_control_already_joined SERVER_URL
+# Returns 0 when the local tailscaled is already authenticated against
+# the given login-server. We parse `tailscale status --json` because
+# the human-readable output rewrites silently between versions.
+# Falls back to checking for a 100.x.x.x IP when JSON is unavailable
+# (very old versions, sandboxed CI runners with a stub).
+headscale::_control_already_joined() {
+    local server_url="$1"
+    local status_json
+    if ! status_json="$(tailscale status --json 2>/dev/null)"; then
+        # Fall back: any 100.x IP is at least a tailnet membership.
+        local addr
+        addr="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+        if [[ -n "$addr" && "$addr" == 100.* ]]; then
+            return 0
+        fi
+        return 1
+    fi
+    # jq is the canonical parser; the headscale.sh consumers already
+    # depend on it via phase_install_deps in setup.sh. Bare grep is
+    # the fallback when jq isn't on PATH (very thin distros).
+    local cs
+    if command -v jq >/dev/null 2>&1; then
+        cs="$(printf '%s' "$status_json" | jq -r '.CurrentTailnet.LoginServer // .ControlURL // ""' 2>/dev/null)"
+    else
+        cs="$(printf '%s' "$status_json" | grep -oE '"(LoginServer|ControlURL)":[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
+    fi
+    [[ -n "$cs" && "$cs" == "$server_url" ]]
+}
+
+# headscale::_mint_control_preauth_key
+# Mints a single-use, NOT-ephemeral pre-auth key tagged tag:synapse-control
+# inside the headscale container. Echoes the plaintext key on stdout.
+# Output is captured by the caller; redaction is the caller's job.
+headscale::_mint_control_preauth_key() {
+    # 1h expiry — long enough for `tailscale up` to claim it, short
+    # enough that a forgotten key can't be replayed.
+    local raw
+    if ! raw="$(headscale::_compose exec -T headscale \
+            headscale preauthkeys create \
+            --user "$HEADSCALE_DEFAULT_USER" \
+            --tags "$_CONTROL_TAG" \
+            --expiration 1h 2>&1)"; then
+        ui::fail "headscale preauthkeys create (control) failed: ${raw}"
+        return 2
+    fi
+    # The plaintext key is the last non-empty line. Same pattern as
+    # ensure_api_key above (some Headscale CLI versions prefix with
+    # "key: ").
+    local key
+    key="$(printf '%s\n' "$raw" | awk 'NF { last = $NF } END { print last }')"
+    if [[ -z "$key" ]]; then
+        ui::fail "headscale preauthkeys create (control) returned no key"
+        return 2
+    fi
+    printf '%s' "$key"
+}
+
+# headscale::join_control_plane
+# End-to-end "make sure the Synapse control plane VPS is a member of
+# its own tailnet" entry point. Idempotent: returns 0 quickly when
+# already joined to the configured SERVER_URL. Returns non-zero when
+# the host is joined to a DIFFERENT login-server — operator must
+# acknowledge migration explicitly.
+headscale::join_control_plane() {
+    local server_url="${SYNAPSE_HEADSCALE_SERVER_URL:-}"
+    if [[ -z "$server_url" ]]; then
+        ui::warn "join_control_plane: SYNAPSE_HEADSCALE_SERVER_URL unset"
+        return 1
+    fi
+
+    headscale::_install_tailscale || return 2
+
+    if headscale::_control_already_joined "$server_url"; then
+        ui::info "Control plane already joined to ${server_url}"
+        return 0
+    fi
+
+    # Refuse to clobber an existing membership against a different
+    # control plane. The operator must `tailscale logout` first.
+    local existing_ip
+    existing_ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+    if [[ -n "$existing_ip" && "$existing_ip" == 100.* ]]; then
+        ui::warn "Tailscale already joined to a different control plane (IP $existing_ip)"
+        ui::info "  refusing to clobber. To migrate: sudo tailscale logout, then re-run setup.sh --configure-headscale"
+        return 2
+    fi
+
+    local key
+    if ! key="$(headscale::_mint_control_preauth_key)"; then
+        return 2
+    fi
+
+    local hostname
+    hostname="$(headscale::_control_hostname)"
+    ui::info "Joining control plane to ${server_url} as ${hostname} (tag ${_CONTROL_TAG})"
+    # --accept-dns=false: Synapse central runs its own DNS resolution
+    # for deployments; the tailnet's MagicDNS would otherwise rewrite
+    # base-domain queries via the headscale magic suffix.
+    if ! tailscale up \
+            --login-server="$server_url" \
+            --auth-key="$key" \
+            --hostname="$hostname" \
+            --accept-dns=false \
+            --accept-routes=false; then
+        ui::fail "tailscale up failed against ${server_url}"
+        return 2
+    fi
+    # Wait briefly for the IP assignment so a follow-up `tailscale ip`
+    # in the same setup.sh run reads back the freshly-minted address.
+    local i addr
+    for (( i = 0; i < 15; i++ )); do
+        addr="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+        if [[ -n "$addr" && "$addr" == 100.* ]]; then
+            ui::success "Control plane tailnet IP: ${addr}"
+            return 0
+        fi
+        sleep 1
+    done
+    ui::warn "Control plane tailscale up succeeded but no 100.x IP within 15s — check 'tailscale status'"
+    return 0
 }

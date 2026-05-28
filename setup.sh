@@ -27,7 +27,7 @@
 
 set -Eeuo pipefail
 
-readonly INSTALLER_VERSION="1.12.5"
+readonly INSTALLER_VERSION="1.19.0"
 readonly INSTALL_DIR_DEFAULT="/opt/synapse"
 readonly LOG_FILE="${SYNAPSE_INSTALL_LOG:-/tmp/synapse-install.log}"
 readonly LOCK_FILE="/var/lock/synapse-installer.lock"
@@ -194,6 +194,19 @@ Options:
                              the new state. At least one of those must
                              be passed; --domain and --no-tls are
                              mutually exclusive.
+    --configure-headscale    Enable/configure Headscale on an existing
+                             install (v1.19+). Driven by the dashboard's
+                             Admin → Remote Hosts panel via the
+                             synapse-updater daemon, but available
+                             here for manual repair. Does NOT re-run
+                             the install wizard or verify cleanup —
+                             stamps SYNAPSE_HEADSCALE_* into .env,
+                             starts the headscale compose profile,
+                             joins the control plane to the tailnet,
+                             restarts synapse-api. Combine with
+                             --headscale-domain=<host> to override
+                             the auto-derived headscale.<host>
+                             default.
     --install-dir=<path>     Override $INSTALL_DIR_DEFAULT.
     --no-bootstrap           Skip the curl|sh bootstrap re-exec even
                              when installer/ is missing. Useful for
@@ -242,6 +255,7 @@ parse_flags() {
     STATUS=0
     RECONFIGURE=0
     NO_BOOTSTRAP=0
+    CONFIGURE_HEADSCALE=0
     # Honour $SYNAPSE_INSTALL_DIR as a fallback when neither --install-dir=
     # nor a wizard answer set it. The synapse-updater systemd unit exports
     # this so the daemon can spawn setup.sh without having to thread the
@@ -285,6 +299,7 @@ parse_flags() {
             --status)          STATUS=1 ;;
             --reconfigure)     RECONFIGURE=1 ;;
             --install-dir=*)   INSTALL_DIR="${1#*=}"; INSTALL_DIR_FROM_FLAG=1 ;;
+            --configure-headscale) CONFIGURE_HEADSCALE=1 ;;
             --no-bootstrap)    NO_BOOTSTRAP=1 ;;
             --version)         echo "synapse-installer $INSTALLER_VERSION"; exit 0 ;;
             --help|-h)         usage; exit 0 ;;
@@ -1226,6 +1241,15 @@ main() {
             rc_args+=(--acme-email="$ACME_EMAIL")
         fi
         lifecycle::reconfigure "$INSTALL_DIR" "${rc_args[@]}"
+        exit $?
+    fi
+    if (( CONFIGURE_HEADSCALE )); then
+        if [[ -w "$(dirname "$LOG_FILE")" ]]; then
+            exec > >(tee -a "$LOG_FILE") 2>&1
+        fi
+        source_libs
+        acquire_lock
+        lifecycle::configure_headscale "$INSTALL_DIR"
         exit $?
     fi
 

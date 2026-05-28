@@ -2149,3 +2149,114 @@ lifecycle::_reconfigure_inner() {
     fi
     return 0
 }
+
+# ====================================================================
+# Configure Headscale (v1.19+)
+# ====================================================================
+#
+# Enable / reconfigure Headscale on an existing install without
+# re-running the full installer. Driven from two places:
+#   1. The dashboard's Admin → Remote Hosts panel posts to
+#      /v1/admin/headscale/configure, which dispatches the
+#      synapse-updater daemon's POST /configure_headscale. The
+#      daemon shells `setup.sh --configure-headscale
+#      --non-interactive [--headscale-domain=<host>]`.
+#   2. Operators with broken state can SSH in and run the same
+#      command by hand. Same idempotent path.
+#
+# This entry point deliberately does NOT call phase_wizard or
+# phase_verify — those are install-time concerns. We:
+#   - assert .env + docker-compose.yml exist (refuse on missing)
+#   - hydrate persisted env so headscale::_resolve_server_url sees
+#     the operator's existing SYNAPSE_DOMAIN / BASE_DOMAIN choices
+#   - flip ENABLE_HEADSCALE so headscale::is_enabled returns true
+#     for this run
+#   - persist SYNAPSE_HEADSCALE_DOMAIN when an explicit override
+#     was passed (CLI flag OR HEADSCALE_DOMAIN env)
+#   - run headscale::bootstrap (database, render config, start
+#     container, mint API key, install Caddy block) idempotently
+#   - recreate synapse-api so the runtime client lights up
+#   - log everything to $INSTALL_DIR/configure_headscale.log
+#
+# Error codes:
+#   not_installed              install dir lacks .env or compose file
+#   missing_host               no SYNAPSE_DOMAIN / SYNAPSE_BASE_DOMAIN
+#                              / SYNAPSE_PUBLIC_IP to derive from
+#   bootstrap_failed           headscale::bootstrap returned non-zero
+#   restart_failed             synapse-api recreation did not succeed
+lifecycle::configure_headscale() {
+    local install_dir="$1"
+    local env_file="$install_dir/.env"
+    local compose_file="$install_dir/docker-compose.yml"
+    local log_file="$install_dir/configure_headscale.log"
+
+    if [[ ! -f "$env_file" || ! -f "$compose_file" ]]; then
+        ui::fail "not_installed: no Synapse install at $install_dir (.env or docker-compose.yml missing)"
+        return 2
+    fi
+    if [[ ! -w "$install_dir" ]]; then
+        ui::fail "not_installed: $install_dir is not writable by $(id -un 2>/dev/null || echo "this user")"
+        return 2
+    fi
+
+    ui::step "Configuring Headscale (v1.19+) on $install_dir"
+
+    # Hydrate env from disk so headscale::_resolve_server_url +
+    # caddy::install_headscale_block see the operator's current
+    # state. Wizard-bypass entry points (this one + the updater
+    # daemon) NEVER source .env via `.` because operator values can
+    # carry shell metacharacters; the hydrate helper uses env_get's
+    # quote-stripping parser.
+    setup::hydrate_env
+
+    # Flip the gate so headscale::is_enabled returns true even when
+    # the operator's prior install didn't carry --enable-headscale.
+    export ENABLE_HEADSCALE=1
+
+    # When an explicit override was passed (CLI flag OR pre-stamped
+    # in $HEADSCALE_DOMAIN), persist it BEFORE bootstrap so the
+    # _resolve_server_url helper sees it as authoritative. Without
+    # this an upgrade re-run could regenerate the default subdomain
+    # if SYNAPSE_DOMAIN later changed.
+    if [[ -n "${HEADSCALE_DOMAIN:-}" ]]; then
+        export SYNAPSE_HEADSCALE_DOMAIN="$HEADSCALE_DOMAIN"
+        secrets::ensure_env_var "$env_file" SYNAPSE_HEADSCALE_DOMAIN "$HEADSCALE_DOMAIN"
+    fi
+
+    {
+        printf '%s configure_headscale: start\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } >>"$log_file" 2>&1 || true
+
+    if ! headscale::bootstrap; then
+        ui::fail "bootstrap_failed: headscale::bootstrap returned non-zero"
+        return 2
+    fi
+
+    # Recreate synapse-api so the freshly-stamped SYNAPSE_HEADSCALE_*
+    # env reaches the running container. v1.18 baked these at boot;
+    # the container's running process snapshot would otherwise stay
+    # blind to Headscale even though the values are right there in
+    # .env. Best-effort — the operator can manually restart if this
+    # call returns non-zero.
+    local docker_cmd="${COMPOSE_CMD:-docker}"
+    if ! "$docker_cmd" compose -f "$compose_file" up -d --no-build --force-recreate synapse \
+            >>"$log_file" 2>&1; then
+        ui::warn "restart_failed: 'compose up -d --force-recreate synapse' returned non-zero — check $log_file"
+        return 2
+    fi
+
+    # Wait briefly for synapse to come back up so the daemon's
+    # configure_headscale handler can confirm the path lit up before
+    # the dashboard's polling poll catches up.
+    local synapse_url="http://localhost:${SYNAPSE_PORT:-8080}"
+    if ! compose::wait_healthy "$synapse_url/health" 30; then
+        ui::warn "synapse-api did not become healthy in 30s after Headscale configure — check 'docker compose logs synapse'"
+    fi
+
+    {
+        printf '%s configure_headscale: done\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } >>"$log_file" 2>&1 || true
+
+    ui::success "Headscale configured. Tailnet ready for Remote Hosts."
+    return 0
+}

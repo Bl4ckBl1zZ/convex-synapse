@@ -38,12 +38,18 @@ Endpoints (all require Authorization: Bearer <SYNAPSE_UPDATER_TOKEN>):
                                409 if a reconfigure is already in progress
                                (writes back to the admin_jobs row via psql)
 
+  POST /configure_headscale {jobId, headscaleDomain?}
+                             → 202 {"started": true, "jobId": "<id>"}
+                               409 if a configure_headscale is already in progress
+                               (writes back to the admin_jobs row via psql)
 State files (persisted across daemon restarts):
   /var/lib/synapse-updater/status.json     — last known upgrade state
   /var/lib/synapse-updater/upgrade.lock    — present while an upgrade child is running
   /var/lib/synapse-updater/reconfigure.lock — present while a reconfigure child is running
+  /var/lib/synapse-updater/configure_headscale.lock — present while a configure_headscale child is running
   /var/log/synapse-updater/<utc>.log       — full log of the last/current upgrade
   /var/log/synapse-updater/reconfigure-<utc>.log — full log of the last/current reconfigure
+  /var/log/synapse-updater/configure_headscale-<utc>.log — full log of the last/current configure_headscale
 
 Run as root (User=root in the systemd unit) — setup.sh writes to /opt/synapse,
 talks to /var/run/docker.sock, and may call apt-get; sub-rooting that to a
@@ -78,9 +84,11 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 STATUS_FILE = STATE_DIR / "status.json"
 LOCK_FILE = STATE_DIR / "upgrade.lock"
 RECONFIGURE_LOCK_FILE = STATE_DIR / "reconfigure.lock"
+CONFIGURE_HEADSCALE_LOCK_FILE = STATE_DIR / "configure_headscale.lock"
 
 upgrade_lock = threading.Lock()
 reconfigure_lock = threading.Lock()
+configure_headscale_lock = threading.Lock()
 
 
 def utc_now() -> str:
@@ -417,6 +425,89 @@ def run_reconfigure(job_id: str, payload: dict) -> None:
         pass
 
 
+def run_configure_headscale(job_id: str, payload: dict) -> None:
+    """Worker thread for /configure_headscale. Mirrors run_reconfigure:
+    flips admin_jobs.state to running, shells `setup.sh --configure-headscale`,
+    writes back the final state + bounded log + one-line error
+    summary. The api serves /v1/admin/headscale/status/<id> off the
+    same row so we don't need a daemon-side per-job status endpoint."""
+    started_at_iso = utc_now()
+    log_path = LOG_DIR / f"configure_headscale-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.log"
+
+    _psql_exec(
+        "UPDATE admin_jobs SET state = 'running', started_at = now() WHERE id = $1",
+        [job_id], log_path,
+    )
+
+    cmd = [str(INSTALL_DIR / "setup.sh"), "--configure-headscale", "--non-interactive"]
+    if payload.get("headscaleDomain"):
+        cmd.append(f"--headscale-domain={payload['headscaleDomain']}")
+
+    # SYNAPSE_UPDATER_NO_RESTART=1 protects this daemon from being
+    # killed mid-job by phase_install_updater inside setup.sh. Same
+    # mechanism the upgrade + reconfigure paths use.
+    child_env = dict(os.environ)
+    child_env["SYNAPSE_UPDATER_NO_RESTART"] = "1"
+
+    exit_code = 1
+    try:
+        with open(log_path, "wb") as logf:
+            logf.write(
+                f"[synapse-updater] starting: {' '.join(shlex.quote(c) for c in cmd)}\n".encode()
+            )
+            logf.flush()
+            proc = subprocess.Popen(
+                cmd,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                cwd=str(INSTALL_DIR),
+                env=child_env,
+            )
+            exit_code = proc.wait()
+    except (OSError, subprocess.SubprocessError) as e:
+        try:
+            with open(log_path, "ab") as logf:
+                logf.write(f"\n[synapse-updater] spawn error: {e}\n".encode())
+        except OSError:
+            pass
+        exit_code = 1
+
+    final_state = "succeeded" if exit_code == 0 else "failed"
+    log_excerpt = ""
+    try:
+        log_excerpt = log_path.read_text(errors="replace")
+        if len(log_excerpt) > 64 * 1024:
+            log_excerpt = "...\n" + log_excerpt[-64 * 1024:]
+    except OSError:
+        pass
+
+    error_msg = ""
+    if final_state == "failed":
+        for line in reversed(log_excerpt.splitlines()):
+            line = line.strip()
+            if line:
+                error_msg = line[:500]
+                break
+        if not error_msg:
+            error_msg = f"setup.sh --configure-headscale exited with code {exit_code}"
+
+    _psql_exec(
+        "UPDATE admin_jobs SET state = $1, finished_at = now(), log = $2, error = $3 WHERE id = $4",
+        [final_state, log_excerpt, error_msg or None, job_id], log_path,
+    )
+
+    # started_at_iso captured at the top is intentionally unused on
+    # the writeback path — admin_jobs.started_at is set by the
+    # earlier UPDATE above. We keep the local for parity with the
+    # other workers' log line shape; future "structured job event"
+    # work can promote it to JSON without rewiring.
+    _ = started_at_iso
+
+    try:
+        CONFIGURE_HEADSCALE_LOCK_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "synapse-updater/1.0"
     # Quiet the default access log — systemd journal already captures stderr.
@@ -491,6 +582,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_upgrade()
         if self.path == "/reconfigure_host_domain":
             return self._handle_reconfigure()
+        if self.path == "/configure_headscale":
+            return self._handle_configure_headscale()
         return self._json(404, {"error": "not_found"})
 
     def _read_body(self) -> tuple[dict, str]:
@@ -576,6 +669,49 @@ class Handler(BaseHTTPRequestHandler):
             "acmeEmail": acme,
         }
         threading.Thread(target=run_reconfigure, args=(job_id, payload), daemon=True).start()
+        return self._json(202, {"started": True, "jobId": job_id})
+
+    def _handle_configure_headscale(self) -> None:
+        """POST /configure_headscale — Admin → Remote Hosts dispatch.
+
+        Body: {jobId, headscaleDomain?}. jobId is a UUID written by
+        the api before this call; headscaleDomain (optional) overrides
+        the auto-derived headscale.<host>. Returns 202 on accept,
+        409 when another configure_headscale is already running."""
+        body, err = self._read_body()
+        if err:
+            return self._json(400, {"error": err})
+
+        job_id = (body.get("jobId") or "").strip()
+        if not job_id:
+            return self._json(400, {"error": "missing_job_id"})
+        if not all(c in "0123456789abcdef-" for c in job_id.lower()) or len(job_id) > 64:
+            return self._json(400, {"error": "invalid_job_id"})
+
+        domain = (body.get("headscaleDomain") or "").strip()
+        # Defense-in-depth: the api already validates the hostname,
+        # but a future regression that drops that path mustn't let a
+        # value containing shell metacharacters reach setup.sh.
+        if domain and any(c in domain for c in " \t\n\r\\\"'`$;|&<>"):
+            return self._json(400, {"error": "invalid_payload"})
+
+        # Single-flight via lock file + in-process lock. Mirrors the
+        # reconfigure path so the daemon survives restarts cleanly.
+        if not configure_headscale_lock.acquire(blocking=False):
+            return self._json(409, {"error": "configure_in_progress"})
+        try:
+            if CONFIGURE_HEADSCALE_LOCK_FILE.exists():
+                return self._json(409, {"error": "configure_in_progress"})
+            CONFIGURE_HEADSCALE_LOCK_FILE.write_text(
+                f"{os.getpid()} {job_id} {utc_now()}\n"
+            )
+        finally:
+            configure_headscale_lock.release()
+
+        payload = {"headscaleDomain": domain}
+        threading.Thread(
+            target=run_configure_headscale, args=(job_id, payload), daemon=True,
+        ).start()
         return self._json(202, {"started": True, "jobId": job_id})
 
 
