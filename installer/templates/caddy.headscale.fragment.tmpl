@@ -1,11 +1,23 @@
 # Headscale (Tailscale control plane) reverse-proxy. Activated when
-# SYNAPSE_HEADSCALE_ENABLED=true AND a hostname is resolvable.
-# Hostname comes from SYNAPSE_HEADSCALE_DOMAIN (explicit override,
-# v1.18.2+) OR falls back to headscale.<SYNAPSE_BASE_DOMAIN>.
-# Caddy issues a Let's Encrypt cert automatically. Tailscale client
-# WebSockets require Caddy 2.x's default reverse_proxy (no extra config).
+# Remote Hosts is enabled. Hostname comes from
+# SYNAPSE_HEADSCALE_DOMAIN (explicit override) OR falls back to
+# headscale.<SYNAPSE_DOMAIN> / headscale.<SYNAPSE_BASE_DOMAIN>.
+#
+# v1.19.7+: TLS is issued ON-DEMAND, gated by the global
+# on_demand_tls { ask } directive (which points at
+# /v1/internal/tls_ask). The api approves the headscale host there.
+# Why on-demand instead of standard ACME (`tls <email>`): when the
+# Caddyfile also carries a `:443 { tls { on_demand } }` catch-all
+# (every install with deployments does), Caddy's config adapter
+# silently EXCLUDES a more-specific `tls <email>` site from its
+# automatic-management list, so the cert never preloads and the
+# handshake fails with a TLS alert. Routing on-demand through the
+# same ask gate the deployments already use issues the cert lazily
+# and reliably. Tailscale client WebSockets need no extra config.
 {{SYNAPSE_HEADSCALE_HOST}} {
-    {{ACME_EMAIL_BLOCK}}
+    tls {
+        on_demand
+    }
     reverse_proxy synapse-headscale:8080 {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-For {remote_host}

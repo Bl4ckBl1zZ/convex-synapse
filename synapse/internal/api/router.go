@@ -434,6 +434,12 @@ func NewRouter(d RouterDeps) http.Handler {
 				DB:               d.DB,
 				BaseDomain:       d.BaseDomain,
 				HeadscaleEnabled: d.HeadscaleServerURL != "",
+				// Derive the headscale FQDN the same way the dashboard +
+				// installer do: explicit SYNAPSE_HEADSCALE_DOMAIN, else
+				// headscale.<SYNAPSE_DOMAIN>, else headscale.<BaseDomain>.
+				// Lets on-demand TLS issue the headscale cert on a
+				// domain-only install (no wildcard base).
+				HeadscaleHost: headscaleDefaultDomain(d.HeadscaleDomain, d.HostDomain, d.BaseDomain),
 			})
 			// list_deployments_for_dashboard — cross-origin endpoint
 			// the upstream Convex Dashboard hits from inside the

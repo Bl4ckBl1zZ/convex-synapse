@@ -43,6 +43,16 @@ type TLSAskHandler struct {
 	// endpoint. True when SYNAPSE_HEADSCALE_SERVER_URL or
 	// SYNAPSE_HEADSCALE_DOMAIN is set on the running synapse-api.
 	HeadscaleEnabled bool
+	// HeadscaleHost (v1.19.7+) is the FQDN of the Headscale control
+	// server (e.g. "headscale.synapsepanel.com"). When the asked host
+	// matches it, we approve cert issuance regardless of BaseDomain —
+	// a domain-only install (SYNAPSE_DOMAIN, no wildcard base) derives
+	// the headscale host from SYNAPSE_DOMAIN, so it never falls under
+	// the base-subdomain branch below. Without this top-level match the
+	// headscale host lands in the on-demand catch-all, tls_ask refuses
+	// it, no cert issues, and `tailscale up` hangs on the TLS
+	// handshake. Empty when Remote Hosts is disabled.
+	HeadscaleHost string
 }
 
 func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +62,20 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
+
+	// (0) Headscale control server (v1.19.7+). Approve regardless of
+	// BaseDomain — the headscale host derives from SYNAPSE_DOMAIN on a
+	// domain-only install, so it never falls under the base-subdomain
+	// branch. This is what lets Caddy's on-demand TLS issue the
+	// headscale cert; without it `tailscale up` hangs on a failed
+	// handshake. The host is a single, operator-configured FQDN —
+	// not attacker-controlled — so a flat equality check is the whole
+	// gate.
+	if h.HeadscaleEnabled && h.HeadscaleHost != "" &&
+		host == strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h.HeadscaleHost), ".")) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()

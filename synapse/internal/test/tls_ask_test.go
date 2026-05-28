@@ -189,3 +189,36 @@ func TestTLSAsk_404ForHeadscaleSubdomainWhenDisabled(t *testing.T) {
 		t.Errorf("tls_ask headscale subdomain (disabled): status=%d want 404", resp.StatusCode)
 	}
 }
+// v1.19.7+: tls_ask approves the headscale host on a DOMAIN-ONLY
+// install (no BaseDomain). The headscale host derives from
+// SYNAPSE_DOMAIN, so it never falls under the base-subdomain branch —
+// the top-level HeadscaleHost match is the only thing that lets
+// Caddy's on-demand TLS issue the cert. Without it `tailscale up`
+// hangs on a failed handshake (the real-VPS bug).
+func TestTLSAsk_OkForHeadscaleHost_NoBaseDomain(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		HeadscaleServerURL: "https://headscale.synapsepanel.com",
+		HeadscaleDomain:    "headscale.synapsepanel.com",
+	})
+	q := url.Values{"domain": {"headscale.synapsepanel.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("tls_ask headscale host (domain-only): status=%d want 200", resp.StatusCode)
+	}
+}
+
+// The headscale top-level approval must be EXACT — a random host on a
+// no-base install still 404s. No blanket approval.
+func TestTLSAsk_404ForRandomHost_NoBaseDomain(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		HeadscaleServerURL: "https://headscale.synapsepanel.com",
+		HeadscaleDomain:    "headscale.synapsepanel.com",
+	})
+	q := url.Values{"domain": {"evil.synapsepanel.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Errorf("tls_ask random host (domain-only): got 200 — must NOT blanket-approve")
+	}
+}
