@@ -2,8 +2,9 @@ name: release-agent
 
 # Triggered by repo version tags (piggyback on the main release cycle).
 # Building the agent on every push to main would waste runners; ONLY
-# tagged releases get binaries. install-agent.sh always fetches
-# /releases/latest, so untagged commits don't break the public flow.
+# tagged releases get binaries. install-agent.sh fetches the asset by
+# pinned version tag (/releases/download/v<version>/…), so the control
+# plane must only advertise a version that has a matching tagged release.
 on:
   push:
     tags:

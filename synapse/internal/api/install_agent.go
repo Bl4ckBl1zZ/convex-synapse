@@ -24,10 +24,12 @@ type InstallAgentHandler struct {
 	// still returns 200 in that case and install-agent.sh refuses
 	// based on remoteHostsEnabled=false with a clear error.
 	HeadscaleServerURL string
-	// AgentDownloadBase is the GitHub Release asset prefix (e.g.
-	// https://github.com/Iann29/convex-synapse/releases/latest/download).
-	// The handler appends the version+arch suffix to form the
-	// concrete download URL pattern install-agent.sh substitutes.
+	// AgentDownloadBase is the tag-pinned GitHub Release asset prefix
+	// (e.g. https://github.com/Iann29/convex-synapse/releases/download/v{{version}}).
+	// The handler appends the version+arch suffix to form the concrete
+	// download URL pattern install-agent.sh substitutes. Tag-pinned (not
+	// /latest/) so a pinned agent version always resolves to its OWN
+	// release asset, even immediately after a newer release is published.
 	AgentDownloadBase string
 	// AgentVersion is the running control-plane binary version
 	// (server's main.Version). Echoed back so install-agent.sh can

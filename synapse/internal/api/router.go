@@ -410,7 +410,13 @@ func NewRouter(d RouterDeps) http.Handler {
 		// from a curl to the headscale subdomain.
 		installAgentH := &InstallAgentHandler{
 			HeadscaleServerURL: d.HeadscaleServerURL,
-			AgentDownloadBase:  "https://github.com/" + d.GitHubRepo + "/releases/latest/download",
+			// Tag-pinned, NOT /releases/latest/: the agent version is
+			// pinned (server's d.Version, or the operator's --agent-version),
+			// so the asset must come from that exact release tag. /latest/
+			// 404s whenever a newer release is published than the advertised
+			// version (the skew that broke v1.19.9 once v1.19.10 shipped).
+			// {{version}} is substituted client-side by install-agent.sh.
+			AgentDownloadBase:  "https://github.com/" + d.GitHubRepo + "/releases/download/v{{version}}",
 			AgentVersion:       d.Version,
 			CryptoConfigured:   d.Crypto != nil,
 			ScriptPath:         d.InstallAgentScriptPath,

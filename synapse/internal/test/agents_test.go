@@ -526,6 +526,15 @@ func TestInstallAgent_Config_Enabled(t *testing.T) {
 	if !strings.Contains(resp.AgentDownloadURL, "{{version}}") {
 		t.Errorf("AgentDownloadURL should carry the {{version}} substitution placeholder, got %q", resp.AgentDownloadURL)
 	}
+	// Must be tag-pinned: /releases/download/v{{version}}/... — NOT
+	// /releases/latest/. The latest form 404s the moment a newer release
+	// ships than the advertised agentVersion (v1.19.9 vs latest=v1.19.10).
+	if !strings.Contains(resp.AgentDownloadURL, "/releases/download/v{{version}}/") {
+		t.Errorf("AgentDownloadURL must be tag-pinned (/releases/download/v{{version}}/), got %q", resp.AgentDownloadURL)
+	}
+	if strings.Contains(resp.AgentDownloadURL, "/releases/latest/") {
+		t.Errorf("AgentDownloadURL must NOT use /releases/latest/ (version-skew 404), got %q", resp.AgentDownloadURL)
+	}
 }
 
 // ---------- v1.18 Phase 3: SSH privkey encrypt-at-rest ----------
