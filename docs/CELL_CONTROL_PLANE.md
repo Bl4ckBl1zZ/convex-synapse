@@ -159,6 +159,4 @@ with full audit context — not bolted on speculatively.
 - [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md) — the rules that must not break.
 - [API_CELL_CONTROL_PLANE.md](API_CELL_CONTROL_PLANE.md) — endpoint map.
 - [RUNBOOK_CELL_CONTROL_PLANE.md](RUNBOOK_CELL_CONTROL_PLANE.md) — operational flows.
-- [ROADMAP_CELL_CONTROL_PLANE.md](ROADMAP_CELL_CONTROL_PLANE.md) — done / next / later.
 - [AMAGEJUMPY_CELL_ARCHITECTURE.md](AMAGEJUMPY_CELL_ARCHITECTURE.md) — the conceptual model.
-- [CELL_CONTROL_PLANE_PR_SUMMARY.md](CELL_CONTROL_PLANE_PR_SUMMARY.md) — PR readiness.

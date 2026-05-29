@@ -363,7 +363,7 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 	// (compose / base-domain) mode the proxy reaches it over the docker
 	// network, so we don't publish a host PortBinding for it. Host-port
 	// mode would need a 2nd published port to expose 3211 externally —
-	// documented TODO (see docs/SITE_ORIGIN_PLAN.md, host-port Phase 2).
+	// documented TODO (see docs/CONVEX_SITE_ORIGIN.md "Host-port mode").
 	sitePort := nat.Port("3211/tcp")
 	hostBinding := nat.PortBinding{HostIP: "0.0.0.0", HostPort: strconv.Itoa(spec.HostPort)}
 

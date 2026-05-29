@@ -20,11 +20,7 @@ engine. **Observe + diagnose + plan only — it never applies changes.**
 | [SAFETY_INVARIANTS.md](SAFETY_INVARIANTS.md) | The rules that must not break (read before changing this layer). |
 | [API_CELL_CONTROL_PLANE.md](API_CELL_CONTROL_PLANE.md) | Endpoint map with RBAC + security notes. |
 | [RUNBOOK_CELL_CONTROL_PLANE.md](RUNBOOK_CELL_CONTROL_PLANE.md) | Operational flows + common diagnostics. |
-| [ROADMAP_CELL_CONTROL_PLANE.md](ROADMAP_CELL_CONTROL_PLANE.md) | Done / next / later (apply NOT implemented). |
 | [AMAGEJUMPY_CELL_ARCHITECTURE.md](AMAGEJUMPY_CELL_ARCHITECTURE.md) | Conceptual: Core + Satellite Cells; anti-regression. |
-| [CELL_CONTROL_PLANE_PR_SUMMARY.md](CELL_CONTROL_PLANE_PR_SUMMARY.md) | PR readiness, checklists, rollback. |
-| [RELEASE_NOTES_CELL_CONTROL_PLANE.md](RELEASE_NOTES_CELL_CONTROL_PLANE.md) | RC release notes + verification matrix + artifacts. |
-| [PRODUCTION_RELEASE_CHECKLIST_CELL_CONTROL_PLANE.md](PRODUCTION_RELEASE_CHECKLIST_CELL_CONTROL_PLANE.md) | Migration plan, staging runbook, deploy plan, rollback. |
 
 ## General Synapse
 

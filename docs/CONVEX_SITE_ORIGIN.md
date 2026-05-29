@@ -140,8 +140,7 @@ issues TLS on demand once `tls_ask` approves the host.
 
 **Existing deployments** provisioned before this change froze
 `CONVEX_SITE_ORIGIN` at the cloud URL — they must be recreated/restarted
-once to bake the new value. See [`SITE_ORIGIN_CUTOVER.md`](./SITE_ORIGIN_CUTOVER.md)
-for the full cutover runbook.
+once to bake the new value.
 
 ## Host-port mode (the documented gap)
 

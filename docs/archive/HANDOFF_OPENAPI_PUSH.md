@@ -3,8 +3,7 @@
 > documented in [`../API.md`](../API.md) under the matching action
 > name. Kept for historical context; do NOT treat its priorities as
 > open work. Current handoff state lives in the active
-> [`../ROADMAP.md`](../ROADMAP.md) + the per-feature plan docs
-> (`SITE_ORIGIN_PLAN.md`, `ROADMAP_CELL_CONTROL_PLANE.md`).
+> [`../ROADMAP.md`](../ROADMAP.md).
 
 # HANDOFF — close the OpenAPI gap
 
