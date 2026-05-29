@@ -97,6 +97,7 @@ jobs:
             installer/test/helpers/load.bash \
             installer-agent/install/ui.sh \
             installer-agent/install/preflight.sh \
+            installer-agent/install/deps.sh \
             installer-agent/install/tailscale.sh \
             installer-agent/install/users.sh \
             installer-agent/install/ssh.sh \

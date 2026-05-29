@@ -150,6 +150,11 @@ Optional:
                               when installer-agent/ is missing. Useful
                               for tests and for running install-agent.sh
                               from a custom checkout.
+    --no-autoinstall          Skip auto-installing Docker + CLI tools.
+                              Default: on a fresh VPS the installer brings
+                              up Docker (get.docker.com) + jq/openssh/tar
+                              before preflight. Pass this on hardened or
+                              air-gapped hosts that pre-bake their image.
     --version                 Print installer version and exit.
     --help                    This message.
 
@@ -171,6 +176,7 @@ parse_flags() {
     SSH_USER="synapse-deployer"
     NO_TAILSCALE_INSTALL=0
     NO_BOOTSTRAP=0
+    NO_AUTOINSTALL=0
     SHOW_VERSION=0
     SHOW_HELP=0
     while (( $# > 0 )); do
@@ -184,6 +190,7 @@ parse_flags() {
             --no-tailscale-install) NO_TAILSCALE_INSTALL=1 ;;
             --non-interactive)      export SYNAPSE_NON_INTERACTIVE=1 ;;
             --no-bootstrap)         NO_BOOTSTRAP=1 ;;
+            --no-autoinstall)       NO_AUTOINSTALL=1 ;;
             --version)              SHOW_VERSION=1 ;;
             --help|-h)              SHOW_HELP=1 ;;
             *) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
@@ -310,6 +317,8 @@ source_libs() {
     . "$HERE/installer-agent/install/ui.sh"
     # shellcheck source=installer-agent/install/preflight.sh
     . "$HERE/installer-agent/install/preflight.sh"
+    # shellcheck source=installer-agent/install/deps.sh
+    . "$HERE/installer-agent/install/deps.sh"
     # shellcheck source=installer-agent/install/tailscale.sh
     . "$HERE/installer-agent/install/tailscale.sh"
     # shellcheck source=installer-agent/install/users.sh
@@ -331,6 +340,20 @@ phase_banner() {
     ui::info "Install dir:  $INSTALL_DIR"
     ui::info "SSH user:     $SSH_USER"
     ui::info "Log file:     $LOG_FILE"
+}
+
+# phase_autoinstall_deps — a remote host is almost always a fresh VPS, so
+# bring up Docker + the CLI tools the later phases need BEFORE preflight
+# instead of hard-failing and making the operator install them by hand.
+# Best-effort; preflight is the hard gate. --no-autoinstall opts out.
+phase_autoinstall_deps() {
+    CURRENT_STEP="autoinstall_deps"
+    if (( NO_AUTOINSTALL )); then
+        ui::info "Skipping dependency auto-install (--no-autoinstall) — preflight will require Docker + tools"
+        return 0
+    fi
+    ui::step "Auto-installing dependencies (Docker + CLI tools)"
+    deps::autoinstall
 }
 
 phase_preflight() {
@@ -474,6 +497,7 @@ main() {
     acquire_lock
 
     phase_banner
+    phase_autoinstall_deps
     phase_preflight
     phase_bootstrap_config
     phase_tailscale
