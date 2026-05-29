@@ -237,20 +237,27 @@ caddy::write_standalone() {
 }
 
 # caddy::install_headscale_block
-# Renders installer/templates/caddy.headscale.fragment.tmpl with the
-# current SYNAPSE_BASE_DOMAIN + ACME_EMAIL, then upserts it into
-# whichever Caddyfile is in play and reloads Caddy. NO-OP when
-# SYNAPSE_BASE_DOMAIN is empty — without a subdomain we have nothing
-# to put the headscale site on (Headscale doesn't support sub-path
-# deployment, so the path-mux trick the rest of Synapse uses is
-# unavailable here).
+# Renders caddy.headscale.fragment.tmpl for the Headscale host and
+# upserts it into whichever Caddyfile is in play, then activates Caddy.
+# NO-OP when BOTH SYNAPSE_BASE_DOMAIN and SYNAPSE_HEADSCALE_DOMAIN are
+# empty — without a hostname there's nothing to render (Headscale
+# can't be sub-path-deployed, so the path-mux trick the rest of
+# Synapse uses is unavailable). Host = SYNAPSE_HEADSCALE_DOMAIN
+# (explicit override) else headscale.<SYNAPSE_BASE_DOMAIN>.
+#
+# Set CADDY_SKIP_ACTIVATION=1 to upsert the block WITHOUT reloading /
+# restarting Caddy — used by the upgrade path, which re-adds the block
+# to a freshly-regenerated Caddyfile and lets its own `compose up
+# --build` recreate Caddy against the complete file.
 #
 # Modes (mirrors caddy::install_host_block / caddy::write_standalone):
 #
-#   caddy_host:    append to /etc/caddy/Caddyfile + systemctl reload
-#   caddy_compose: append to $SYNAPSE_CADDYFILE_PATH (the bind-mounted
-#                  standalone Caddyfile) + docker compose exec caddy
-#                  caddy reload
+#   caddy_host:    upsert into /etc/caddy/Caddyfile + systemctl reload
+#   caddy_compose: upsert into $SYNAPSE_CADDYFILE_PATH (the bind-
+#                  mounted standalone Caddyfile) + docker compose
+#                  restart caddy (v1.19.8: restart, not reload — a
+#                  reload of a new on-demand-TLS site didn't take on a
+#                  real box).
 #   nginx_external: print a hint and return 0 — the operator owns
 #                   their nginx config and Headscale needs WebSocket
 #                   passthrough they have to wire by hand.
@@ -273,20 +280,13 @@ caddy::install_headscale_block() {
         echo "caddy::install_headscale_block: $tmpl unreadable" >&2
         return 2
     fi
-    # The fragment template carries an {{ACME_EMAIL_BLOCK}} placeholder
-    # that expands to a `tls <email>` directive when an ACME email is
-    # configured. ACME_EMAIL may be empty when the operator only
-    # passed --base-domain (no --domain); fall back to SYNAPSE_ACME_EMAIL
-    # from .env so the headscale block always gets standard ACME (not
-    # the unsuitable on_demand wildcard).
-    local effective_email="${ACME_EMAIL:-${SYNAPSE_ACME_EMAIL:-}}"
-    local email_block=""
-    if [[ -n "$effective_email" ]]; then
-        email_block="tls ${effective_email}"
-    fi
+    # v1.19.7+: the fragment fronts Headscale with `tls { on_demand }`
+    # (gated by the global on_demand_tls ask), so there's no ACME-email
+    # substitution left to do — only the host. The pre-1.19.7
+    # {{ACME_EMAIL_BLOCK}} placeholder (standard ACME) is gone, so the
+    # former effective_email/email_block plumbing was dead code.
     local rendered
     rendered="$(SYNAPSE_HEADSCALE_HOST="$headscale_host" \
-                ACME_EMAIL_BLOCK="$email_block" \
                 caddy::_render "$tmpl")" || return 2
 
     local mode
@@ -298,9 +298,11 @@ caddy::install_headscale_block() {
                 echo "caddy::install_headscale_block: upsert failed" >&2
                 return 2
             fi
-            local reload_cmd="${CADDY_RELOAD:-systemctl reload caddy}"
-            # shellcheck disable=SC2086
-            $reload_cmd
+            if [[ "${CADDY_SKIP_ACTIVATION:-0}" != "1" ]]; then
+                local reload_cmd="${CADDY_RELOAD:-systemctl reload caddy}"
+                # shellcheck disable=SC2086
+                $reload_cmd
+            fi
             ;;
         caddy_compose)
             local caddy_file="${SYNAPSE_CADDYFILE_PATH:-$INSTALL_DIR/Caddyfile}"
@@ -321,10 +323,12 @@ caddy::install_headscale_block() {
             # switched the headscale block to on-demand TLS (gated by
             # /v1/internal/tls_ask), so there's no automate list to
             # patch.
-            local cmd="${CADDY_COMPOSE_RELOAD_CMD:-${COMPOSE_CMD:-docker}}"
-            "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" --profile caddy restart caddy 2>/dev/null \
-                || "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" restart caddy 2>/dev/null \
-                || ui::warn "caddy restart failed — run 'docker compose restart caddy' to activate the Headscale site"
+            if [[ "${CADDY_SKIP_ACTIVATION:-0}" != "1" ]]; then
+                local cmd="${CADDY_COMPOSE_RELOAD_CMD:-${COMPOSE_CMD:-docker}}"
+                "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" --profile caddy restart caddy 2>/dev/null \
+                    || "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" restart caddy 2>/dev/null \
+                    || ui::warn "caddy restart failed — run 'docker compose restart caddy' to activate the Headscale site"
+            fi
             ;;
         nginx_external)
             cat <<EOF >&2

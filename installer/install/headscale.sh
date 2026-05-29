@@ -342,7 +342,11 @@ headscale::ensure_api_key() {
 #   6. wait_healthy.
 #   7. ensure_user (the default 'synapse' namespace).
 #   8. ensure_api_key (persists to .env, idempotent).
-#   9. install Caddy block when applicable (TLS mode only).
+#   9. install Caddy block when applicable (TLS mode only) — MUST
+#      precede the join so the control plane's own `tailscale up`
+#      reaches a Caddy already fronting headscale.<domain>.
+#  10. join_control_plane: register the control plane in its own
+#      tailnet (best-effort; skip via SYNAPSE_SKIP_CONTROL_TAILSCALE).
 headscale::bootstrap() {
     local env_file="$INSTALL_DIR/.env"
 
@@ -392,37 +396,35 @@ headscale::bootstrap() {
     ui::info "Minting admin API key (idempotent)"
     headscale::ensure_api_key
 
-    # v1.19+: join the Synapse control plane to its own tailnet so the
-    # central proxy can reach remote-host tailnet IPs. Best-effort —
-    # operators with a hardened distro that refuses /tmp execution
-    # can skip via SYNAPSE_SKIP_CONTROL_TAILSCALE=1 and run
-    # `tailscale up --login-server=$SERVER_URL --auth-key=...` by
-    # hand. The remote provisioner gracefully fails closed with a
-    # clear error in that case.
-    if (( ${SYNAPSE_SKIP_CONTROL_TAILSCALE:-0} == 0 )); then
-        if ! headscale::join_control_plane; then
-            ui::warn "Headscale: control plane tailnet join failed — Remote Hosts central → remote SSH will not work"
-            ui::info "  fix: SSH in and run 'tailscale up --login-server=${server_url} --auth-key=<key>' by hand"
-        fi
-    fi
-
-    # 9. Caddy block -------------------------------------------------
-    # v1.19.6: install whenever we're in TLS mode (server_url is
-    # https), NOT only when a base domain is set. The headscale
-    # subdomain derives from SYNAPSE_DOMAIN in v1.19+, so a
-    # domain-only install (no wildcard base) STILL needs its own
-    # Caddy site. Without it, headscale.<domain> falls into the
-    # on-demand TLS catch-all, /v1/internal/tls_ask refuses the cert
-    # (it only approves real deployment subdomains — and refuses
-    # everything when no base domain is configured), no cert issues,
-    # and `tailscale up` on the remote VPS hangs forever on the TLS
-    # handshake. caddy::install_headscale_block self-guards on a
-    # missing hostname, so this is safe even if neither domain var
-    # is set.
+    # 9. Caddy block — MUST precede ANY `tailscale up` -------------
+    # Both the control-plane self-join (step 10) AND every remote-host
+    # join need Caddy to already front headscale.<domain> with a valid
+    # cert. Pre-1.19.9 this ran AFTER join_control_plane, so the
+    # control plane's own `tailscale up` raced a Caddy that wasn't yet
+    # routing headscale.<domain> — most visibly on the upgrade path,
+    # which regenerates the Caddyfile WITHOUT the managed block — and
+    # hung on the control-key fetch (the on-demand `:443` catch-all
+    # answers /key with 404). v1.19.6: install whenever we're in TLS
+    # mode (server_url is https), NOT only when a base domain is set,
+    # so a domain-only install still gets its own Caddy site.
+    # caddy::install_headscale_block self-guards on a missing hostname.
     if (( ${NO_TLS:-0} == 0 )) && [[ "$server_url" == https://* ]]; then
         if declare -F caddy::install_headscale_block >/dev/null; then
             caddy::install_headscale_block || ui::warn \
                 "caddy::install_headscale_block failed — Headscale is up but not fronted by Caddy"
+        fi
+    fi
+
+    # 10. control-plane tailnet membership --------------------------
+    # Join the Synapse control plane to its own tailnet so the central
+    # proxy + provisioner can reach remote-host 100.x addresses.
+    # Best-effort — operators on a hardened distro that refuses /tmp
+    # execution can skip via SYNAPSE_SKIP_CONTROL_TAILSCALE=1 and run
+    # `tailscale up --login-server=$SERVER_URL --auth-key=...` by hand.
+    if (( ${SYNAPSE_SKIP_CONTROL_TAILSCALE:-0} == 0 )); then
+        if ! headscale::join_control_plane; then
+            ui::warn "Headscale: control plane tailnet join failed — Remote Hosts central → remote SSH will not work"
+            ui::info "  fix: SSH in and run 'tailscale up --login-server=${server_url} --auth-key=<key>' by hand"
         fi
     fi
 
@@ -500,34 +502,41 @@ headscale::_install_tailscale() {
     return 0
 }
 
-# headscale::_control_already_joined SERVER_URL
-# Returns 0 when the local tailscaled is already authenticated against
-# the given login-server. We parse `tailscale status --json` because
-# the human-readable output rewrites silently between versions.
-# Falls back to checking for a 100.x.x.x IP when JSON is unavailable
-# (very old versions, sandboxed CI runners with a stub).
-headscale::_control_already_joined() {
-    local server_url="$1"
+# headscale::_current_login_server  echoes the login-server the local
+# tailscaled is currently bound to (trailing slash trimmed), or empty
+# when it can't be determined (logged out, mid-connect, or a tailscale
+# build whose status JSON omits the field). Single source of truth for
+# _control_already_joined AND join_control_plane's refuse-clobber guard
+# — both used to inline this parse and drift apart.
+headscale::_current_login_server() {
     local status_json
-    if ! status_json="$(tailscale status --json 2>/dev/null)"; then
-        # Fall back: any 100.x IP is at least a tailnet membership.
-        local addr
-        addr="$(tailscale ip -4 2>/dev/null | head -1 || true)"
-        if [[ -n "$addr" && "$addr" == 100.* ]]; then
-            return 0
-        fi
-        return 1
-    fi
-    # jq is the canonical parser; the headscale.sh consumers already
-    # depend on it via phase_install_deps in setup.sh. Bare grep is
-    # the fallback when jq isn't on PATH (very thin distros).
+    status_json="$(tailscale status --json 2>/dev/null)" || return 0
     local cs
     if command -v jq >/dev/null 2>&1; then
         cs="$(printf '%s' "$status_json" | jq -r '.CurrentTailnet.LoginServer // .ControlURL // ""' 2>/dev/null)"
     else
         cs="$(printf '%s' "$status_json" | grep -oE '"(LoginServer|ControlURL)":[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
     fi
-    [[ -n "$cs" && "$cs" == "$server_url" ]]
+    printf '%s' "${cs%/}"
+}
+
+# headscale::_control_already_joined SERVER_URL
+# Returns 0 when the local tailscaled is already authenticated against
+# the given login-server. Trailing slashes are normalized on both
+# sides (some tailscale builds report the server with a trailing "/").
+# When the login-server can't be read at all (very old tailscale or a
+# CI stub), falls back to "any 100.x IP is at least a membership".
+headscale::_control_already_joined() {
+    local server_url="$1"
+    local cur
+    cur="$(headscale::_current_login_server)"
+    if [[ -n "$cur" ]]; then
+        [[ "$cur" == "${server_url%/}" ]]
+        return
+    fi
+    local addr
+    addr="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+    [[ -n "$addr" && "$addr" == 100.* ]]
 }
 
 # headscale::_user_id <user>
@@ -600,6 +609,58 @@ headscale::_mint_control_preauth_key() {
     printf '%s' "$key"
 }
 
+# headscale::_ensure_local_hosts_entry SERVER_URL
+# Idempotently pins the Headscale hostname to 127.0.0.1 in /etc/hosts
+# so the control plane's tailscaled reaches the co-located Caddy
+# directly instead of hairpinning out to its OWN public IP — which
+# many NAT'd VPS (public IP behind a provider NAT, no hairpinning)
+# refuse with "connection refused", so `tailscale up` hangs on the
+# control-key fetch and the node never stays connected. The on-demand
+# cert still validates by SNI over the loopback dial. Only the host's
+# tailscaled is affected — synapse-api talks to Headscale over the
+# docker network (SYNAPSE_HEADSCALE_URL), never this hostname. NO-OP
+# for non-https URLs; best-effort when /etc/hosts isn't writable.
+headscale::_ensure_local_hosts_entry() {
+    local server_url="$1"
+    [[ "$server_url" == https://* ]] || return 0
+    local host="${server_url#https://}"
+    host="${host%%/*}"
+    [[ -n "$host" ]] || return 0
+    local hosts_file="${SYNAPSE_HOSTS_FILE:-/etc/hosts}"
+    if grep -qE "^[[:space:]]*127\.0\.0\.1[[:space:]]+${host//./\\.}([[:space:]]|\$)" "$hosts_file" 2>/dev/null; then
+        return 0
+    fi
+    if [[ ! -w "$hosts_file" ]]; then
+        ui::warn "headscale: cannot pin ${host} → 127.0.0.1 (${hosts_file} not writable); relying on NAT hairpinning"
+        return 0
+    fi
+    printf '127.0.0.1 %s # synapse-headscale (control-plane hairpin)\n' "$host" >>"$hosts_file"
+    ui::info "Pinned ${host} → 127.0.0.1 in ${hosts_file} (control-plane tailnet via local Caddy)"
+}
+
+# headscale::_wait_public_reachable SERVER_URL
+# Polls the Headscale public URL's /health until Caddy answers 2xx.
+# caddy::install_headscale_block just RESTARTED Caddy and on-demand
+# cert issuance is lazy, so without this the join's first `tailscale
+# up` handshake can race a cold Caddy / un-issued cert. Short budget,
+# best-effort. NO-OP without curl or for non-https URLs.
+headscale::_wait_public_reachable() {
+    local server_url="$1"
+    [[ "$server_url" == https://* ]] || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    local url="${server_url%/}/health"
+    local budget="${HEADSCALE_REACHABLE_BUDGET:-30}"
+    local deadline=$(( SECONDS + budget ))
+    while (( SECONDS < deadline )); do
+        if curl -fsS --max-time 5 -o /dev/null "$url" 2>/dev/null; then
+            return 0
+        fi
+        sleep 2
+    done
+    ui::warn "Headscale public URL ${url} not reachable in ${budget}s — attempting join anyway"
+    return 0
+}
+
 # headscale::join_control_plane
 # End-to-end "make sure the Synapse control plane VPS is a member of
 # its own tailnet" entry point. Idempotent: returns 0 quickly when
@@ -620,15 +681,26 @@ headscale::join_control_plane() {
         return 0
     fi
 
-    # Refuse to clobber an existing membership against a different
-    # control plane. The operator must `tailscale logout` first.
-    local existing_ip
-    existing_ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"
-    if [[ -n "$existing_ip" && "$existing_ip" == 100.* ]]; then
-        ui::warn "Tailscale already joined to a different control plane (IP $existing_ip)"
+    # Refuse to clobber ONLY when tailscaled is positively bound to a
+    # DIFFERENT login-server — migrating away is the operator's call
+    # (`tailscale logout` first). A 100.x IP whose login-server we
+    # can't read (node mid-connect, or offline after a partial join)
+    # is almost always OUR own tailnet: `tailscale up` against the same
+    # server_url is idempotent, so we proceed instead of refusing.
+    # Pre-1.19.9 this refused on ANY 100.x IP and mislabeled a
+    # half-joined control plane as "a different control plane".
+    local current_server
+    current_server="$(headscale::_current_login_server)"
+    if [[ -n "$current_server" && "$current_server" != "${server_url%/}" ]]; then
+        ui::warn "Tailscale is joined to a DIFFERENT control plane (${current_server})"
         ui::info "  refusing to clobber. To migrate: sudo tailscale logout, then re-run setup.sh --configure-headscale"
         return 2
     fi
+
+    # NAT hairpin workaround + readiness: pin the Headscale host to the
+    # local Caddy and wait for it to answer before the handshake.
+    headscale::_ensure_local_hosts_entry "$server_url"
+    headscale::_wait_public_reachable "$server_url"
 
     local key
     if ! key="$(headscale::_mint_control_preauth_key)"; then

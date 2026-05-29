@@ -221,6 +221,36 @@ lifecycle::detect_profiles() {
     fi
 }
 
+# lifecycle::_reapply_headscale_caddy_block <install_dir> <env_file> <caddyfile_path>
+# After the upgrade regenerates the BASE Caddyfile from the template
+# (which carries NO managed `synapse-headscale` block), re-upsert that
+# block so Headscale routing survives the upgrade. Without it, every
+# upgrade silently drops headscale.<domain> into the on-demand `:443`
+# catch-all (→ synapse-api → /key 404) and every tailnet client
+# (control plane + remote hosts) loses its control connection until the
+# operator re-runs --configure-headscale.
+#
+# NO-OP (returns 0) when Headscale isn't configured
+# (SYNAPSE_HEADSCALE_URL empty) or install_headscale_block isn't loaded.
+# Skips the in-place Caddy restart — the upgrade's own `compose up
+# --build` recreates Caddy against the complete file. caddy_compose is
+# forced because reaching here means $caddyfile_path (the compose-mode
+# bind mount) exists.
+lifecycle::_reapply_headscale_caddy_block() {
+    local install_dir="$1" env_file="$2" caddyfile_path="$3"
+    declare -F caddy::install_headscale_block >/dev/null || return 0
+    local hs_url
+    hs_url="$(secrets::env_get "$env_file" SYNAPSE_HEADSCALE_URL)"
+    [[ -n "$hs_url" ]] || return 0
+    SYNAPSE_HEADSCALE_DOMAIN="$(secrets::env_get "$env_file" SYNAPSE_HEADSCALE_DOMAIN)" \
+    SYNAPSE_BASE_DOMAIN="$(secrets::env_get "$env_file" SYNAPSE_BASE_DOMAIN)" \
+    SYNAPSE_CADDYFILE_PATH="$caddyfile_path" \
+    CADDY_FORCE_MODE=caddy_compose \
+    CADDY_SKIP_ACTIVATION=1 \
+    INSTALL_DIR="$install_dir" \
+        caddy::install_headscale_block
+}
+
 # ---- main entry point ----------------------------------------------
 
 # lifecycle::upgrade <install_dir> [--ref=<ref>] [--force]
@@ -688,6 +718,14 @@ lifecycle::_upgrade_phase_b() {
                 else
                     rm -f "$caddyfile_new"
                 fi
+            fi
+            # v1.19.9: re-add the managed `synapse-headscale` Caddy
+            # block the base-template regen above dropped, so Headscale
+            # routing survives the upgrade (see the helper for the full
+            # why). The `compose up --build` below activates it.
+            if ! lifecycle::_reapply_headscale_caddy_block \
+                    "$install_dir" "$env_file" "$caddyfile_path"; then
+                ui::warn "could not re-add Headscale Caddy block during upgrade — run setup.sh --configure-headscale"
             fi
         fi
     fi

@@ -174,3 +174,48 @@ EOF
     assert_failure 2
     assert_output --partial "restart_failed"
 }
+
+# ---- _reapply_headscale_caddy_block (v1.19.9 upgrade fix) ----------
+
+@test "_reapply_headscale_caddy_block: re-adds the managed block when Headscale is configured" {
+    # The upgrade regenerates the BASE Caddyfile (no headscale block);
+    # this helper must put the managed block back so routing survives.
+    detect::has_caddy() { return 1; }   # → caddy_compose
+    detect::has_nginx() { return 1; }
+    local cf="$INSTALL_DIR/Caddyfile"
+    cat >"$cf" <<'EOF'
+synapsepanel.com {
+    reverse_proxy synapse-api:8080
+}
+EOF
+    cat >"$ENV_FILE" <<EOF
+SYNAPSE_HEADSCALE_URL=http://synapse-headscale:8080
+SYNAPSE_HEADSCALE_DOMAIN=headscale.synapsepanel.com
+EOF
+    run lifecycle::_reapply_headscale_caddy_block "$INSTALL_DIR" "$ENV_FILE" "$cf"
+    assert_success
+    # managed headscale block is back...
+    run grep -c "synapse-headscale" "$cf"
+    [ "$output" -ge 1 ]
+    # ...and the operator's existing site is preserved.
+    run grep -c "synapsepanel.com" "$cf"
+    [ "$output" -ge 1 ]
+}
+
+@test "_reapply_headscale_caddy_block: NO-OP when Headscale is not configured" {
+    detect::has_caddy() { return 1; }
+    detect::has_nginx() { return 1; }
+    local cf="$INSTALL_DIR/Caddyfile"
+    cat >"$cf" <<'EOF'
+synapsepanel.com {
+    reverse_proxy synapse-api:8080
+}
+EOF
+    cat >"$ENV_FILE" <<EOF
+SYNAPSE_DOMAIN=synapsepanel.com
+EOF
+    run lifecycle::_reapply_headscale_caddy_block "$INSTALL_DIR" "$ENV_FILE" "$cf"
+    assert_success
+    run grep -c "synapse-headscale" "$cf"
+    [ "$output" = "0" ]
+}

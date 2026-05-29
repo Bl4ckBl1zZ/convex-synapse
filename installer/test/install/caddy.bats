@@ -378,3 +378,52 @@ EOF2
     [ "$status" -eq 0 ]
     [ ! -s "$CADDY_FILE" ] || ! grep -q headscale "$CADDY_FILE"
 }
+
+# ---- install_headscale_block CADDY_SKIP_ACTIVATION (v1.19.9) --------
+
+@test "install_headscale_block: CADDY_SKIP_ACTIVATION=1 upserts block but does NOT restart Caddy" {
+    # The upgrade path re-adds the headscale block to a freshly
+    # regenerated Caddyfile and relies on its own `compose up --build`
+    # to recreate Caddy. So install_headscale_block MUST upsert the
+    # block WITHOUT an in-place restart when CADDY_SKIP_ACTIVATION=1.
+    detect::has_caddy() { return 1; }   # neither host caddy nor nginx
+    detect::has_nginx() { return 1; }   #   → caddy_compose mode
+    cat >"$SYN_MOCK_BIN/fakecompose" <<EOF2
+#!/usr/bin/env bash
+echo restart >> "$BATS_TEST_TMPDIR/restart-marker"
+exit 0
+EOF2
+    chmod +x "$SYN_MOCK_BIN/fakecompose"
+    local cf="$BATS_TEST_TMPDIR/compose-caddyfile"
+    unset SYNAPSE_BASE_DOMAIN
+    SYNAPSE_HEADSCALE_DOMAIN=headscale.synapsepanel.com \
+    SYNAPSE_CADDYFILE_PATH="$cf" \
+    INSTALL_DIR="$BATS_TEST_TMPDIR" \
+    CADDY_COMPOSE_RELOAD_CMD="$SYN_MOCK_BIN/fakecompose" \
+    CADDY_SKIP_ACTIVATION=1 \
+        caddy::install_headscale_block
+    # Block landed in the target Caddyfile...
+    run grep -c "synapse-headscale" "$cf"
+    [ "$output" -ge 1 ]
+    # ...but Caddy was NOT restarted.
+    [ ! -f "$BATS_TEST_TMPDIR/restart-marker" ]
+}
+
+@test "install_headscale_block: compose mode restarts Caddy when activation is NOT skipped" {
+    detect::has_caddy() { return 1; }
+    detect::has_nginx() { return 1; }
+    cat >"$SYN_MOCK_BIN/fakecompose" <<EOF2
+#!/usr/bin/env bash
+echo restart >> "$BATS_TEST_TMPDIR/restart-marker"
+exit 0
+EOF2
+    chmod +x "$SYN_MOCK_BIN/fakecompose"
+    local cf="$BATS_TEST_TMPDIR/compose-caddyfile"
+    unset SYNAPSE_BASE_DOMAIN
+    SYNAPSE_HEADSCALE_DOMAIN=headscale.synapsepanel.com \
+    SYNAPSE_CADDYFILE_PATH="$cf" \
+    INSTALL_DIR="$BATS_TEST_TMPDIR" \
+    CADDY_COMPOSE_RELOAD_CMD="$SYN_MOCK_BIN/fakecompose" \
+        caddy::install_headscale_block
+    [ -f "$BATS_TEST_TMPDIR/restart-marker" ]
+}
