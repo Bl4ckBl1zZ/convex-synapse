@@ -292,11 +292,29 @@ func run() error {
 		sshClient = sshprov.NewClient(loader)
 	}
 
+	// remoteDocker lets the deployments handler dispatch delete/restart of
+	// a remote-host deployment over SSH to that VPS — not the local daemon,
+	// which would no-op and silently leak the remote container+volume.
+	// nil when Remote Hosts is disabled (no remote deployment can exist
+	// then). Mirrors the provisioner worker's dockerForJob remote branch.
+	var remoteDocker func(api.RemoteTarget) api.RemoteDeployer
+	if sshClient != nil {
+		remoteDocker = func(t api.RemoteTarget) api.RemoteDeployer {
+			return dockerprov.NewRemoteClient(sshClient, sshprov.Target{
+				HostID:      t.HostID,
+				TailnetAddr: t.TailnetAddr,
+				User:        t.SSHUser,
+				Port:        t.SSHPort,
+			}, cfg.BackendImage, cfg.DockerNetwork)
+		}
+	}
+
 	handler := api.NewRouter(api.RouterDeps{
 		Logger:                logger,
 		DB:                    pool,
 		JWT:                   jwtIssuer,
 		Docker:                dockerClient,
+		RemoteDocker:          remoteDocker,
 		PortRangeMin:          cfg.PortRangeMin,
 		PortRangeMax:          cfg.PortRangeMax,
 		HealthcheckViaNetwork: cfg.HealthcheckViaNetwork,

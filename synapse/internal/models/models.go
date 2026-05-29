@@ -115,10 +115,18 @@ type Deployment struct {
 	// hosts in list/get handlers. Empty / zero when loaded via a query
 	// that doesn't join. JSON: omitempty keeps the legacy v1.17- shape
 	// decodable.
-	HostName        string     `json:"hostName,omitempty"`
-	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
-	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
-	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
+	HostName        string `json:"hostName,omitempty"`
+	HostTailnetAddr string `json:"hostTailnetAddr,omitempty"`
+	HostIsRemote    bool   `json:"hostIsRemote,omitempty"`
+	// HostSSHUser / HostSSHPort: SSH coordinates of the deployment's
+	// host, loaded by loadDeploymentForRequest so delete/restart can
+	// dispatch teardown over SSH to a REMOTE host instead of the local
+	// docker daemon (which would no-op and leak the remote
+	// container+volume). Zero for the self-host. json:"-" — internal
+	// plumbing, never surfaced to API clients. v1.19.10.
+	HostSSHUser string     `json:"-"`
+	HostSSHPort int        `json:"-"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
 }
 
 // DeploymentReplicaStatus enumerates the per-replica lifecycle states.

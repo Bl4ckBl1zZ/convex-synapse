@@ -59,12 +59,39 @@ type Provisioner interface {
 	RestartReplica(ctx context.Context, deploymentName string, replicaIndex int) error
 }
 
+// RemoteDeployer is the subset of container ops the delete/restart
+// handlers dispatch to a SPECIFIC host. Both *dockerprov.Client (local)
+// and *dockerprov.RemoteClient (SSH to a remote host) satisfy it, so
+// dockerFor hands back either behind this interface. Remote deployments
+// are always single-replica (HA is refused at provision on remote
+// hosts), so Destroy/Restart of the one container is the whole teardown.
+type RemoteDeployer interface {
+	Destroy(ctx context.Context, deploymentName string) error
+	Restart(ctx context.Context, deploymentName string) error
+}
+
+// RemoteTarget carries a remote host's SSH coordinates so the
+// RemoteDocker factory can bind a dispatcher to it. Mirrors the fields
+// the provisioner worker's dockerForJob feeds into sshprov.Target.
+type RemoteTarget struct {
+	HostID      string
+	TailnetAddr string
+	SSHUser     string
+	SSHPort     int
+}
+
 // DeploymentsHandler exposes the deployment lifecycle: create (which provisions
 // a Docker container), list, get, delete, plus the dashboard-auth endpoint
 // that returns the deployment URL + admin key for the calling user.
 type DeploymentsHandler struct {
 	DB     *pgxpool.Pool
 	Docker Provisioner
+	// RemoteDocker, when non-nil, returns a dispatcher bound to a remote
+	// host's SSH target (production: *dockerprov.RemoteClient; tests: a
+	// recording fake). nil means Remote Hosts is disabled — in which
+	// case no remote deployment can exist, so dockerFor only ever needs
+	// the local Docker. Wired by router.go from RouterDeps.RemoteDocker.
+	RemoteDocker func(RemoteTarget) RemoteDeployer
 	// Tokens is wired by router.go so deployment-scoped access-token
 	// endpoints under /v1/deployments/{name}/access_tokens can reuse the
 	// AccessTokensHandler insert/list path. Optional: a nil value 500s the
@@ -127,6 +154,31 @@ type DeploymentsHandler struct {
 	// backendVersionCacheTTL so the dashboard's deployment-detail
 	// page doesn't hammer each backend on every render.
 	versionCache backendVersionCache
+}
+
+// dockerFor returns the container dispatcher for a deployment's HOST.
+// Self-host deployments use the in-process docker client; a deployment
+// on a remote host gets a dispatcher bound to that host's SSH target so
+// teardown / restart run on the VPS the container actually lives on —
+// NOT the control plane's local daemon, which would no-op and silently
+// leak the remote container+volume. Pure (all host fields come from
+// loadDeploymentForRequest's join), so it's unit-testable without a DB.
+func (h *DeploymentsHandler) dockerFor(d *models.Deployment) (RemoteDeployer, error) {
+	if !d.HostIsRemote {
+		return h.Docker, nil
+	}
+	if h.RemoteDocker == nil {
+		return nil, fmt.Errorf("deployment %q is on a remote host but Remote Hosts is disabled — set SYNAPSE_HEADSCALE_URL + SYNAPSE_STORAGE_KEY and restart", d.Name)
+	}
+	if d.HostTailnetAddr == "" {
+		return nil, fmt.Errorf("deployment %q is on a remote host with no tailnet address — re-run install-agent.sh on that host", d.Name)
+	}
+	return h.RemoteDocker(RemoteTarget{
+		HostID:      d.HostID,
+		TailnetAddr: d.HostTailnetAddr,
+		SSHUser:     d.HostSSHUser,
+		SSHPort:     d.HostSSHPort,
+	}), nil
 }
 
 // rebuildCORSAndRestart recomputes CORS_ALLOWED_ORIGINS from the
@@ -914,6 +966,7 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 		       d.created_at, d.admin_key, d.instance_secret, d.host_port, d.container_id, d.adopted,
 		       d.ha_enabled, d.replica_count, d.last_deploy_at,
 		       d.host_id::text, h.name, h.tailnet_addr, h.is_remote,
+		       COALESCE(h.ssh_user, ''), COALESCE(h.ssh_port, 22),
 		       p.id, p.team_id, p.name, p.slug, p.is_demo, p.created_at,
 		       t.id, t.name, t.slug, t.creator_user_id, t.default_region, t.suspended, t.created_at
 		  FROM deployments d
@@ -928,6 +981,7 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 		&d.CreatedAt, &d.AdminKey, &d.InstanceSecret, &hostPort, &containerID, &d.Adopted,
 		&d.HAEnabled, &d.ReplicaCount, &d.LastDeployAt,
 		&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote,
+		&d.HostSSHUser, &d.HostSSHPort,
 		&p.ID, &p.TeamID, &p.Name, &p.Slug, &p.IsDemo, &p.CreatedAt,
 		&t.ID, &t.Name, &t.Slug, &t.CreatorUserID, &t.DefaultRegion, &t.Suspended, &t.CreatedAt,
 	)
@@ -2304,9 +2358,19 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 	// the row. The actual backend keeps running until the operator who
 	// owns it stops it.
 	if !d.Adopted {
-		// Tear down the container/volume first; if that fails, leave the row
-		// alone so the operator can retry. A successful Destroy is idempotent.
-		if destroyErr := h.Docker.Destroy(r.Context(), d.Name); destroyErr != nil {
+		// Tear down the container/volume first; if that fails, leave the
+		// row alone so the operator can retry. A successful Destroy is
+		// idempotent. Dispatch to the deployment's HOST — a remote host's
+		// container lives on that VPS's docker daemon (reachable only over
+		// SSH); running Destroy on the local daemon would no-op and
+		// silently leak the remote container+volume (v1.19.10).
+		dispatcher, derr := h.dockerFor(d)
+		if derr != nil {
+			logErr("resolve teardown target", derr)
+			writeError(w, http.StatusInternalServerError, "destroy_failed", derr.Error())
+			return
+		}
+		if destroyErr := dispatcher.Destroy(r.Context(), d.Name); destroyErr != nil {
 			logErr("docker destroy", destroyErr)
 			writeError(w, http.StatusInternalServerError, "destroy_failed", destroyErr.Error())
 			return
@@ -2378,10 +2442,21 @@ func (h *DeploymentsHandler) restartDeployment(w http.ResponseWriter, r *http.Re
 				return
 			}
 		}
-	} else if err := h.Docker.Restart(r.Context(), d.Name); err != nil {
-		logErr("restart deployment", err)
-		writeError(w, http.StatusInternalServerError, "restart_failed", err.Error())
-		return
+	} else {
+		// Single-replica (always the case on a remote host — HA is refused
+		// there at provision). Dispatch to the deployment's host so a
+		// remote container is actually bounced, not no-op'd locally.
+		dispatcher, derr := h.dockerFor(d)
+		if derr != nil {
+			logErr("resolve restart target", derr)
+			writeError(w, http.StatusInternalServerError, "restart_failed", derr.Error())
+			return
+		}
+		if err := dispatcher.Restart(r.Context(), d.Name); err != nil {
+			logErr("restart deployment", err)
+			writeError(w, http.StatusInternalServerError, "restart_failed", err.Error())
+			return
+		}
 	}
 
 	uid, _ := auth.UserID(r.Context())

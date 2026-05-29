@@ -26,7 +26,12 @@ type RouterDeps struct {
 	// Docker is a Provisioner — accepting an interface here lets tests inject
 	// a fake without bringing the docker SDK along for the ride. Production
 	// wiring passes *dockerprov.Client which already satisfies it.
-	Docker                Provisioner
+	Docker Provisioner
+	// RemoteDocker builds a dispatcher bound to a remote host's SSH
+	// target so delete/restart of a remote-host deployment runs on that
+	// VPS. nil = Remote Hosts disabled. Production wiring (cmd/server)
+	// closes over the sshprov.Client; tests inject a recording fake.
+	RemoteDocker          func(RemoteTarget) RemoteDeployer
 	PortRangeMin          int
 	PortRangeMax          int
 	HealthcheckViaNetwork bool
@@ -258,6 +263,7 @@ func NewRouter(d RouterDeps) http.Handler {
 	deploymentsH := &DeploymentsHandler{
 		DB:                    d.DB,
 		Docker:                d.Docker,
+		RemoteDocker:          d.RemoteDocker,
 		Tokens:                tokensH,
 		PortRangeMin:          d.PortRangeMin,
 		PortRangeMax:          d.PortRangeMax,
