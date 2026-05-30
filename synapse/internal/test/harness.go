@@ -306,6 +306,17 @@ type SetupOpts struct {
 	// test file. Empty leaves the handler at its "/install-agent.sh"
 	// default (absent in the test env → 503).
 	InstallAgentScriptPath string
+	// RemoteDockerFn mirrors api.RouterDeps.RemoteDocker — the factory
+	// the delete/restart handlers use to dispatch teardown to a REMOTE
+	// host over SSH. nil (default) leaves Remote Hosts "disabled" so a
+	// seeded remote deployment's teardown 500s at dockerFor; tests that
+	// exercise the remote teardown timeout / force-delete path inject a
+	// fake whose Destroy blocks (simulating an unreachable VPS) or fails.
+	RemoteDockerFn func(api.RemoteTarget) api.RemoteDeployer
+	// RemoteOpTimeout mirrors api.RouterDeps.RemoteOpTimeout. Tests that
+	// exercise the teardown/restart deadline set a small value so a
+	// blocking remote dispatcher surfaces the bound in milliseconds.
+	RemoteOpTimeout time.Duration
 }
 
 // stubResolverFunc adapts a closure to api.HostDomainResolver.
@@ -465,6 +476,8 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		HeadscaleAPIKey:        opts.HeadscaleAPIKey,
 		HostDomain:             opts.HostDomain,
 		InstallAgentScriptPath: opts.InstallAgentScriptPath,
+		RemoteDocker:           opts.RemoteDockerFn,
+		RemoteOpTimeout:        opts.RemoteOpTimeout,
 	}
 
 	// HA wiring (only when SetupHA was called). The crypto box is a

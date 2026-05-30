@@ -131,15 +131,20 @@ func (c *Client) Run(ctx context.Context, t Target, stdin io.Reader, argv ...str
 	if err != nil {
 		return Result{}, &Error{HostID: t.HostID, Cmd: argv[0], Cause: err}
 	}
-	sess, err := client.NewSession()
+	sess, err := c.newSession(ctx, t, client)
 	if err != nil {
-		// Stale connection — evict + retry once.
+		// ctx expired while opening the channel (dead host) — don't retry,
+		// the retry would only re-dial into the same timeout.
+		if ctx.Err() != nil {
+			return Result{}, &Error{HostID: t.HostID, Cmd: argv[0], Cause: err}
+		}
+		// Stale connection — evict + retry once with a fresh dial.
 		c.pool.evict(t)
 		client, err = c.pool.get(ctx, t)
 		if err != nil {
 			return Result{}, &Error{HostID: t.HostID, Cmd: argv[0], Cause: err}
 		}
-		sess, err = client.NewSession()
+		sess, err = c.newSession(ctx, t, client)
 		if err != nil {
 			return Result{}, &Error{HostID: t.HostID, Cmd: argv[0], Cause: err}
 		}
@@ -179,6 +184,42 @@ func (c *Client) Run(ctx context.Context, t Target, stdin io.Reader, argv ...str
 			}
 		}
 		return res, &Error{HostID: t.HostID, Cmd: argv[0], Cause: err}
+	}
+}
+
+// newSession opens a session on client, bounded by ctx. *ssh.Client.NewSession
+// takes no context and blocks on the underlying socket when the pooled
+// connection is half-dead — host powered off, network partition, or a cached
+// connection to a host that has since wedged — because the SSH transport waits
+// for a channel-open reply that never arrives, for as long as the OS keeps the
+// dead TCP connection alive (minutes). We run it in a goroutine and, on ctx
+// cancellation, Close the connection: closing the transport makes the in-flight
+// NewSession return promptly, so a teardown/restart of a deployment on an
+// unreachable host fails within the caller's deadline instead of wedging the
+// HTTP request (and the dashboard's delete modal) until the kernel gives up.
+func (c *Client) newSession(ctx context.Context, t Target, client *ssh.Client) (*ssh.Session, error) {
+	type sessResult struct {
+		sess *ssh.Session
+		err  error
+	}
+	ch := make(chan sessResult, 1)
+	go func() {
+		s, e := client.NewSession()
+		ch <- sessResult{sess: s, err: e}
+	}()
+	select {
+	case <-ctx.Done():
+		// Close unblocks the goroutine's NewSession; evict drops the dead
+		// connection from the pool so the next caller re-dials instead of
+		// inheriting the same wedged socket.
+		_ = client.Close()
+		c.pool.evict(t)
+		if r := <-ch; r.sess != nil {
+			_ = r.sess.Close()
+		}
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.sess, r.err
 	}
 }
 

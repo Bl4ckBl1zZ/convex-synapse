@@ -302,3 +302,108 @@ func TestTarget_Defaults(t *testing.T) {
 		t.Errorf("addr override: got %q want %q", got, want)
 	}
 }
+
+// stallServer completes the SSH handshake but never Accepts or Rejects
+// an incoming channel, so a client's NewSession() blocks waiting for the
+// channel-open confirmation that never comes — and the connection stays
+// open, so it can't fail fast either. Models a remote host reachable
+// enough to handshake (or a pooled connection to a host that has since
+// wedged) but unable to service new sessions: the exact shape that used
+// to hang delete/restart indefinitely before Run bounded NewSession by
+// ctx.
+type stallServer struct {
+	listener net.Listener
+	hostKey  ssh.Signer
+}
+
+func newStallServer(t *testing.T) *stallServer {
+	t.Helper()
+	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("host key: %v", err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(hostPriv)
+	if err != nil {
+		t.Fatalf("host signer: %v", err)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := &stallServer{listener: l, hostKey: hostSigner}
+	go s.serve()
+	return s
+}
+
+func (s *stallServer) addrParts() (string, int) {
+	host, portStr, _ := net.SplitHostPort(s.listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	return host, port
+}
+
+func (s *stallServer) close() { _ = s.listener.Close() }
+
+func (s *stallServer) serve() {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			return
+		}
+		go s.handle(conn)
+	}
+}
+
+func (s *stallServer) handle(c net.Conn) {
+	defer c.Close()
+	cfg := &ssh.ServerConfig{
+		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+			return nil, nil
+		},
+	}
+	cfg.AddHostKey(s.hostKey)
+	_, chans, reqs, err := ssh.NewServerConn(c, cfg)
+	if err != nil {
+		return
+	}
+	go ssh.DiscardRequests(reqs)
+	// Drain channel-open requests without ever Accept/Reject-ing them.
+	// Returns (unblocking) only when the client closes the transport.
+	for range chans {
+	}
+}
+
+// TestClient_Run_ContextTimeout_StallsOnSessionOpen proves Run honours ctx
+// during the NewSession() phase, not just during the command. The stall
+// server lets the dial + handshake succeed (so we get past pool.get) and
+// then never confirms the session channel. Before the fix, NewSession was
+// called outside the ctx select and blocked on the socket until the OS TCP
+// timeout, hanging the caller (and the delete modal) for minutes. Run must
+// now return shortly after the ctx deadline.
+func TestClient_Run_ContextTimeout_StallsOnSessionOpen(t *testing.T) {
+	srv := newStallServer(t)
+	defer srv.close()
+	host, port := srv.addrParts()
+
+	c := NewClient(staticLoader(testSigner(t)))
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := c.Run(ctx, Target{HostID: "h1", TailnetAddr: host, Port: port}, nil,
+		"docker", "rm", "-f", "convex-stuck")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected ctx timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+	// Generous ceiling: the point is it returns near the 250ms deadline,
+	// not after the multi-minute kernel TCP timeout.
+	if elapsed > 5*time.Second {
+		t.Fatalf("Run blocked %s — NewSession is not ctx-bounded", elapsed)
+	}
+}

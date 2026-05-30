@@ -31,7 +31,12 @@ type RouterDeps struct {
 	// target so delete/restart of a remote-host deployment runs on that
 	// VPS. nil = Remote Hosts disabled. Production wiring (cmd/server)
 	// closes over the sshprov.Client; tests inject a recording fake.
-	RemoteDocker          func(RemoteTarget) RemoteDeployer
+	RemoteDocker func(RemoteTarget) RemoteDeployer
+	// RemoteOpTimeout overrides the default deadline for a teardown/
+	// restart dispatched to a remote host over SSH (see deployments.go
+	// remoteOpTimeout). Zero = use the default. Bumped by operators on
+	// slow links; shrunk by tests.
+	RemoteOpTimeout       time.Duration
 	PortRangeMin          int
 	PortRangeMax          int
 	HealthcheckViaNetwork bool
@@ -264,6 +269,7 @@ func NewRouter(d RouterDeps) http.Handler {
 		DB:                    d.DB,
 		Docker:                d.Docker,
 		RemoteDocker:          d.RemoteDocker,
+		RemoteOpTimeout:       d.RemoteOpTimeout,
 		Tokens:                tokensH,
 		PortRangeMin:          d.PortRangeMin,
 		PortRangeMax:          d.PortRangeMax,

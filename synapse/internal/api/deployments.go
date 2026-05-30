@@ -31,6 +31,19 @@ import (
 // a goroutine that lives forever.
 const provisionTimeout = 5 * time.Minute
 
+// remoteOpTimeout bounds a single teardown/restart dispatched to a
+// deployment's HOST. For a remote host that's an SSH round-trip; an
+// unreachable VPS used to hang the HTTP request — and the dashboard's
+// delete modal — indefinitely, because r.Context() carries no deadline and
+// the server's WriteTimeout only sets an I/O deadline (it never cancels the
+// handler). The SSH layer honours ctx at every step (dial + session-open +
+// command), so this is the real ceiling: generous enough for a healthy
+// `docker rm` + `volume rm` over SSH, short enough that a dead host surfaces
+// as an actionable error (retry / force-delete) in seconds rather than
+// minutes. Kept under the server's 30s WriteTimeout so the error response
+// still flushes.
+const remoteOpTimeout = 25 * time.Second
+
 // Provisioner is the subset of the docker provisioner that the deployments
 // handler depends on. Pulled out behind an interface so tests can swap in a
 // fake without spinning up a real Docker daemon. *dockerprov.Client
@@ -92,6 +105,11 @@ type DeploymentsHandler struct {
 	// case no remote deployment can exist, so dockerFor only ever needs
 	// the local Docker. Wired by router.go from RouterDeps.RemoteDocker.
 	RemoteDocker func(RemoteTarget) RemoteDeployer
+	// RemoteOpTimeout overrides remoteOpTimeout (the default teardown/
+	// restart deadline dispatched to a deployment's host). Zero = use the
+	// const. Operators on slow links can widen it via RouterDeps; tests
+	// shrink it to assert the bound fires without a 25s wait.
+	RemoteOpTimeout time.Duration
 	// Tokens is wired by router.go so deployment-scoped access-token
 	// endpoints under /v1/deployments/{name}/access_tokens can reuse the
 	// AccessTokensHandler insert/list path. Optional: a nil value 500s the
@@ -179,6 +197,15 @@ func (h *DeploymentsHandler) dockerFor(d *models.Deployment) (RemoteDeployer, er
 		SSHUser:     d.HostSSHUser,
 		SSHPort:     d.HostSSHPort,
 	}), nil
+}
+
+// remoteTimeout is the deadline for a single host-dispatched teardown/
+// restart. RemoteOpTimeout wins when set; otherwise the package default.
+func (h *DeploymentsHandler) remoteTimeout() time.Duration {
+	if h.RemoteOpTimeout > 0 {
+		return h.RemoteOpTimeout
+	}
+	return remoteOpTimeout
 }
 
 // rebuildCORSAndRestart recomputes CORS_ALLOWED_ORIGINS from the
@@ -1042,8 +1069,14 @@ func (h *DeploymentsHandler) allocatePorts(ctx context.Context, n int) ([]int, e
 		  SELECT host_port FROM deployments
 		   WHERE host_port IS NOT NULL AND status <> 'deleted'
 		  UNION
+		  -- Every non-NULL replica port is reserved by the
+		  -- deployment_replicas_host_port_key UNIQUE index regardless of
+		  -- replica status. Excluding 'stopped'/'failed' here (as we used
+		  -- to) handed out a port a stopped/failed replica row still held
+		  -- → INSERT 23505 "duplicate key". Ports are reclaimed by NULLing
+		  -- host_port on delete, NOT by replica status.
 		  SELECT host_port FROM deployment_replicas
-		   WHERE host_port IS NOT NULL AND status <> 'stopped' AND status <> 'failed'
+		   WHERE host_port IS NOT NULL
 		)
 		SELECT p FROM (
 		  SELECT generate_series($1::int, $2::int) AS p
@@ -2313,6 +2346,16 @@ func (h *DeploymentsHandler) cleanupDeploymentCellState(ctx context.Context, dep
 	}
 }
 
+// hostLabel names a deployment's host for operator-facing errors. The
+// JOIN in loadDeploymentForRequest populates HostName; it's empty only
+// for rows whose host row vanished, so fall back to a generic phrase.
+func hostLabel(d *models.Deployment) string {
+	if d.HostName != "" {
+		return d.HostName
+	}
+	return "the remote host"
+}
+
 func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Request) {
 	d, _, t, role, ok := h.loadDeploymentForRequest(w, r)
 	if !ok {
@@ -2339,6 +2382,17 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusInternalServerError, "internal", "Database error")
 			return
 		}
+		// Free the replica port(s): the UNIQUE index on
+		// deployment_replicas.host_port reserves them regardless of
+		// status, so a soft-deleted deployment that keeps them set leaks
+		// the port from the allocator. Best-effort — the deployment is
+		// already 'deleted'.
+		if _, err := h.DB.Exec(r.Context(), `
+			UPDATE deployment_replicas SET host_port = NULL, status = 'stopped'
+			 WHERE deployment_id = $1
+		`, d.ID); err != nil {
+			logErr("free replica ports (provisioning delete)", err)
+		}
 		h.cleanupDeploymentCellState(r.Context(), d.ID)
 		uid, _ := auth.UserID(r.Context())
 		_ = audit.Record(r.Context(), h.DB, audit.Options{
@@ -2353,6 +2407,17 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// `force` lets an admin remove the record even when teardown can't
+	// complete — the escape hatch for a deployment stranded on a remote
+	// host that's permanently unreachable. Without it such a row is
+	// undeletable, because teardown can never succeed (there's no
+	// host-delete cascade). force does NOT skip a healthy teardown; it
+	// only suppresses a teardown FAILURE.
+	force := r.URL.Query().Get("force") == "true"
+	// orphaned records (for the audit trail) that we dropped the row while
+	// the remote container/volume may still exist on a host we couldn't reach.
+	orphaned := false
+
 	// Adopted deployments are external — Synapse never created the
 	// container or volume, so there's nothing to tear down. Just unregister
 	// the row. The actual backend keeps running until the operator who
@@ -2366,14 +2431,44 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 		// silently leak the remote container+volume (v1.19.10).
 		dispatcher, derr := h.dockerFor(d)
 		if derr != nil {
-			logErr("resolve teardown target", derr)
-			writeError(w, http.StatusInternalServerError, "destroy_failed", derr.Error())
-			return
-		}
-		if destroyErr := dispatcher.Destroy(r.Context(), d.Name); destroyErr != nil {
-			logErr("docker destroy", destroyErr)
-			writeError(w, http.StatusInternalServerError, "destroy_failed", destroyErr.Error())
-			return
+			if !force {
+				logErr("resolve teardown target", derr)
+				writeError(w, http.StatusInternalServerError, "destroy_failed", derr.Error())
+				return
+			}
+			// force: the target itself can't be resolved (remote host
+			// misconfigured / Remote Hosts disabled) and the operator wants
+			// the record gone anyway.
+			logErr("force-delete: teardown target unresolved, orphaning", derr)
+			orphaned = true
+		} else {
+			// Bound the teardown: an unreachable remote host must not hang the
+			// request (and the delete modal) forever. The SSH transport honours
+			// this ctx at dial + session-open + command, so a dead VPS fails
+			// within remoteOpTimeout instead of the multi-minute kernel timeout.
+			teardownCtx, cancel := context.WithTimeout(r.Context(), h.remoteTimeout())
+			destroyErr := dispatcher.Destroy(teardownCtx, d.Name)
+			cancel()
+			if destroyErr != nil {
+				if !force {
+					logErr("docker destroy", destroyErr)
+					if d.HostIsRemote {
+						// Distinct, stable code so the dashboard can offer
+						// "Force delete" — retrying never succeeds while the
+						// host is down. 502: the failure is the unreachable
+						// upstream host, not a bug in Synapse.
+						writeError(w, http.StatusBadGateway, "remote_teardown_failed",
+							fmt.Sprintf("Couldn't reach host %q to tear down the container (%v). The host may be down. Retry once it's back, or force-delete to remove the record now — the remote container and its data volume will be orphaned until the host returns.",
+								hostLabel(d), destroyErr))
+						return
+					}
+					writeError(w, http.StatusInternalServerError, "destroy_failed", destroyErr.Error())
+					return
+				}
+				// force: the operator accepts a possibly-orphaned remote container.
+				logErr("force-delete: teardown failed, orphaning container", destroyErr)
+				orphaned = true
+			}
 		}
 	}
 
@@ -2389,16 +2484,35 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "internal", "Container removed but DB update failed")
 		return
 	}
+	// Free the replica port(s) so the allocator can reuse them. The
+	// deployment_replicas_host_port_key UNIQUE index reserves every
+	// non-NULL port regardless of status; leaving these set after a
+	// soft-delete leaks the port. Best-effort — the row is already
+	// marked deleted and the allocator skips NULL ports.
+	if _, err := h.DB.Exec(r.Context(), `
+		UPDATE deployment_replicas SET host_port = NULL, status = 'stopped'
+		 WHERE deployment_id = $1
+	`, d.ID); err != nil {
+		logErr("free replica ports", err)
+	}
 	h.cleanupDeploymentCellState(r.Context(), d.ID)
 
 	uid, _ := auth.UserID(r.Context())
+	meta := map[string]any{"name": d.Name}
+	if force {
+		meta["forced"] = true
+	}
+	if orphaned {
+		// The record is gone but the remote container/volume may live on.
+		meta["orphaned"] = true
+	}
 	_ = audit.Record(r.Context(), h.DB, audit.Options{
 		TeamID:     t.ID,
 		ActorID:    uid,
 		Action:     audit.ActionDeleteDeployment,
 		TargetType: audit.TargetDeployment,
 		TargetID:   d.ID,
-		Metadata:   map[string]any{"name": d.Name},
+		Metadata:   meta,
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"name": d.Name, "status": "deleted"})
 }
@@ -2452,8 +2566,20 @@ func (h *DeploymentsHandler) restartDeployment(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusInternalServerError, "restart_failed", derr.Error())
 			return
 		}
-		if err := dispatcher.Restart(r.Context(), d.Name); err != nil {
+		// Bound the dispatch: a remote host that's down must not hang the
+		// request forever (same defect the delete path had). The SSH
+		// transport honours this ctx at dial + session-open + command.
+		restartCtx, cancel := context.WithTimeout(r.Context(), h.remoteTimeout())
+		err := dispatcher.Restart(restartCtx, d.Name)
+		cancel()
+		if err != nil {
 			logErr("restart deployment", err)
+			if d.HostIsRemote {
+				writeError(w, http.StatusBadGateway, "restart_failed",
+					fmt.Sprintf("Couldn't reach host %q to restart the container (%v). The host may be down.",
+						hostLabel(d), err))
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "restart_failed", err.Error())
 			return
 		}

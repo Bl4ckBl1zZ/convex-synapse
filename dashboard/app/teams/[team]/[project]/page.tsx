@@ -319,11 +319,11 @@ await Promise.all([
   // because container removal + data-volume wipe is irreversible.
   // DEV / PREVIEW / CUSTOM keep a single-click confirmation.
   const [pendingDelete, setPendingDelete] = useState<Deployment | null>(null);
-  const confirmDelete = async (name: string) => {
+  const confirmDelete = async (name: string, force = false) => {
     setActionError(null);
     setDeletingName(name);
     try {
-      await api.deployments.delete(name);
+      await api.deployments.delete(name, force);
       // v1.10.0: invalidate topology + activity feed alongside the
 // deployments-list mutate so all three panels reflect the new
 // state in the same paint frame.
@@ -942,9 +942,9 @@ await Promise.all([
         key={pendingDelete?.name ?? "closed"}
         deployment={pendingDelete}
         onClose={() => setPendingDelete(null)}
-        onConfirm={async () => {
+        onConfirm={async (force: boolean) => {
           if (!pendingDelete) return;
-          await confirmDelete(pendingDelete.name);
+          await confirmDelete(pendingDelete.name, force);
           setPendingDelete(null);
         }}
       />
@@ -973,11 +973,16 @@ function ConfirmDeleteDeploymentDialog({
 }: {
   deployment: Deployment | null;
   onClose: () => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: (force: boolean) => Promise<void>;
 }) {
   const [typed, setTyped] = useState("");
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Set when the backend reports it couldn't reach the deployment's host to
+  // tear the container down (remote_teardown_failed). Retrying never wins
+  // while the VPS is down, so we surface a "Force delete" affordance that
+  // drops the record and accepts a possibly-orphaned remote container.
+  const [canForce, setCanForce] = useState(false);
 
   const open = deployment !== null;
   const type = deployment?.deploymentType ?? deployment?.type;
@@ -986,13 +991,16 @@ function ConfirmDeleteDeploymentDialog({
     ? typed === (deployment?.name ?? "") && !pending
     : !pending;
 
-  const submit = async () => {
+  const submit = async (force: boolean) => {
     setPending(true);
     setErr(null);
     try {
-      await onConfirm();
+      await onConfirm(force);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Could not delete deployment");
+      if (e instanceof ApiError && e.code === "remote_teardown_failed") {
+        setCanForce(true);
+      }
       setPending(false);
     }
   };
@@ -1077,13 +1085,30 @@ function ConfirmDeleteDeploymentDialog({
           </Button>
           <Button
             type="button"
-            variant="danger"
+            variant={canForce ? "ghost" : "danger"}
             disabled={!canSubmit}
-            onClick={submit}
+            onClick={() => submit(false)}
             data-testid="confirm-delete-deployment"
           >
-            {pending ? "Deleting…" : isProd ? "Delete production" : "Delete"}
+            {pending
+              ? "Deleting…"
+              : canForce
+                ? "Retry"
+                : isProd
+                  ? "Delete production"
+                  : "Delete"}
           </Button>
+          {canForce && (
+            <Button
+              type="button"
+              variant="danger"
+              disabled={!canSubmit}
+              onClick={() => submit(true)}
+              data-testid="force-delete-deployment"
+            >
+              {pending ? "Forcing…" : "Force delete"}
+            </Button>
+          )}
         </div>
       </div>
     </Dialog>
