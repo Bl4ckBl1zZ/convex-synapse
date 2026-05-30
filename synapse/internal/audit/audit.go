@@ -158,6 +158,7 @@ const (
 	ActionCreateHost              = "createHost"
 	ActionUpdateHost              = "updateHost"
 	ActionDrainHost               = "drainHost"
+	ActionDeleteHost              = "deleteHost"
 	ActionCreateHostAdoptionToken = "createHostAdoptionToken"
 	// Remote Hosts (v1.18+). Bundle action emitted when the dashboard's
 	// "Setup remote install" button mints an adoption token + a Headscale

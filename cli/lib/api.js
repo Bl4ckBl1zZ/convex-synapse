@@ -209,6 +209,11 @@ class SynapseAPI {
   hostDrain(id) {
     return this.request("POST", `/v1/hosts/${encodeURIComponent(id)}/drain`, {});
   }
+  // Registry-only removal. The backend refuses (409) if the host still has
+  // live deployments or in-flight provisioning jobs, and never the self-host.
+  hostDelete(id) {
+    return this.request("POST", `/v1/hosts/${encodeURIComponent(id)}/delete`, {});
+  }
   // { agentVersion?, items: [...] } — no-secrets agent summaries.
   hostAgents(id) {
     return this.request("GET", `/v1/hosts/${encodeURIComponent(id)}/agents`);

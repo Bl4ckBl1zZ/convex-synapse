@@ -139,6 +139,34 @@ const hostsDrain = {
   },
 };
 
+const hostsDelete = {
+  name: "hosts delete",
+  summary: "Remove a host from the control plane (registry-only).",
+  usage: "synapse hosts delete <host-id> [--yes] [--json]",
+  async run(args, ctx) {
+    const { flags, rest } = extractFlags(args, { boolean: ["yes"] });
+    const id = rest[0];
+    if (!id) throw new Error("Usage: synapse hosts delete <host-id> --yes");
+    if (!flags.yes) {
+      throw new Error(
+        "Refusing to delete a host without --yes. Re-run with --yes to confirm. (Registry only — a remote host's tailnet node and on-box agent are not touched.)",
+      );
+    }
+    const res = await ctx.api.hostDelete(id);
+    ctx.out.result(res, () => {
+      ctx.out.stdout.write(`${colors.red("Deleted")} host ${colors.bold(id)}\n`);
+      // Honest scope: removal only clears the Synapse registry row. A remote
+      // VPS keeps its Headscale tailnet node + the agent/systemd unit/users/
+      // SSH keys until you clean them manually. See docs/REMOTE_HOSTS.md.
+      ctx.out.stdout.write(
+        colors.dim(
+          "  (registry only — a remote host's tailnet node and on-box agent are not removed)\n",
+        ),
+      );
+    });
+  },
+};
+
 const hostsAgents = {
   name: "hosts agents",
   summary: "List the agents registered on a host.",
@@ -206,6 +234,7 @@ module.exports = [
   hostsCreate,
   hostsAdoptionToken,
   hostsDrain,
+  hostsDelete,
   hostsAgents,
   agentsRevoke,
   agentsRotateToken,

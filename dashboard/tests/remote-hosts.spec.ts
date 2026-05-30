@@ -196,3 +196,121 @@ test("remote_hosts_disabled response surfaces the setup.sh hint", async ({
     "setup.sh --enable-headscale",
   );
 });
+
+// ---- Host removal (POST /v1/hosts/{id}/delete) ----
+//
+// Registry-only host removal. Same route-stub model as the remote-setup
+// specs above: GET /v1/hosts is mocked so a synthetic self-host +
+// remote-host pair render, and POST /v1/hosts/{id}/delete is stubbed
+// per-test. No real backend / Headscale involved.
+
+test("hosts panel shows 'Remove' button only for non-self hosts", async ({
+  page,
+}) => {
+  await registerAdmin(page);
+  await mockHostsList(page);
+  await openProjectPage(page);
+
+  // The remote host row exposes Remove…
+  await expect(page.getByTestId("remove-host-vps-eu-1")).toBeVisible();
+  // …while the self-host must never be removable (gated on !isSynapseHost).
+  await expect(page.getByTestId("remove-host-synapsepanel")).toHaveCount(0);
+});
+
+test("clicking 'Remove' opens a confirm dialog naming the host", async ({
+  page,
+}) => {
+  await registerAdmin(page);
+  await mockHostsList(page);
+  await openProjectPage(page);
+
+  await page.getByTestId("remove-host-vps-eu-1").click();
+  const dialog = page.getByTestId("remove-host-dialog");
+  await expect(dialog).toBeVisible();
+  // The confirm body names the host so the operator can't fat-finger it.
+  await expect(dialog).toContainText("vps-eu-1");
+  await expect(page.getByTestId("confirm-remove-host")).toBeVisible();
+});
+
+test("confirming removal closes the dialog and refetches the host list", async ({
+  page,
+}) => {
+  await registerAdmin(page);
+  await mockHostsList(page);
+
+  // Track GET /v1/hosts calls so we can assert a refetch fired after delete.
+  let listFetches = 0;
+  page.on("request", (req) => {
+    if (
+      req.method() === "GET" &&
+      /\/v1\/hosts(\?.*)?$/.test(new URL(req.url()).pathname + (new URL(req.url()).search || ""))
+    ) {
+      listFetches += 1;
+    }
+  });
+
+  await page.route(
+    "**/v1/hosts/22222222-2222-2222-2222-222222222222/delete",
+    async (route: Route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "22222222-2222-2222-2222-222222222222",
+            status: "deleted",
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    },
+  );
+
+  await openProjectPage(page);
+  const fetchesBeforeRemove = listFetches;
+
+  await page.getByTestId("remove-host-vps-eu-1").click();
+  await expect(page.getByTestId("remove-host-dialog")).toBeVisible();
+  await page.getByTestId("confirm-remove-host").click();
+
+  // On success the dialog closes…
+  await expect(page.getByTestId("remove-host-dialog")).toHaveCount(0);
+  // …and SWR re-requests the host list (mutate()).
+  await expect.poll(() => listFetches).toBeGreaterThan(fetchesBeforeRemove);
+});
+
+test("a 409 host_has_deployments shows the error in the dialog", async ({
+  page,
+}) => {
+  await registerAdmin(page);
+  await mockHostsList(page);
+
+  await page.route(
+    "**/v1/hosts/22222222-2222-2222-2222-222222222222/delete",
+    async (route: Route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "host_has_deployments",
+            message:
+              "Host still has deployments — move or delete them before removing this host",
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    },
+  );
+
+  await openProjectPage(page);
+  await page.getByTestId("remove-host-vps-eu-1").click();
+  await page.getByTestId("confirm-remove-host").click();
+
+  // The dialog stays open and surfaces the backend's human-readable message.
+  const dialog = page.getByTestId("remove-host-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("still has deployments");
+});

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,6 +121,10 @@ func (h *HostsHandler) Routes() chi.Router {
 		r.Get("/", h.getHost)
 		r.Patch("/", h.updateHost)
 		r.Post("/drain", h.drainHost)
+		// POST /delete (not DELETE) matches the verb convention of the other
+		// host mutations (drain / remote_setup) and stays curl/CLI-friendly.
+		// Removal is registry-only — see deleteHost.
+		r.Post("/delete", h.deleteHost)
 		r.Post("/adoption_token", h.createAdoptionToken)
 		// v1.18+ Remote Hosts: one-click bundle that mints a Synapse
 		// adoption token AND a Headscale pre-auth key in a single call,
@@ -458,6 +463,156 @@ func (h *HostsHandler) drainHost(w http.ResponseWriter, r *http.Request) {
 		TargetID:   updated.ID,
 	})
 	h.writeHost(w, http.StatusOK, updated)
+}
+
+// ---------- POST /v1/hosts/{hostID}/delete ----------
+
+// deleteHost removes a host from the control-plane registry. It is the
+// terminal step of the host lifecycle that until now stopped at drain.
+//
+// Removal is REGISTRY-ONLY and deliberately narrow:
+//   - The self-host (is_synapse_host) is never removable — it is the box the
+//     control plane runs on and every legacy deployment is backfilled onto it.
+//   - A host that still has live deployments is refused (409); the operator
+//     must delete or move them first. We never cascade-destroy running Convex
+//     backends from a host-delete call.
+//   - A host with in-flight provisioning work is refused (409) so a worker
+//     can't claim a deployment out from under the delete.
+//
+// What it does NOT do (honest scope): it does not deregister the host's
+// Headscale tailnet node, and it does not SSH in to uninstall the agent /
+// systemd unit / system users / SSH keys on a remote VPS. Those linger and
+// must be cleaned manually — see docs/REMOTE_HOSTS.md. The lingering agent is
+// harmless: once its host_agents row is gone (cascade) its heartbeats 401.
+//
+// FK behaviour on the surviving tables (see migrations): host_agents,
+// host_adoption_tokens, desired_states, observed_states, drift_reports
+// CASCADE away; cells.primary_host_id, deployment_placements.host_id,
+// operation_runs.host_id, drift_items.host_id are SET NULL. Only
+// deployments.host_id is ON DELETE RESTRICT (NOT NULL) — that is the FK that
+// forces the zero-live-deployments precondition. Soft-deleted deployments
+// (status='deleted') keep their host_id, so we reassign those history rows to
+// the self-host inside the delete txn to satisfy RESTRICT without losing audit
+// history.
+func (h *HostsHandler) deleteHost(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	hst, ok := h.loadHost(w, r)
+	if !ok {
+		return
+	}
+
+	// Guard 1: never remove the box the control plane runs on.
+	if hst.IsSynapseHost {
+		writeError(w, http.StatusConflict, "cannot_remove_self_host",
+			"The Synapse control-plane host cannot be removed")
+		return
+	}
+
+	// Guard 2: refuse while live (non-deleted) deployments reference the host.
+	// status='deleted' rows are excluded — they are history, handled in the txn.
+	var liveCount int
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*) FROM deployments WHERE host_id = $1 AND status <> 'deleted'
+	`, hst.ID).Scan(&liveCount); err != nil {
+		logErr("count host deployments", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+	if liveCount > 0 {
+		msg := "Host still has " + strconv.Itoa(liveCount) + " deployment(s)"
+		if names := h.sampleDeploymentNames(r, hst.ID); len(names) > 0 {
+			msg += " (e.g. " + strings.Join(names, ", ") + ")"
+		}
+		msg += ". Delete or move them before removing the host."
+		writeError(w, http.StatusConflict, "host_has_deployments", msg)
+		return
+	}
+
+	// Guard 3: refuse while a provisioning job is in flight for any of the
+	// host's deployments. provisioning_jobs has no host_id; reach it via the
+	// deployment join. 'pending'/'claimed' are the active states.
+	var activeJobs int
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*)
+		  FROM provisioning_jobs j
+		  JOIN deployments d ON d.id = j.deployment_id
+		 WHERE d.host_id = $1 AND j.status IN ('pending', 'claimed')
+	`, hst.ID).Scan(&activeJobs); err != nil {
+		logErr("count host provisioning jobs", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+	if activeJobs > 0 {
+		writeError(w, http.StatusConflict, "host_has_pending_jobs",
+			"Host has provisioning work in flight. Wait for it to finish before removing the host.")
+		return
+	}
+
+	tx, err := h.DB.Begin(r.Context())
+	if err != nil {
+		logErr("begin delete host tx", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Reassign soft-deleted deployments' history rows to the self-host so the
+	// ON DELETE RESTRICT FK doesn't block the delete. (Live rows were already
+	// refused above; only status='deleted' rows can remain here.)
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE deployments
+		   SET host_id = (SELECT id FROM hosts WHERE is_synapse_host = TRUE LIMIT 1)
+		 WHERE host_id = $1 AND status = 'deleted'
+	`, hst.ID); err != nil {
+		logErr("reassign soft-deleted deployments", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+
+	if _, err := tx.Exec(r.Context(), `DELETE FROM hosts WHERE id = $1`, hst.ID); err != nil {
+		logErr("delete host", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		logErr("commit delete host", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		ActorID:    uid,
+		Action:     audit.ActionDeleteHost,
+		TargetType: audit.TargetHost,
+		TargetID:   hst.ID,
+		Metadata:   map[string]any{"name": hst.Name, "isRemote": hst.IsRemote},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"id": hst.ID, "status": "deleted"})
+}
+
+// sampleDeploymentNames returns up to 5 live deployment names on a host, for a
+// friendlier host_has_deployments message. Best-effort — a query error just
+// yields no names (the count already proved there are some).
+func (h *HostsHandler) sampleDeploymentNames(r *http.Request, hostID string) []string {
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT name FROM deployments
+		 WHERE host_id = $1 AND status <> 'deleted'
+		 ORDER BY name LIMIT 5
+	`, hostID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return names
+		}
+		names = append(names, n)
+	}
+	return names
 }
 
 // ---------- POST /v1/hosts/{hostID}/adoption_token ----------

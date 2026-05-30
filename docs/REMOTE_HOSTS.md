@@ -521,6 +521,57 @@ synapse observed list   --host=<host-uuid>
 `--host=` and `--cell=` / `--project=` are mutually exclusive on
 the drift commands (`cli/lib/commands/_cellplane.js:resolveScope`).
 
+Remove a host from the control plane once it's empty:
+
+```bash
+synapse hosts delete <host-id> --yes
+```
+
+## Removing a host
+
+A host can be removed once it no longer runs anything. Use the
+dashboard's **Remove** button on the host row, or the CLI command
+above. Both call `POST /v1/hosts/{id}/delete` (instance-admin only),
+which refuses the removal — `409` — unless **all** of these hold:
+
+- It is **not** the control plane's own host (`is_synapse_host`). The
+  self-host is never removable → `409 cannot_remove_self_host`.
+- It has **zero live deployments** → `409 host_has_deployments` (the
+  message lists the blocking names). Delete or move them first:
+  `synapse deployment delete <name>` tears the container down and frees
+  the host.
+- It has **no in-flight provisioning jobs** for its deployments →
+  `409 host_has_pending_jobs`. Wait for them to finish.
+
+Once removed, the host's agent rows, adoption tokens, and
+desired/observed/drift state cascade away; any cell that used it as its
+primary host simply loses that affinity (the cell survives).
+
+> **Honest scope — removal is registry-only.** Deleting a host clears
+> it from Synapse's database. For a **remote** host it does **not**
+> deregister the Headscale tailnet node, and it does **not** SSH in to
+> stop/remove the `synapse-agent` systemd unit, the
+> `synapse-agent`/`synapse-deployer` system users, or their SSH keys on
+> the VPS. Those linger until you clean them up by hand. The lingering
+> agent is harmless — once its `host_agents` row is gone its heartbeats
+> are rejected (`401`) — but to fully decommission the box:
+>
+> ```bash
+> # On the control plane (deregister the tailnet node):
+> docker compose exec headscale headscale nodes list
+> docker compose exec headscale headscale nodes delete -i <node-id>
+>
+> # On the VPS (remove the agent + users):
+> systemctl disable --now synapse-agent
+> rm -f /etc/systemd/system/synapse-agent.service
+> userdel -r synapse-agent ; userdel -r synapse-deployer
+> ```
+>
+> Runbook D in [`SECURITY_REMOTE_HOSTS.md`](SECURITY_REMOTE_HOSTS.md)
+> is the fuller decommission/compromise procedure. Automating this
+> teardown on delete is a tracked follow-up
+> (`docs/HOST_REMOVAL_INVESTIGATION.md`).
+
 ## Troubleshooting
 
 ### Dashboard says "Remote Hosts not enabled" when I click Setup remote install

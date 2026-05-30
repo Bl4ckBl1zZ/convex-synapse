@@ -1839,8 +1839,14 @@ export const api = {
         { method: "POST", body: {} },
       );
     },
-    delete(name: string): Promise<void> {
-      return request<void>(`/v1/deployments/${encodeURIComponent(name)}/delete`, {
+    // force=true removes the record even when teardown can't complete —
+    // the escape hatch for a deployment stranded on a remote host that's
+    // permanently unreachable (the backend 502s `remote_teardown_failed`
+    // otherwise). It does NOT skip a healthy teardown; it only suppresses
+    // a teardown FAILURE, and may orphan the remote container/volume.
+    delete(name: string, force = false): Promise<void> {
+      const q = force ? "?force=true" : "";
+      return request<void>(`/v1/deployments/${encodeURIComponent(name)}/delete${q}`, {
         method: "POST",
         body: {},
       });
@@ -2142,6 +2148,16 @@ export const api = {
     ): Promise<{ id: string; hostId: string; agentToken: string }> {
       return request(
         `/v1/host_agents/${encodeURIComponent(agentId)}/rotate_token`,
+        { method: "POST", body: {} },
+      );
+    },
+    // POST /v1/hosts/{id}/delete — registry-only host removal: drops the
+    // host row from the control plane. Refuses 409 cannot_remove_self_host
+    // / host_has_deployments / host_has_pending_jobs. Does NOT deregister
+    // the Headscale tailnet node or uninstall the agent on a remote VPS.
+    delete(id: string): Promise<{ id: string; status: string }> {
+      return request<{ id: string; status: string }>(
+        `/v1/hosts/${encodeURIComponent(id)}/delete`,
         { method: "POST", body: {} },
       );
     },

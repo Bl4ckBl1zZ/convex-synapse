@@ -42,6 +42,7 @@ export function HostsPanel() {
   const [tokenHost, setTokenHost] = useState<Host | null>(null);
   const [detailsHost, setDetailsHost] = useState<Host | null>(null);
   const [drainHost, setDrainHost] = useState<Host | null>(null);
+  const [removeHost, setRemoveHost] = useState<Host | null>(null);
   // v1.18+ Remote Hosts: per-row "Setup remote install" modal. Holds the
   // host the operator clicked PLUS the lazily-fetched bundle (or error).
   // Re-mounting via `key={remoteSetupHost?.id}` resets state when the
@@ -122,6 +123,7 @@ export function HostsPanel() {
                 onToken={() => setTokenHost(host)}
                 onDetails={() => setDetailsHost(host)}
                 onDrain={() => setDrainHost(host)}
+                onRemove={() => setRemoveHost(host)}
                 onRemoteSetup={() => setRemoteSetupHost(host)}
               />
             ))}
@@ -149,6 +151,11 @@ export function HostsPanel() {
         host={drainHost}
         onClose={() => setDrainHost(null)}
         onDrained={() => void mutate()}
+      />
+      <RemoveHostDialog
+        host={removeHost}
+        onClose={() => setRemoveHost(null)}
+        onRemoved={() => void mutate()}
       />
       <RemoteSetupDialog
         key={remoteSetupHost?.id ?? "remote-setup-closed"}
@@ -198,12 +205,14 @@ function HostCard({
   onToken,
   onDetails,
   onDrain,
+  onRemove,
   onRemoteSetup,
 }: {
   host: Host;
   onToken: () => void;
   onDetails: () => void;
   onDrain: () => void;
+  onRemove: () => void;
   onRemoteSetup: () => void;
 }) {
   return (
@@ -260,6 +269,20 @@ function HostCard({
           {host.status !== "draining" && (
             <Button variant="ghost" size="sm" onClick={onDrain}>
               Drain
+            </Button>
+          )}
+          {/* Registry-only removal. NEVER offered for the self-host — the
+              control plane row that represents the machine Synapse runs on
+              must stay. The backend also refuses with cannot_remove_self_host,
+              but gating here keeps the destructive button off that row. */}
+          {!host.isSynapseHost && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={onRemove}
+              data-testid={`remove-host-${host.name}`}
+            >
+              Remove
             </Button>
           )}
         </div>
@@ -796,6 +819,89 @@ function DrainHostDialog({
             data-testid="confirm-drain-host"
           >
             {pending ? "Draining…" : "Drain host"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/* -------------------- remove confirm -------------------- */
+
+// RemoveHostDialog — registry-only host removal (POST /v1/hosts/{id}/delete).
+// The backend refuses the self-host (cannot_remove_self_host), a host that
+// still owns deployments (host_has_deployments), or one with queued
+// provisioning jobs (host_has_pending_jobs) — all 409 with human-readable
+// messages we surface verbatim. The destructive nature is real but narrow:
+// it drops the control-plane row only. For a REMOTE host nothing on the VPS
+// is touched — see the warning below.
+function RemoveHostDialog({
+  host,
+  onClose,
+  onRemoved,
+}: {
+  host: Host | null;
+  onClose: () => void;
+  onRemoved: () => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  if (!host) {
+    return (
+      <Dialog open={false} onClose={onClose}>
+        <></>
+      </Dialog>
+    );
+  }
+
+  const remove = async () => {
+    setFormError(null);
+    setPending(true);
+    try {
+      await api.hosts.delete(host.id);
+      onRemoved();
+      onClose();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : "Failed to remove host");
+      setPending(false);
+    }
+  };
+
+  return (
+    <Dialog open onClose={pending ? () => {} : onClose} title="Remove host">
+      <div className="space-y-4" data-testid="remove-host-dialog">
+        <p className="text-sm text-neutral-300">
+          Remove{" "}
+          <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
+            {host.name}
+          </code>{" "}
+          from the control plane? This deletes the host record here. It does not
+          stop or move any deployments — a host that still owns deployments or
+          pending jobs is refused.
+        </p>
+        {host.isRemote && (
+          <p className="rounded border border-yellow-900/60 bg-yellow-900/20 px-3 py-2 text-[11px] text-yellow-200">
+            Heads up: this only clears the host from Synapse. The VPS itself is
+            untouched — the Headscale tailnet node stays registered and the
+            synapse-agent (its systemd unit, service user, and SSH keys) keeps
+            running. Deregister the tailnet node and uninstall the agent on the
+            host manually if you&apos;re decommissioning it.
+          </p>
+        )}
+        {formError && <p className="text-xs text-red-400">{formError}</p>}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={remove}
+            disabled={pending}
+            data-testid="confirm-remove-host"
+          >
+            {pending ? "Removing…" : "Remove host"}
           </Button>
         </div>
       </div>

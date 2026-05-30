@@ -456,13 +456,31 @@ Without query params, returns the newest non-deleted deployment.
 
 Stops + removes the container, drops its data volume, marks the row deleted.
 
+The teardown is dispatched to the deployment's **host** — for a remote-host
+deployment that's an SSH round-trip to the VPS the container lives on — and is
+bounded by a deadline so an unreachable host can't hang the request. When the
+host can't be reached the teardown fails:
+
+- **Remote host:** `502 remote_teardown_failed` (message names the host). The
+  row is left intact so the operator can retry once the host is back.
+- **Self-host:** `500 destroy_failed` (Docker daemon error). Row left intact.
+
+**`?force=true`** removes the record even when teardown fails — the escape
+hatch for a deployment stranded on a permanently-dead remote host (there is no
+host-delete cascade, so otherwise the row is undeletable). It does NOT skip a
+healthy teardown; it only suppresses a teardown *failure*, and may leave the
+remote container + data volume orphaned until the host returns. Audit metadata
+records `forced: true` and, when teardown actually failed, `orphaned: true`.
+
 ### `POST /v1/deployments/{name}/restart` 🔧 (members+)
 
 Bounces the deployment's container(s) in place, keeping the data volume — the
 operator escape hatch for a wedged backend. HA restarts every replica. Returns
 `{name, status:"restarted"}`. Errors: `409 cannot_restart_adopted` (no managed
 container), `409 deployment_provisioning`, `409 deployment_deleted`,
-`500 restart_failed`. The DB status is untouched; the health worker reconciles.
+`500 restart_failed` (self-host) / `502 restart_failed` (remote host
+unreachable — bounded, never hangs). The DB status is untouched; the health
+worker reconciles.
 
 ### `GET /v1/deployments/{name}/auth` 🔧 (members only)
 
@@ -851,3 +869,4 @@ they bump the `--upgrade` target.
 | v1.17.0 | no `/v1` surface change — installer-only refactors (env hydrator; updater daemon hardening) |
 | v1.18.0 | added Remote Hosts: extended `/v1/hosts` (`is_remote`, `tailnet_addr`), added `POST /v1/hosts/{id}/remote_setup` to mint a one-liner bundle, public `GET /v1/install_agent/config` for `install-agent.sh`, `GET /v1/install-agent.sh` script handler |
 | v1.19.0 | dashboard-driven Remote Hosts setup — `GET /v1/admin/headscale`, `POST /v1/admin/headscale/configure`, `GET /v1/admin/headscale/status/{jobID}` (instance-admin gated; same admin_jobs pattern as host-domain); proxy resolves remote deployments to `<tailnet_addr>:<host_port>` automatically; remote site-routing returns `ErrSiteUnsupported` (3211 not published over tailnet) |
+| unreleased | host removal — `POST /v1/hosts/{id}/delete` (instance-admin). Registry-only: refuses with `409 cannot_remove_self_host` / `host_has_deployments` / `host_has_pending_jobs`; on success cascades agent/token/state rows and audits `deleteHost`. Does NOT deregister the Headscale node or clean the on-VPS agent — see `docs/REMOTE_HOSTS.md#removing-a-host` |
