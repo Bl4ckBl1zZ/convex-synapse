@@ -241,11 +241,12 @@ secrets::render_env_tmpl() {
 # needs". Generates only the values that are missing, preserving
 # anything the operator (or a previous run) put there.
 secrets::ensure_env() {
-    local file="$1" ha=0
+    local file="$1" ha=0 headscale=0
     shift
     while (( $# > 0 )); do
         case "$1" in
             --ha) ha=1 ;;
+            --headscale) headscale=1 ;;
         esac
         shift
     done
@@ -318,12 +319,23 @@ secrets::ensure_env() {
             secrets::ensure_env_var "$file" SYNAPSE_PUBLIC_IP "$detected"
         fi
     fi
-    if (( ha )); then
+    # SYNAPSE_STORAGE_KEY (crypto.SecretBox) is needed by BOTH HA
+    # (encrypts deployment_storage Postgres/S3 secrets) AND Remote
+    # Hosts/headscale (encrypts each remote host's deployer SSH
+    # privkey + the central proxy's DNS-credential tokens). Generate
+    # it whenever EITHER is enabled; idempotent — an existing key is
+    # preserved (rotating it would orphan every already-encrypted
+    # blob). A --enable-headscale install WITHOUT --enable-ha still
+    # needs it: the agent-register path 503s "crypto_disabled" and the
+    # SSH provisioner is never constructed without it.
+    if (( ha )) || (( headscale )); then
         local sk
         sk="$(secrets::env_get "$file" SYNAPSE_STORAGE_KEY)"
         if [[ -z "$sk" ]]; then
             secrets::ensure_env_var "$file" SYNAPSE_STORAGE_KEY "$(secrets::gen_storage_key)"
         fi
+    fi
+    if (( ha )); then
         # v1.5.9 backend credentials. Pre-1.5.9 ENABLE_HA installs
         # only stamped SYNAPSE_HA_ENABLED + SYNAPSE_STORAGE_KEY but
         # never the SYNAPSE_BACKEND_* URLs that synapse-api needs to

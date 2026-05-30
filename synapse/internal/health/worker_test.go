@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,13 @@ func (f *fakeDocker) Status(_ context.Context, name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.byName[name], nil
+}
+
+// StatusReplica satisfies DockerStatusReporter so fakeDocker can stand in
+// for Worker.Docker. The local fake doesn't model per-replica containers;
+// it just reuses the by-name map.
+func (f *fakeDocker) StatusReplica(ctx context.Context, name string, _ int) (string, error) {
+	return f.Status(ctx, name)
 }
 
 func (f *fakeDocker) set(name, status string) {
@@ -110,3 +118,75 @@ func TestFakeDockerError(t *testing.T) {
 // reconcile() / sweep() / Run() tests need a postgres pool. Those live
 // alongside the existing internal/test integration suite — see
 // internal/test/health_test.go for the full-stack worker checks.
+
+// remoteReporterStub stands in for *dockerprov.RemoteClient: scripts the
+// status returned over "SSH" and records whether the worker consulted it.
+type remoteReporterStub struct {
+	status      string
+	statusErr   error
+	statusCalls atomic.Int64
+	restarts    atomic.Int64
+}
+
+func (r *remoteReporterStub) Status(context.Context, string) (string, error) {
+	r.statusCalls.Add(1)
+	return r.status, r.statusErr
+}
+
+func (r *remoteReporterStub) Restart(context.Context, string) error {
+	r.restarts.Add(1)
+	return nil
+}
+
+// TestReconcileReplica_RemoteUsesRemoteReporter is the regression for the
+// v1.18 split-brain bug: a deployment running on a remote host was judged
+// by THIS node's local Docker daemon (which can't see it), so a healthy
+// remote replica got flipped to "stopped" and the central proxy 404'd it.
+// The worker MUST observe the remote container via RemoteFor and leave a
+// running replica untouched — never touching the local Docker reporter.
+func TestReconcileReplica_RemoteUsesRemoteReporter(t *testing.T) {
+	local := &fakeDocker{} // returns "" (gone) for any name
+	remote := &remoteReporterStub{status: "running"}
+	var gotTarget RemoteTarget
+	w := &Worker{
+		Docker: local,
+		RemoteFor: func(tg RemoteTarget) RemoteReporter {
+			gotTarget = tg
+			return remote
+		},
+		Config: Config{StatusTimeout: time.Second},
+	}
+	rr := replicaRow{
+		replicaID: "r1", deploymentID: "d1", name: "remote-dep",
+		isRemote: true, hostID: "h1", tailnetAddr: "100.64.0.9",
+		sshUser: "synapse-deployer", sshPort: 22,
+	}
+	if w.reconcileReplica(context.Background(), slog.Default(), w.Config, rr) {
+		t.Fatal("healthy remote replica must not be reconciled to a new status")
+	}
+	if got := remote.statusCalls.Load(); got != 1 {
+		t.Errorf("remote reporter Status calls = %d; want 1", got)
+	}
+	if got := local.calls.Load(); got != 0 {
+		t.Errorf("local Docker MUST NOT be consulted for a remote replica; got %d calls", got)
+	}
+	if gotTarget.TailnetAddr != "100.64.0.9" || gotTarget.SSHUser != "synapse-deployer" {
+		t.Errorf("RemoteFor got wrong target: %+v", gotTarget)
+	}
+}
+
+// TestReconcileReplica_RemoteNilFactorySkips: when Remote Hosts is disabled
+// (RemoteFor == nil) but a remote replica somehow exists, the worker must
+// SKIP it — never fall back to the local Docker daemon, which would
+// mis-flip it to "stopped".
+func TestReconcileReplica_RemoteNilFactorySkips(t *testing.T) {
+	local := &fakeDocker{}
+	w := &Worker{Docker: local, RemoteFor: nil, Config: Config{StatusTimeout: time.Second}}
+	rr := replicaRow{replicaID: "r1", name: "remote-dep", isRemote: true, hostID: "h1"}
+	if w.reconcileReplica(context.Background(), slog.Default(), w.Config, rr) {
+		t.Fatal("remote replica must be skipped when RemoteFor is nil")
+	}
+	if got := local.calls.Load(); got != 0 {
+		t.Errorf("local Docker MUST NOT be consulted; got %d calls", got)
+	}
+}

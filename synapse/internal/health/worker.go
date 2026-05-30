@@ -44,6 +44,44 @@ type Restarter interface {
 	RestartReplica(ctx context.Context, deploymentName string, replicaIndex int) error
 }
 
+// RemoteReporter is the subset of *dockerprov.RemoteClient the health
+// worker needs for a deployment that runs on a remote host: read the
+// container's status over SSH and (when AutoRestart is on) bounce it.
+// Remote deployments are single-replica in v1.18, so the non-Replica
+// methods suffice.
+type RemoteReporter interface {
+	Status(ctx context.Context, deploymentName string) (string, error)
+	Restart(ctx context.Context, deploymentName string) error
+}
+
+// RemoteTarget carries a remote host's SSH coordinates so Worker.RemoteFor
+// can bind a reporter to it. Mirrors the fields provisioner.dockerForJob
+// feeds into sshprov.Target.
+type RemoteTarget struct {
+	HostID      string
+	TailnetAddr string
+	SSHUser     string
+	SSHPort     int
+}
+
+// replicaRow is one running replica plus the host-routing columns the
+// sweep needs to decide local-Docker vs remote-SSH reconciliation.
+type replicaRow struct {
+	replicaID    string
+	deploymentID string
+	name         string
+	replicaIndex int
+	haEnabled    bool
+	// Host routing. isRemote=false (host_id NULL) → self-host, use the
+	// local Docker reporter. isRemote=true → the container lives on
+	// another VPS; reconcile it over SSH via Worker.RemoteFor.
+	hostID      string
+	isRemote    bool
+	tailnetAddr string
+	sshUser     string
+	sshPort     int
+}
+
 // Config controls how often the worker scans and what counts as "stale".
 type Config struct {
 	// Interval between full sweeps. Sub-second values are clamped to 1s.
@@ -75,6 +113,16 @@ type Worker struct {
 	Restarter Restarter // optional; required when Config.AutoRestart is true
 	Config    Config
 	Logger    *slog.Logger
+	// RemoteFor returns a reporter bound to a remote host's SSH target,
+	// or nil when Remote Hosts is disabled in this process. CRITICAL: a
+	// remote deployment's container lives on another VPS — judging it by
+	// THIS node's local Docker daemon always reports "gone" and would
+	// flip a healthy deployment to "stopped" (the split-brain bug that
+	// broke central-proxy routing). When RemoteFor is nil the worker
+	// SKIPS remote replicas rather than mis-reconcile them via local
+	// Docker. Wired by main.go from the same sshprov.Client the
+	// provisioner uses.
+	RemoteFor func(RemoteTarget) RemoteReporter
 }
 
 // Run blocks until ctx is cancelled. Each tick runs a single sweep and logs
@@ -143,9 +191,13 @@ func (w *Worker) sweep(ctx context.Context, logger *slog.Logger, cfg Config) {
 	// reconcile their state. The operator who registered them owns the
 	// lifecycle.
 	rows, err := w.DB.Query(ctx, `
-		SELECT r.id, d.id, d.name, r.replica_index, d.ha_enabled
+		SELECT r.id, d.id, d.name, r.replica_index, d.ha_enabled,
+		       COALESCE(d.host_id::text, ''), COALESCE(h.is_remote, false),
+		       COALESCE(h.tailnet_addr, ''), COALESCE(h.ssh_user, ''),
+		       COALESCE(h.ssh_port, 0)
 		  FROM deployment_replicas r
 		  JOIN deployments d ON d.id = r.deployment_id
+		  LEFT JOIN hosts h ON h.id = d.host_id
 		 WHERE r.status = 'running'
 		   AND d.adopted = false
 		   AND d.status <> 'deleted'
@@ -155,17 +207,12 @@ func (w *Worker) sweep(ctx context.Context, logger *slog.Logger, cfg Config) {
 		return
 	}
 
-	type item struct {
-		replicaID    string
-		deploymentID string
-		name         string
-		replicaIndex int
-		haEnabled    bool
-	}
-	var items []item
+	var items []replicaRow
 	for rows.Next() {
-		var it item
-		if err := rows.Scan(&it.replicaID, &it.deploymentID, &it.name, &it.replicaIndex, &it.haEnabled); err != nil {
+		var it replicaRow
+		if err := rows.Scan(&it.replicaID, &it.deploymentID, &it.name,
+			&it.replicaIndex, &it.haEnabled, &it.hostID, &it.isRemote,
+			&it.tailnetAddr, &it.sshUser, &it.sshPort); err != nil {
 			logger.Error("health: scan row", "err", err)
 			rows.Close()
 			return
@@ -184,7 +231,7 @@ func (w *Worker) sweep(ctx context.Context, logger *slog.Logger, cfg Config) {
 	deploymentsTouched := make(map[string]bool)
 	var changed int
 	for _, it := range items {
-		if w.reconcileReplica(ctx, logger, cfg, it.replicaID, it.deploymentID, it.name, it.replicaIndex, it.haEnabled) {
+		if w.reconcileReplica(ctx, logger, cfg, it) {
 			changed++
 			deploymentsTouched[it.deploymentID] = true
 		}
@@ -203,23 +250,39 @@ func (w *Worker) sweep(ctx context.Context, logger *slog.Logger, cfg Config) {
 // Recomputing the deployment-level status is the caller's job (sweep
 // batches it so a single deployment with N changed replicas gets one
 // recompute, not N).
-func (w *Worker) reconcileReplica(ctx context.Context, logger *slog.Logger, cfg Config,
-	replicaID, deploymentID, name string, replicaIndex int, haEnabled bool,
-) bool {
+func (w *Worker) reconcileReplica(ctx context.Context, logger *slog.Logger, cfg Config, rr replicaRow) bool {
 	statusCtx, cancel := context.WithTimeout(ctx, cfg.StatusTimeout)
 	defer cancel()
 
 	var dockerStatus string
 	var err error
 	switch {
-	case haEnabled:
-		dockerStatus, err = w.Docker.StatusReplica(statusCtx, name, replicaIndex)
+	case rr.isRemote:
+		// The container runs on another VPS, reachable only over SSH.
+		// NEVER fall back to w.Docker (this node's local daemon) — it
+		// reports "gone" for every remote container and would flip a
+		// healthy deployment to "stopped".
+		if w.RemoteFor == nil {
+			return false
+		}
+		reporter := w.RemoteFor(RemoteTarget{
+			HostID:      rr.hostID,
+			TailnetAddr: rr.tailnetAddr,
+			SSHUser:     rr.sshUser,
+			SSHPort:     rr.sshPort,
+		})
+		if reporter == nil {
+			return false
+		}
+		dockerStatus, err = reporter.Status(statusCtx, rr.name)
+	case rr.haEnabled:
+		dockerStatus, err = w.Docker.StatusReplica(statusCtx, rr.name, rr.replicaIndex)
 	default:
-		dockerStatus, err = w.Docker.Status(statusCtx, name)
+		dockerStatus, err = w.Docker.Status(statusCtx, rr.name)
 	}
 	if err != nil {
 		logger.Warn("health: docker status",
-			"deployment", name, "replica", replicaIndex, "err", err)
+			"deployment", rr.name, "replica", rr.replicaIndex, "remote", rr.isRemote, "err", err)
 		return false
 	}
 
@@ -233,25 +296,23 @@ func (w *Worker) reconcileReplica(ctx context.Context, logger *slog.Logger, cfg 
 		   SET status = $1
 		 WHERE id = $2
 		   AND status = 'running'
-	`, target, replicaID)
+	`, target, rr.replicaID)
 	if err != nil {
 		logger.Error("health: update replica status",
-			"deployment", name, "replica", replicaIndex, "err", err)
+			"deployment", rr.name, "replica", rr.replicaIndex, "err", err)
 		return false
 	}
 	if tag.RowsAffected() == 0 {
 		return false
 	}
 	logger.Info("health: reconciled replica",
-		"deployment", name,
-		"replica", replicaIndex,
+		"deployment", rr.name,
+		"replica", rr.replicaIndex,
 		"docker_status", dockerStatus,
 		"new_status", target)
 
-	// Auto-recovery on a stopped replica: same gate as before, just
-	// scoped to the replica that flipped.
-	if cfg.AutoRestart && target == "stopped" && w.Restarter != nil {
-		w.tryRestartReplica(ctx, logger, cfg, replicaID, deploymentID, name, replicaIndex, haEnabled)
+	if cfg.AutoRestart && target == "stopped" {
+		w.tryRestartReplica(ctx, logger, cfg, rr)
 	}
 	return true
 }
@@ -322,38 +383,53 @@ func (w *Worker) recomputeDeploymentStatus(ctx context.Context, logger *slog.Log
 // tryRestartReplica attempts a one-shot recovery on a stopped replica.
 // Same shape as the legacy tryRestart, just scoped to one replica row
 // instead of the whole deployment.
-func (w *Worker) tryRestartReplica(ctx context.Context, logger *slog.Logger, cfg Config,
-	replicaID, deploymentID, name string, replicaIndex int, haEnabled bool,
-) {
+func (w *Worker) tryRestartReplica(ctx context.Context, logger *slog.Logger, cfg Config, rr replicaRow) {
 	startCtx, cancel := context.WithTimeout(ctx, cfg.StatusTimeout)
 	defer cancel()
 
 	var err error
-	if haEnabled {
-		err = w.Restarter.RestartReplica(startCtx, name, replicaIndex)
-	} else {
-		err = w.Restarter.Restart(startCtx, name)
+	switch {
+	case rr.isRemote:
+		if w.RemoteFor == nil {
+			return
+		}
+		reporter := w.RemoteFor(RemoteTarget{
+			HostID:      rr.hostID,
+			TailnetAddr: rr.tailnetAddr,
+			SSHUser:     rr.sshUser,
+			SSHPort:     rr.sshPort,
+		})
+		if reporter == nil {
+			return
+		}
+		err = reporter.Restart(startCtx, rr.name)
+	case w.Restarter == nil:
+		return
+	case rr.haEnabled:
+		err = w.Restarter.RestartReplica(startCtx, rr.name, rr.replicaIndex)
+	default:
+		err = w.Restarter.Restart(startCtx, rr.name)
 	}
 	if err != nil {
 		logger.Warn("health: auto-restart failed",
-			"deployment", name, "replica", replicaIndex, "err", err)
+			"deployment", rr.name, "replica", rr.replicaIndex, "err", err)
 		if err.Error() == "container not found" {
 			_, _ = w.DB.Exec(ctx,
 				`UPDATE deployment_replicas SET status = 'failed' WHERE id = $1 AND status = 'stopped'`,
-				replicaID)
+				rr.replicaID)
 		}
 		return
 	}
 
 	if _, err := w.DB.Exec(ctx,
 		`UPDATE deployment_replicas SET status = 'running' WHERE id = $1 AND status = 'stopped'`,
-		replicaID); err != nil {
+		rr.replicaID); err != nil {
 		logger.Error("health: post-restart update",
-			"deployment", name, "replica", replicaIndex, "err", err)
+			"deployment", rr.name, "replica", rr.replicaIndex, "err", err)
 		return
 	}
 	logger.Info("health: auto-restarted replica",
-		"deployment", name, "replica", replicaIndex)
+		"deployment", rr.name, "replica", rr.replicaIndex)
 }
 
 // classify maps Docker's container state strings to our deployments.status

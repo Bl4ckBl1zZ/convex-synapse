@@ -200,3 +200,75 @@ setup() {
     assert_success
     assert_output --partial "would-exec: docker rm"
 }
+
+# ---- synapse-deployer-exec: docker volume (remote provision) --------
+#
+# RemoteClient.Provision/Destroy run `docker volume create|rm` over the
+# wrapper. `volume` was missing from the whitelist → exit 99 "subcommand
+# 'volume' not permitted" → every remote deployment failed at the first
+# step. It's now allowed, but gated to the targeted ops only.
+
+@test "synapse-deployer-exec: docker volume create is whitelisted" {
+    SSH_ORIGINAL_COMMAND="docker volume create synapse-data-x" \
+        SYNAPSE_DEPLOYER_EXEC_TEST=1 \
+        run "$EXEC_FILE"
+    assert_success
+    assert_output "would-exec: docker volume create synapse-data-x"
+}
+
+@test "synapse-deployer-exec: docker volume rm is whitelisted" {
+    SSH_ORIGINAL_COMMAND="docker volume rm synapse-data-x" \
+        SYNAPSE_DEPLOYER_EXEC_TEST=1 \
+        run "$EXEC_FILE"
+    assert_success
+    assert_output "would-exec: docker volume rm synapse-data-x"
+}
+
+@test "synapse-deployer-exec: docker volume prune is REFUSED (wildcard delete)" {
+    # `volume prune` deletes every unused volume on a shared host — a
+    # buggy central could wipe a sibling deployment's data. The
+    # second-level gate must reject it even though `volume` is allowed.
+    SSH_ORIGINAL_COMMAND="docker volume prune -f" run "$EXEC_FILE"
+    assert_failure 99
+    assert_output --partial "'docker volume prune' not permitted"
+}
+
+@test "synapse-deployer-exec: bare docker volume (no subcommand) is REFUSED" {
+    SSH_ORIGINAL_COMMAND="docker volume" run "$EXEC_FILE"
+    assert_failure 99
+    assert_output --partial "not permitted"
+}
+
+# ---- synapse-deployer-exec: shell-quote parsing ---------------------
+#
+# sshprov.shellQuoteArgv single-quotes any arg outside its safe alphabet
+# — notably the backend image's `@sha256:` digest. The old `read -ra`
+# whitespace split KEPT the literal quotes, so docker got
+# 'ghcr.io/...@sha256:...' → exit 125 "invalid reference format". These
+# assert the POSIX single-quote parser strips quoting exactly.
+
+@test "synapse-deployer-exec: single-quoted @digest image parses without literal quotes" {
+    SSH_ORIGINAL_COMMAND="docker run -d --name convex-x 'ghcr.io/get-convex/convex-backend@sha256:abc'" \
+        SYNAPSE_DEPLOYER_EXEC_TEST=1 \
+        run "$EXEC_FILE"
+    assert_success
+    assert_output "would-exec: docker run -d --name convex-x ghcr.io/get-convex/convex-backend@sha256:abc"
+}
+
+@test "synapse-deployer-exec: single-quoted arg with a space stays ONE token" {
+    SSH_ORIGINAL_COMMAND="docker run -e 'GREETING=hello world' busybox" \
+        SYNAPSE_DEPLOYER_EXEC_TEST=1 \
+        run "$EXEC_FILE"
+    assert_success
+    assert_output "would-exec: docker run -e GREETING=hello world busybox"
+}
+
+@test "synapse-deployer-exec: embedded single-quote idiom round-trips" {
+    # shellQuoteArgv encodes X=it's as 'X=it'\''s'; the parser must
+    # rebuild X=it's (not X=it\''s, and not two tokens).
+    SSH_ORIGINAL_COMMAND="docker run -e 'X=it'\''s' busybox" \
+        SYNAPSE_DEPLOYER_EXEC_TEST=1 \
+        run "$EXEC_FILE"
+    assert_success
+    assert_output "would-exec: docker run -e X=it's busybox"
+}

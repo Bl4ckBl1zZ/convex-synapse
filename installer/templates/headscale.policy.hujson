@@ -13,12 +13,14 @@
 // keys with these tags from outside Synapse — the dashboard's
 // remote_setup endpoint is the only sanctioned mint path.
 //
-// Default policy: least-privilege SSH. Only the control plane can
-// reach remote hosts, and only on port 22 (the Docker dispatch
-// channel). Remote hosts have NO blanket ability to talk to each
-// other or to the control plane back — if a future feature needs
-// cross-remote networking (replicated services, gossip, etc.) it
-// MUST land its own scoped ACL entry rather than reverting to *.
+// Default policy: least-privilege. The control plane reaches remote
+// hosts on (a) port 22 for the Docker command-dispatch channel and
+// (b) the deployment host-port range so the central proxy can route
+// /d/<name>/* HTTP traffic to remote Convex containers over the
+// tailnet. Remote hosts have NO blanket ability to talk to each other
+// or back to the control plane — if a future feature needs
+// cross-remote networking (replicated services, gossip, etc.) it MUST
+// land its own scoped ACL entry rather than reverting to *.
 //
 // To customize: operators MAY edit this file at
 // $INSTALL_DIR/headscale/policy.hujson and restart the headscale
@@ -35,11 +37,23 @@
     "tag:synapse-remote":  ["synapse@"]
   },
   "acls": [
-    // Control plane → remote hosts, SSH only.
+    // Control plane → remote hosts, SSH (Docker command dispatch).
     {
       "action": "accept",
       "src":    ["tag:synapse-control"],
       "dst":    ["tag:synapse-remote:22"]
+    },
+    // Control plane → remote hosts, deployment host-port range. The
+    // central proxy (/d/<name>/*) reaches each remote Convex container
+    // on its dynamically-allocated host_port over the tailnet; without
+    // this the proxy times out ("context canceled") and remote
+    // deployments are unreachable. The range matches the allocator's
+    // SYNAPSE_PORT_RANGE_MIN..MAX (defaults 3210-3500); an operator who
+    // narrows that range MAY tighten this dst to match.
+    {
+      "action": "accept",
+      "src":    ["tag:synapse-control"],
+      "dst":    ["tag:synapse-remote:3210-3500"]
     }
   ]
 }

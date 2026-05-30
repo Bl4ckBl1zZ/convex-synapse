@@ -756,6 +756,12 @@ phase_secrets() {
             fi
         fi
         export SYNAPSE_PUBLIC_URL="$public_url"
+        # SYNAPSE_DOMAIN (control-plane hostname from --domain) MUST be
+        # persisted so the Headscale resolver + custom-domain flow see it
+        # on later phases (hydrate_env reads it from .env for
+        # phase_install_headscale). Without this, --enable-headscale in a
+        # non-interactive install dies with "Headscale needs SYNAPSE_DOMAIN".
+        export SYNAPSE_DOMAIN="${DOMAIN#.}"
         export SYNAPSE_ALLOWED_ORIGINS="$allowed_origins"
         export PUBLIC_CONVEX_DASHBOARD_URL="$public_dash_url"
         # Custom domains (v1.0+). Operator passes --base-domain or
@@ -812,8 +818,20 @@ phase_secrets() {
         # after install (the bundled services stay idle without the
         # profile flag).
         local ha_pg_pass="" ha_s3_key="" ha_s3_secret=""
-        if (( ENABLE_HA )); then
+        # SYNAPSE_STORAGE_KEY (crypto.SecretBox) protects BOTH HA storage
+        # secrets AND remote-host SSH private keys. A --enable-headscale
+        # install WITHOUT --enable-ha still needs it: the central API 503s
+        # with crypto_disabled when a remote agent tries to register its
+        # deployer SSH key otherwise (Remote Hosts is dead without it).
+        # Generate whenever EITHER feature is on; honour an operator-preset
+        # value so a future re-render can't rotate the key out from under
+        # already-encrypted secrets. Lives outside the HA block on purpose.
+        if [[ -n "${SYNAPSE_STORAGE_KEY:-}" ]]; then
+            sk="$SYNAPSE_STORAGE_KEY"
+        elif (( ENABLE_HA )) || (( ${ENABLE_HEADSCALE:-0} )); then
             sk="$(secrets::gen_storage_key)"
+        fi
+        if (( ENABLE_HA )); then
             ha_pg_pass="$(secrets::gen_db_password)"
             ha_s3_key="$(secrets::gen_db_password)"
             ha_s3_secret="$(secrets::gen_storage_key)"
@@ -851,6 +869,11 @@ phase_secrets() {
         # Existing install — preserve secrets, top-up missing ones.
         local args=()
         (( ENABLE_HA )) && args+=(--ha)
+        # Remote Hosts (headscale) needs the same SecretBox storage key
+        # as HA — without it the agent-register path 503s crypto_disabled
+        # and the SSH provisioner is never built. ensure_env --headscale
+        # tops it up (idempotent) so a re-run heals a pre-fix install.
+        (( ${ENABLE_HEADSCALE:-0} )) && args+=(--headscale)
         secrets::ensure_env "$env_file" "${args[@]}"
         ui::success ".env exists; preserved existing secrets"
     fi

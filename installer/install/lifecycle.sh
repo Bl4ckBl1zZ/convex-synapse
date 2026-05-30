@@ -534,6 +534,16 @@ lifecycle::_upgrade_phase_b() {
         if [[ "$_ha_flag" == "true" ]]; then
             _ensure_env_args+=(--ha)
         fi
+        # Remote Hosts (headscale) needs the SecretBox storage key just
+        # like HA. An install done before the storage-key-for-headscale
+        # fix has no SYNAPSE_STORAGE_KEY, so the agent-register path 503s
+        # crypto_disabled forever. Pass --headscale on upgrade to heal it
+        # (idempotent — an existing key is preserved, never rotated).
+        local _hs_url
+        _hs_url="$(secrets::env_get "$env_file" SYNAPSE_HEADSCALE_SERVER_URL)"
+        if [[ -n "$_hs_url" ]]; then
+            _ensure_env_args+=(--headscale)
+        fi
         secrets::ensure_env "$env_file" "${_ensure_env_args[@]}" \
             || ui::warn "could not ensure new secrets in .env"
     fi

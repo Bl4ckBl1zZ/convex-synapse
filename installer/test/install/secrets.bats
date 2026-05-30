@@ -376,6 +376,29 @@ EOF
     assert_output --partial "STORAGEKEY-fixture"
 }
 
+@test "ensure_env --headscale: generates storage key WITHOUT HA backend creds" {
+    # Remote Hosts needs SYNAPSE_STORAGE_KEY (SSH-privkey + DNS-token
+    # crypto) but NOT the HA Postgres/S3 wiring. --headscale must give
+    # the key alone — a --enable-headscale install without --enable-ha
+    # was arriving with no key, so agent-register 503'd crypto_disabled.
+    secrets::ensure_env "$ENV_FILE" --headscale
+    run secrets::env_get "$ENV_FILE" SYNAPSE_STORAGE_KEY
+    assert_output --partial "STORAGEKEY-fixture"
+    run secrets::env_get "$ENV_FILE" SYNAPSE_BACKEND_POSTGRES_URL
+    assert_output ""
+    run secrets::env_get "$ENV_FILE" HA_PG_PASSWORD
+    assert_output ""
+}
+
+@test "ensure_env --headscale: preserves an existing storage key (never rotates)" {
+    cat >"$ENV_FILE" <<EOF
+SYNAPSE_STORAGE_KEY=existing-key-do-not-rotate
+EOF
+    secrets::ensure_env "$ENV_FILE" --headscale
+    run secrets::env_get "$ENV_FILE" SYNAPSE_STORAGE_KEY
+    assert_output "existing-key-do-not-rotate"
+}
+
 @test "ensure_env: existing JWT preserved across re-run" {
     cat >"$ENV_FILE" <<EOF
 SYNAPSE_JWT_SECRET=existing-jwt-do-not-touch

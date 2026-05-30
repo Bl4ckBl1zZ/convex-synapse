@@ -103,3 +103,38 @@ POL
     run grep -F 'keep-me' "$INSTALL_DIR/headscale/policy.hujson"
     [ "$status" -eq 0 ]
 }
+
+@test "headscale.policy.hujson allows control → remote deployment port range (central proxy)" {
+    # Regression for the SSH-only-ACL split: control → remote on :22
+    # alone left the central proxy unable to reach a remote deployment's
+    # host_port over the tailnet, so /d/<name>/* timed out ("context
+    # canceled"). The 3210-3500 deployment range MUST be allowed.
+    local tmpl="$INSTALLER_DIR/templates/headscale.policy.hujson"
+    run grep -F 'tag:synapse-remote:3210-3500' "$tmpl"
+    [ "$status" -eq 0 ]
+}
+
+@test "headscale::render_config adds the deployment-port ACL to an SSH-only policy" {
+    # An install predating central-proxy routing carries the SSH-only
+    # ACL (control → remote :22) and no 3210-3500 rule. render_config
+    # must migrate it (re-copy the template) so remote deployments
+    # become reachable — the operator-customized case is left untouched
+    # by the sibling test, which has no synapse-remote:22 anchor.
+    source "$INSTALLER_DIR/install/headscale.sh"
+    eval 'caddy::_render() { printf "server_url: x\n"; }'
+    eval 'detect::sudo_cmd() { printf ""; }'
+    eval 'ui::warn() { :; }'
+    eval 'ui::fail() { :; }'
+    INSTALL_DIR="$BATS_TEST_TMPDIR/install-ssh-only"
+    INSTALLER_TEMPLATES="$INSTALLER_DIR/templates"
+    mkdir -p "$INSTALL_DIR/headscale"
+    # Pre-fix SSH-only policy: correct @-owners, no deployment range.
+    cat > "$INSTALL_DIR/headscale/policy.hujson" <<'POL'
+{ "tagOwners": { "tag:synapse-control": ["synapse@"], "tag:synapse-remote": ["synapse@"] },
+  "acls": [ { "action": "accept", "src": ["tag:synapse-control"], "dst": ["tag:synapse-remote:22"] } ] }
+POL
+    run headscale::render_config
+    [ "$status" -eq 0 ]
+    run grep -F 'tag:synapse-remote:3210-3500' "$INSTALL_DIR/headscale/policy.hujson"
+    [ "$status" -eq 0 ]
+}

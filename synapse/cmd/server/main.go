@@ -401,6 +401,22 @@ func run() error {
 	// missing. Skipped if no Docker daemon was reachable at startup; the
 	// API still works for read-only / metadata operations in that case.
 	if dockerClient != nil {
+		// RemoteFor binds a health reporter to a remote host over SSH —
+		// nil when Remote Hosts is disabled. Without it the health worker
+		// would judge remote containers by THIS node's local Docker
+		// daemon and flip healthy remote deployments to "stopped". Same
+		// RemoteClient the provisioner + deployments handler use.
+		var healthRemoteFor func(health.RemoteTarget) health.RemoteReporter
+		if sshClient != nil {
+			healthRemoteFor = func(t health.RemoteTarget) health.RemoteReporter {
+				return dockerprov.NewRemoteClient(sshClient, sshprov.Target{
+					HostID:      t.HostID,
+					TailnetAddr: t.TailnetAddr,
+					User:        t.SSHUser,
+					Port:        t.SSHPort,
+				}, cfg.BackendImage, cfg.DockerNetwork)
+			}
+		}
 		worker := &health.Worker{
 			DB:        pool,
 			Docker:    dockerClient,
@@ -410,7 +426,8 @@ func run() error {
 				StatusTimeout: 5 * time.Second,
 				AutoRestart:   cfg.HealthAutoRestart,
 			},
-			Logger: logger,
+			Logger:    logger,
+			RemoteFor: healthRemoteFor,
 		}
 		go worker.Run(rootCtx)
 		if cfg.HealthAutoRestart {

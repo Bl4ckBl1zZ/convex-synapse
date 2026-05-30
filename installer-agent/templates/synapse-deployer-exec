@@ -8,23 +8,56 @@
 # subcommands. Anything else (rm -rf /, /bin/sh, sudo, etc) gets a
 # hard EPERM with audit log.
 #
-# Whitelist rationale: provisioning a Convex deployment needs
-# docker run, stop, rm, start, restart, inspect, ps, logs. Phase 3
-# will tighten this further with per-argv validation; for now we
-# accept any args after the subcommand and rely on the synapse-deployer
-# user having only docker group (no sudo).
+# Whitelist rationale: provisioning a Convex deployment needs docker
+# run, stop, rm, start, restart, inspect, ps, logs, version — plus
+# `volume create` / `volume rm` for the remote provisioner's data
+# volume (synapse/internal/docker/remote.go). The two-word `volume`
+# subcommand is gated to create/rm/inspect/ls below; `volume prune`
+# is REFUSED so a buggy central can't wildcard-delete a sibling
+# deployment's volume. Phase 3 will tighten further with per-argv
+# validation; for now we accept any args after the (sub)command and
+# rely on the synapse-deployer user having only docker group (no sudo).
 #
 # Test mode: set SYNAPSE_DEPLOYER_EXEC_TEST=1 to short-circuit the
 # final exec and print the would-be argv instead. Used by bats so we
 # can exercise the whitelist without an actual docker on the test box.
 set -Eeuo pipefail
 
-ALLOWED=(run stop rm start restart inspect ps logs version)
+ALLOWED=(run stop rm start restart inspect ps logs version volume)
 
 log_audit() {
     if command -v logger >/dev/null 2>&1; then
         logger -t synapse-deployer-exec -p auth.notice "$*" || true
     fi
+}
+
+# _parse_argv <string> — populate the global argv[] from a command
+# string encoded by sshprov.shellQuoteArgv (bare tokens, or single-
+# quoted tokens using the '\'' idiom for embedded quotes). Pure-bash
+# POSIX single-quote state machine: NO eval / declare -a (either would
+# run $(...) command substitution from a stolen deployer key) and NO
+# external tokenizer (busybox xargs quote-handling differs from GNU).
+# The whitelist gate downstream stays the real security boundary.
+_parse_argv() {
+    local s="$1"
+    local n=${#s} i=0 c nxt cur="" started=0 inq=0
+    argv=()
+    while (( i < n )); do
+        c="${s:i:1}"
+        if (( inq )); then
+            if [[ "$c" == "'" ]]; then inq=0; else cur+="$c"; fi
+        else
+            case "$c" in
+                "'")  inq=1; started=1 ;;
+                \\)   i=$((i+1)); nxt="${s:i:1}"; cur+="$nxt"; started=1 ;;
+                ' ')  if (( started )); then argv+=("$cur"); cur=""; started=0; fi ;;
+                *)    cur+="$c"; started=1 ;;
+            esac
+        fi
+        i=$((i+1))
+    done
+    if (( started )); then argv+=("$cur"); fi
+    return 0
 }
 
 cmd_string="${SSH_ORIGINAL_COMMAND:-}"
@@ -34,8 +67,13 @@ if [[ -z "$cmd_string" ]]; then
     exit 99
 fi
 
-# Strict parse: split on whitespace into argv.
-read -ra argv <<<"$cmd_string"
+# Tokenize $SSH_ORIGINAL_COMMAND, reversing sshprov.shellQuoteArgv. The
+# old `read -ra` split on whitespace only and KEPT the literal quotes,
+# so the backend image's `@sha256:` digest reached docker as
+# 'ghcr.io/...@sha256:...' → exit 125 "invalid reference format".
+# _parse_argv strips the shell quoting the way a POSIX shell would.
+argv=()
+_parse_argv "$cmd_string"
 
 if [[ "${argv[0]:-}" != "docker" ]]; then
     log_audit "refused: not a docker command from ${SSH_CLIENT:-unknown}: ${argv[*]}"
@@ -56,6 +94,26 @@ if ! $allowed; then
     log_audit "refused: subcommand '$subcmd' not in whitelist from ${SSH_CLIENT:-unknown}"
     echo "synapse-deployer-exec: subcommand '$subcmd' not permitted" >&2
     exit 99
+fi
+
+# Two-word subcommand gate. `docker volume` clears the whitelist above
+# (the remote provisioner needs `volume create` / `volume rm`) but is
+# scoped HERE to targeted operations only. `volume prune` is a wildcard
+# that deletes EVERY unused volume on the host — a single buggy (not
+# even malicious) central could wipe a sibling deployment's data volume
+# that happens to be momentarily stopped — so we refuse it. Targeted
+# `volume rm <name>` stays scoped to the one volume Synapse names
+# (synapse-data-<deployment>).
+if [[ "$subcmd" == "volume" ]]; then
+    vsub="${argv[2]:-}"
+    case "$vsub" in
+        create|rm|inspect|ls) ;;
+        *)
+            log_audit "refused: 'volume ${vsub}' not permitted from ${SSH_CLIENT:-unknown}"
+            echo "synapse-deployer-exec: 'docker volume ${vsub}' not permitted" >&2
+            exit 99
+            ;;
+    esac
 fi
 
 # Log + exec. Logged at auth.notice so the operator can audit later.

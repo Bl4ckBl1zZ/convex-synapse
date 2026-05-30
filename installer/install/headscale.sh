@@ -234,6 +234,19 @@ headscale::render_config() {
             cp "$policy_src" "$policy_out"
             chmod 0644 "$policy_out"
         fi
+        # v1.19.12 self-heal: installs predating central-proxy routing
+        # shipped an SSH-only ACL (control → remote :22) with no
+        # deployment host-port rule, so /d/<name>/* to a remote host
+        # timed out ("context canceled") and remote deployments were
+        # unreachable. If the policy still lacks the 3210-3500 range but
+        # carries our SSH ACL (proving it's the Synapse-managed default,
+        # not an operator rewrite), re-copy the template to add it.
+        # Idempotent once the range is present.
+        if ! grep -q 'synapse-remote:3210' "$policy_out" && grep -q 'synapse-remote:22' "$policy_out"; then
+            ui::warn "Headscale: adding deployment-port ACL (control → remote 3210-3500) for central-proxy routing"
+            cp "$policy_src" "$policy_out"
+            chmod 0644 "$policy_out"
+        fi
     fi
 }
 
@@ -415,6 +428,18 @@ headscale::bootstrap() {
         fi
     fi
 
+    # 9.5. Recreate synapse-api so it re-reads the SYNAPSE_HEADSCALE_*
+    # env stamped above. The running container started in
+    # phase_compose_up, BEFORE those vars were in .env — so its
+    # config.HeadscaleHost is empty and /v1/internal/tls_ask 404s the
+    # headscale host, which makes Caddy refuse the on-demand cert and
+    # the join's `tailscale up` hang forever on the TLS handshake.
+    # (configure_headscale also recreates synapse, but AFTER bootstrap —
+    # too late for the join below.) TLS mode only (the join needs a cert).
+    if (( ${NO_TLS:-0} == 0 )) && [[ "$server_url" == https://* ]]; then
+        headscale::_recreate_synapse_api
+    fi
+
     # 10. control-plane tailnet membership --------------------------
     # Join the Synapse control plane to its own tailnet so the central
     # proxy + provisioner can reach remote-host 100.x addresses.
@@ -429,6 +454,22 @@ headscale::bootstrap() {
     fi
 
     ui::success "Headscale ready at ${server_url}"
+}
+
+# headscale::_recreate_synapse_api — force-recreate the synapse-api
+# container so it re-reads the SYNAPSE_HEADSCALE_* env just stamped into
+# .env (needed so /v1/internal/tls_ask knows the headscale host and
+# Caddy will issue its on-demand cert). Best-effort; degrades with a
+# clear warning. A few seconds' settle so the join's first cert
+# handshake doesn't race a still-starting api.
+headscale::_recreate_synapse_api() {
+    local cmd="${HEADSCALE_DOCKER_CMD:-${COMPOSE_CMD:-docker}}"
+    ui::info "Recreating synapse-api to pick up Headscale env (tls_ask needs the headscale host)"
+    if "$cmd" compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-build --force-recreate synapse >/dev/null 2>&1; then
+        sleep 3
+    else
+        ui::warn "could not recreate synapse-api — tls_ask may not know the headscale host yet"
+    fi
 }
 
 # ---- reconcile (placeholder seam, not wired in Phase 1) -------------
