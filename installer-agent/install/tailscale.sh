@@ -25,22 +25,38 @@ tailscale::install() {
         local v
         v="$(tailscale version 2>/dev/null | head -1 || echo unknown)"
         ui::ok "Tailscale already installed: $v"
-        return 0
-    fi
-    if (( ${NO_TAILSCALE_INSTALL:-0} )); then
+    elif (( ${NO_TAILSCALE_INSTALL:-0} )); then
         ui::fail "Tailscale not installed and --no-tailscale-install was passed"
         return 2
+    else
+        ui::step "Installing Tailscale (https://tailscale.com/install.sh)"
+        if ! curl -fsSL https://tailscale.com/install.sh | sh; then
+            ui::fail "Tailscale install script failed"
+            return 2
+        fi
+        if ! command -v tailscale >/dev/null 2>&1; then
+            ui::fail "Tailscale install completed but binary not on PATH"
+            return 2
+        fi
+        ui::ok "Tailscale installed: $(tailscale version 2>/dev/null | head -1 || echo unknown)"
     fi
-    ui::step "Installing Tailscale (https://tailscale.com/install.sh)"
-    if ! curl -fsSL https://tailscale.com/install.sh | sh; then
-        ui::fail "Tailscale install script failed"
-        return 2
+    # `tailscale up` (tailscale::join) talks to a RUNNING tailscaled.
+    # install.sh starts+enables it on a fresh box, but a host where the
+    # binary was already present with the daemon STOPPED (reboot without
+    # enable, a partial prior install, or a re-adoption after a wipe)
+    # makes the join fail "failed to connect to local tailscaled". Ensure
+    # the daemon is up + enabled (idempotent) and answering its localapi
+    # before join. Best-effort: non-systemd inits fall through and join
+    # surfaces the original error.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable --now tailscaled >/dev/null 2>&1 || true
+        local _i
+        for _i in $(seq 1 10); do
+            tailscale status 2>&1 | grep -q "failed to connect to local tailscaled" || break
+            sleep 1
+        done
     fi
-    if ! command -v tailscale >/dev/null 2>&1; then
-        ui::fail "Tailscale install completed but binary not on PATH"
-        return 2
-    fi
-    ui::ok "Tailscale installed: $(tailscale version 2>/dev/null | head -1 || echo unknown)"
+    return 0
 }
 
 # tailscale::join SERVER_URL AUTH_KEY

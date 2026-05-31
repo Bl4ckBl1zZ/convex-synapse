@@ -174,3 +174,34 @@ EOF
     run grep -c join "$order"
     [ "$output" = "0" ]
 }
+
+# ---- _install_tailscale ensures tailscaled is running (#9) ----------
+
+@test "_install_tailscale: starts tailscaled when binary present but daemon stopped" {
+    # Regression for the v1.21.x 2-VPS smoke: a host with the tailscale
+    # binary already installed but tailscaled STOPPED (reboot without
+    # enable, partial prior install, a reconfigure after a wipe) made
+    # join_control_plane's `tailscale up` fail "failed to connect to
+    # local tailscaled". _install_tailscale must ensure the daemon is up.
+    local calls="$BATS_TEST_TMPDIR/systemctl.calls"
+    : >"$calls"
+    cat >"$SYN_MOCK_BIN/tailscale" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  version) echo "1.99.0" ;;
+  status)  echo "Logged out." ;;
+esac
+exit 0
+EOF
+    chmod +x "$SYN_MOCK_BIN/tailscale"
+    cat >"$SYN_MOCK_BIN/systemctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"$calls"
+exit 0
+EOF
+    chmod +x "$SYN_MOCK_BIN/systemctl"
+    run headscale::_install_tailscale
+    [ "$status" -eq 0 ]
+    run grep -F "enable --now tailscaled" "$calls"
+    [ "$status" -eq 0 ]
+}

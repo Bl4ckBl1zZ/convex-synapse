@@ -528,17 +528,32 @@ headscale::_control_hostname() {
 # so the control-plane installer doesn't drag in the agent's library
 # layout.
 headscale::_install_tailscale() {
-    if command -v tailscale >/dev/null 2>&1; then
-        return 0
-    fi
-    ui::info "Installing Tailscale CLI (https://tailscale.com/install.sh)"
-    if ! curl -fsSL https://tailscale.com/install.sh | sh >&2; then
-        ui::fail "Tailscale install script failed"
-        return 2
-    fi
     if ! command -v tailscale >/dev/null 2>&1; then
-        ui::fail "Tailscale install completed but binary not on PATH"
-        return 2
+        ui::info "Installing Tailscale CLI (https://tailscale.com/install.sh)"
+        if ! curl -fsSL https://tailscale.com/install.sh | sh >&2; then
+            ui::fail "Tailscale install script failed"
+            return 2
+        fi
+        if ! command -v tailscale >/dev/null 2>&1; then
+            ui::fail "Tailscale install completed but binary not on PATH"
+            return 2
+        fi
+    fi
+    # `tailscale up` (join_control_plane) talks to a RUNNING tailscaled.
+    # install.sh starts+enables it on a fresh box, but a host where the
+    # binary was already present with the daemon STOPPED — reboot without
+    # enable, a partial prior install, or a reconfigure after a wipe —
+    # makes the join fail "failed to connect to local tailscaled". Ensure
+    # the daemon is up + enabled (idempotent) and answering its localapi
+    # before returning. Best-effort: non-systemd inits / odd unit names
+    # fall through and the join surfaces the original error.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable --now tailscaled >/dev/null 2>&1 || true
+        local _i
+        for _i in $(seq 1 10); do
+            tailscale status 2>&1 | grep -q "failed to connect to local tailscaled" || break
+            sleep 1
+        done
     fi
     return 0
 }
