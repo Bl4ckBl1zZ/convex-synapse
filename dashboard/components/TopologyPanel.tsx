@@ -69,11 +69,11 @@ export function TopologyPanel({ projectId }: Props) {
         {data.hosts.map((host, i) => (
           <HostColumn key={host.id} host={host} index={i} />
         ))}
-        {/* v1.9.6: when multi-VPS federation lands, the placeholder card
-            below points the operator at how to add another host. Today
-            it's a passive hint; v2.0 will turn it into a real CTA. */}
+        {/* Only the primary host so far: a subtle hint that federating
+            another host (the Hosts panel below) lights up a new column
+            here. Disappears the moment a second host joins. */}
         {data.hosts.length === 1 && data.hosts[0].isPrimary && (
-          <FuturePlaceholder />
+          <FederateHostHint />
         )}
       </div>
     </Card>
@@ -389,17 +389,14 @@ function formatDuration(s: number): string {
   return `${d}d ${h % 24}h`;
 }
 
-/* -------------------- Future placeholder -------------------- */
+/* -------------------- Federate-host hint -------------------- */
 
-function FuturePlaceholder() {
+function FederateHostHint() {
   const { t } = useT();
   return (
-    <div
-      className="hidden flex-col items-center justify-center rounded-lg border border-dashed border-neutral-800 bg-neutral-950/40 p-6 opacity-50 xl:flex"
-      aria-hidden
-    >
-      <p className="text-center font-mono text-[10px] uppercase tracking-widest text-neutral-600">
-        {t("Multi-VPS coming soon")}
+    <div className="hidden flex-col items-center justify-center rounded-lg border border-dashed border-neutral-800 bg-neutral-950/40 p-6 opacity-60 xl:flex">
+      <p className="text-center font-mono text-[10px] uppercase tracking-widest text-neutral-500">
+        {t("Add another host")}
       </p>
       <p className="mt-2 max-w-[200px] text-center font-mono text-[10px] text-neutral-600">
         {t("Federate another host and its deployments show up here.")}
