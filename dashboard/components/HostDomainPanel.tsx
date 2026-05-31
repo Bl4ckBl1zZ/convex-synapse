@@ -24,6 +24,7 @@ import {
   type HostDomainJobStatus,
 } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useT } from "@/lib/i18n";
 
 // HostDomainPanel — instance-admin-only surface for swapping the public
 // domain of a running Synapse host. Pairs with backend PR B
@@ -74,6 +75,7 @@ function modeTone(
 }
 
 export function HostDomainPanel() {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<HostDomainConfig>(
     "/v1/admin/host_domain",
     () => api.admin.hostDomain.get(),
@@ -90,10 +92,11 @@ export function HostDomainPanel() {
     <div className="space-y-6" data-testid="host-domain-panel">
       <Card>
         <CardHeader>
-          <CardTitle>Public host configuration</CardTitle>
+          <CardTitle>{t("Public host configuration")}</CardTitle>
           <CardDescription>
-            How operators and Convex CLIs reach this Synapse host. Changing
-            this re-renders Caddy and restarts the front door.
+            {t(
+              "How operators and Convex CLIs reach this Synapse host. Changing this re-renders Caddy and restarts the front door.",
+            )}
           </CardDescription>
         </CardHeader>
         <CardBody className="space-y-4">
@@ -108,7 +111,7 @@ export function HostDomainPanel() {
             <p className="text-xs text-red-400" data-testid="host-domain-load-error">
               {error instanceof ApiError
                 ? error.message
-                : "Could not load host configuration"}
+                : t("Could not load host configuration")}
             </p>
           )}
           {data && <CurrentConfig config={data} />}
@@ -131,24 +134,26 @@ export function HostDomainPanel() {
           <CardBody className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-semibold text-cyan-200">
-                Enable wildcard subdomain
+                {t("Enable wildcard subdomain")}
               </p>
               <p className="mt-1 max-w-xl text-xs text-neutral-300">
-                Without wildcard, deployment URLs fall back to{" "}
+                {t("Without wildcard, deployment URLs fall back to")}{" "}
                 <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
                   {data.domain || "your-host"}:&lt;dynamic-port&gt;
                 </code>{" "}
-                — broken in browsers, embedded dashboards refuse to load. Add a
-                wildcard like{" "}
+                {t(
+                  "— broken in browsers, embedded dashboards refuse to load. Add a wildcard like",
+                )}{" "}
                 <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
                   *.app.{data.domain || "your-host"}
                 </code>{" "}
-                in your DNS, point it at this VPS, then enable below — every
-                deployment automatically becomes{" "}
+                {t(
+                  "in your DNS, point it at this VPS, then enable below — every deployment automatically becomes",
+                )}{" "}
                 <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
                   &lt;name&gt;.app.{data.domain || "your-host"}
                 </code>{" "}
-                with on-demand TLS.
+                {t("with on-demand TLS.")}
               </p>
             </div>
             <Button
@@ -158,7 +163,7 @@ export function HostDomainPanel() {
               }}
               data-testid="host-domain-wildcard-suggestion-open"
             >
-              Configure wildcard…
+              {t("Configure wildcard…")}
             </Button>
           </CardBody>
         </Card>
@@ -169,12 +174,12 @@ export function HostDomainPanel() {
           <CardBody className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-neutral-200">
-                Change configuration
+                {t("Change configuration")}
               </p>
               <p className="mt-1 text-xs text-neutral-500">
-                Swap to a new domain, add a wildcard, or fall back to plain
-                HTTP. The dashboard will be unreachable for ~30 seconds while
-                Caddy reloads.
+                {t(
+                  "Swap to a new domain, add a wildcard, or fall back to plain HTTP. The dashboard will be unreachable for ~30 seconds while Caddy reloads.",
+                )}
               </p>
             </div>
             <Button
@@ -184,7 +189,7 @@ export function HostDomainPanel() {
               }}
               data-testid="host-domain-change-open"
             >
-              Change…
+              {t("Change…")}
             </Button>
           </CardBody>
         </Card>
@@ -206,22 +211,23 @@ export function HostDomainPanel() {
 }
 
 function CurrentConfig({ config }: { config: HostDomainConfig }) {
+  const { t } = useT();
   return (
     <dl
       className="grid grid-cols-[8rem_1fr] gap-y-3 text-sm"
       data-testid="host-domain-current"
     >
-      <dt className="text-neutral-500">Mode</dt>
+      <dt className="text-neutral-500">{t("Mode")}</dt>
       <dd>
         <Badge
           tone={modeTone(config.mode)}
           data-testid="host-domain-mode-badge"
         >
-          {modeLabel(config.mode)}
+          {t(modeLabel(config.mode))}
         </Badge>
       </dd>
 
-      <dt className="text-neutral-500">Domain</dt>
+      <dt className="text-neutral-500">{t("Domain")}</dt>
       <dd className="text-neutral-100" data-testid="host-domain-domain">
         {config.domain ? (
           <code className="rounded bg-neutral-900 px-2 py-0.5 font-mono text-xs text-neutral-200">
@@ -229,14 +235,14 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
           </code>
         ) : (
           <span className="text-neutral-500">
-            Plain HTTP — reachable by IP only
+            {t("Plain HTTP — reachable by IP only")}
           </span>
         )}
       </dd>
 
       {config.baseDomain && (
         <>
-          <dt className="text-neutral-500">Wildcard base</dt>
+          <dt className="text-neutral-500">{t("Wildcard base")}</dt>
           <dd
             className="text-neutral-100"
             data-testid="host-domain-base-domain"
@@ -245,7 +251,7 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
               *.{config.baseDomain}
             </code>
             <p className="mt-1 text-xs text-neutral-500">
-              Per-deployment subdomains live under this.
+              {t("Per-deployment subdomains live under this.")}
             </p>
           </dd>
         </>
@@ -253,7 +259,7 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
 
       {config.publicUrl && (
         <>
-          <dt className="text-neutral-500">Public URL</dt>
+          <dt className="text-neutral-500">{t("Public URL")}</dt>
           <dd className="flex items-center gap-2">
             <code
               className="truncate rounded bg-neutral-900 px-2 py-0.5 font-mono text-xs text-neutral-200"
@@ -263,7 +269,7 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
             </code>
             <CopyButton
               value={config.publicUrl}
-              label="Copy public URL"
+              label={t("Copy public URL")}
               testid="host-domain-copy-public-url"
             />
           </dd>
@@ -272,7 +278,7 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
 
       {config.publicIp && (
         <>
-          <dt className="text-neutral-500">Public IP</dt>
+          <dt className="text-neutral-500">{t("Public IP")}</dt>
           <dd className="text-neutral-100" data-testid="host-domain-public-ip">
             <code className="rounded bg-neutral-900 px-2 py-0.5 font-mono text-xs text-neutral-200">
               {config.publicIp}
@@ -283,7 +289,7 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
 
       {config.acmeEmail && (
         <>
-          <dt className="text-neutral-500">ACME contact</dt>
+          <dt className="text-neutral-500">{t("ACME contact")}</dt>
           <dd className="text-neutral-100" data-testid="host-domain-acme-email">
             {config.acmeEmail}
           </dd>
@@ -292,7 +298,7 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
 
       {config.fallbackUrls && config.fallbackUrls.length > 0 && (
         <>
-          <dt className="text-neutral-500">Fallback URLs</dt>
+          <dt className="text-neutral-500">{t("Fallback URLs")}</dt>
           <dd
             className="space-y-1.5"
             data-testid="host-domain-fallback-urls"
@@ -304,14 +310,15 @@ function CurrentConfig({ config }: { config: HostDomainConfig }) {
                 </code>
                 <CopyButton
                   value={u}
-                  label={`Copy fallback URL ${u}`}
+                  label={t("Copy fallback URL {u}", { u })}
                   testid={`host-domain-copy-fallback-${u}`}
                 />
               </div>
             ))}
             <p className="text-xs text-neutral-500">
-              These addresses keep working during a domain change. Bookmark
-              one before applying anything destructive.
+              {t(
+                "These addresses keep working during a domain change. Bookmark one before applying anything destructive.",
+              )}
             </p>
           </dd>
         </>
@@ -329,6 +336,7 @@ function CopyButton({
   label: string;
   testid?: string;
 }) {
+  const { t } = useT();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     const ok = await copyToClipboard(value);
@@ -345,7 +353,7 @@ function CopyButton({
       aria-label={label}
       data-testid={testid}
     >
-      {copied ? "Copied!" : "Copy"}
+      {copied ? t("Copied!") : t("Copy")}
     </Button>
   );
 }
@@ -361,6 +369,7 @@ function ChangeForm({
   onCancel: () => void;
   onApplied: () => Promise<void>;
 }) {
+  const { t } = useT();
   const [mode, setMode] = useState<Mode>(() => {
     if (initialMode) return initialMode;
     if (current.mode === "tls_with_wildcard") return "tls_with_wildcard";
@@ -415,19 +424,19 @@ function ChangeForm({
   // operator sees exactly what they're committing to before clicking
   // Apply. Falls back to "(plain HTTP)" when there's no domain.
   const targetUrl = useMemo(() => {
-    if (mode === "plain") return current.publicUrl ?? "(plain HTTP via IP)";
+    if (mode === "plain") return current.publicUrl ?? t("(plain HTTP via IP)");
     if (mode === "tls_with_wildcard" && domain) return `https://${domain}`;
     if (mode === "tls" && domain) return `https://${domain}`;
-    return "(unknown)";
-  }, [mode, domain, current.publicUrl]);
+    return t("(unknown)");
+  }, [mode, domain, current.publicUrl, t]);
 
   const fallbackUrl = useMemo(() => {
     if (current.fallbackUrls && current.fallbackUrls.length > 0) {
       return current.fallbackUrls[0];
     }
     if (current.publicIp) return `http://${current.publicIp}`;
-    return "your VPS IP";
-  }, [current]);
+    return t("your VPS IP");
+  }, [current, t]);
 
   // Form-level validation. Checks the inputs the chosen mode actually
   // uses; ignores the fields the other modes care about. Sets
@@ -437,23 +446,23 @@ function ChangeForm({
     if (mode === "plain") {
       return plainConfirm
         ? null
-        : "Tick the confirmation to switch to plain HTTP";
+        : t("Tick the confirmation to switch to plain HTTP");
     }
-    if (!domain.trim()) return "Domain is required";
+    if (!domain.trim()) return t("Domain is required");
     if (!HOSTNAME_RE.test(domain.trim().toLowerCase())) {
-      return "Domain must be a valid hostname (e.g. synapse.example.com)";
+      return t("Domain must be a valid hostname (e.g. synapse.example.com)");
     }
     if (mode === "tls_with_wildcard") {
-      if (!baseDomain.trim()) return "Base domain is required";
+      if (!baseDomain.trim()) return t("Base domain is required");
       if (!HOSTNAME_RE.test(baseDomain.trim().toLowerCase())) {
-        return "Base domain must be a valid hostname (e.g. example.com)";
+        return t("Base domain must be a valid hostname (e.g. example.com)");
       }
     }
     if (acmeEmail && !EMAIL_RE.test(acmeEmail.trim())) {
-      return "ACME email must be a valid email";
+      return t("ACME email must be a valid email");
     }
     return null;
-  }, [mode, domain, baseDomain, acmeEmail, plainConfirm]);
+  }, [mode, domain, baseDomain, acmeEmail, plainConfirm, t]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -487,7 +496,7 @@ function ChangeForm({
       setApplyOpen(true);
     } catch (err) {
       setValidationError(
-        err instanceof ApiError ? err.message : "Could not start the change",
+        err instanceof ApiError ? err.message : t("Could not start the change"),
       );
       setConfirmOpen(false);
     }
@@ -496,29 +505,31 @@ function ChangeForm({
   return (
     <Card data-testid="host-domain-change-form">
       <CardHeader>
-        <CardTitle>Change configuration</CardTitle>
+        <CardTitle>{t("Change configuration")}</CardTitle>
         <CardDescription>
-          Pick the mode you want, then Apply. The dashboard will stay
-          reachable at <code className="font-mono">{fallbackUrl}</code> if
-          anything goes wrong.
+          {t("Pick the mode you want, then Apply. The dashboard will stay reachable at")}{" "}
+          <code className="font-mono">{fallbackUrl}</code>{" "}
+          {t("if anything goes wrong.")}
         </CardDescription>
       </CardHeader>
       <CardBody>
         <form
           onSubmit={onSubmit}
           className="space-y-5"
-          aria-label="Change host domain"
+          aria-label={t("Change host domain")}
         >
           <fieldset className="space-y-3">
             <legend className="text-xs font-medium text-neutral-400">
-              Mode
+              {t("Mode")}
             </legend>
 
             <ModeRadio
               id="host-domain-mode-tls"
               testid="host-domain-mode-tls"
-              label="Set or change a domain (HTTPS via Caddy + Let's Encrypt)"
-              description="A single hostname like synapse.example.com. Caddy issues a TLS cert on first request."
+              label={t("Set or change a domain (HTTPS via Caddy + Let's Encrypt)")}
+              description={t(
+                "A single hostname like synapse.example.com. Caddy issues a TLS cert on first request.",
+              )}
               checked={mode === "tls"}
               onChange={() => setMode("tls")}
             />
@@ -526,8 +537,10 @@ function ChangeForm({
             <ModeRadio
               id="host-domain-mode-wildcard"
               testid="host-domain-mode-wildcard"
-              label="Add or change a wildcard base (per-deployment subdomains)"
-              description="Per-deployment URLs become https://<name>.<base> instead of path-based. Requires a wildcard A record."
+              label={t("Add or change a wildcard base (per-deployment subdomains)")}
+              description={t(
+                "Per-deployment URLs become https://<name>.<base> instead of path-based. Requires a wildcard A record.",
+              )}
               checked={mode === "tls_with_wildcard"}
               onChange={() => setMode("tls_with_wildcard")}
             />
@@ -535,8 +548,10 @@ function ChangeForm({
             <ModeRadio
               id="host-domain-mode-plain"
               testid="host-domain-mode-plain"
-              label="Switch to plain HTTP (no domain, just the IP)"
-              description="Useful for testing on a fresh VPS before DNS is ready. The dashboard becomes reachable over HTTP only."
+              label={t("Switch to plain HTTP (no domain, just the IP)")}
+              description={t(
+                "Useful for testing on a fresh VPS before DNS is ready. The dashboard becomes reachable over HTTP only.",
+              )}
               checked={mode === "plain"}
               onChange={() => setMode("plain")}
             />
@@ -548,7 +563,7 @@ function ChangeForm({
                 htmlFor="host-domain-domain-input"
                 className="block text-xs text-neutral-400"
               >
-                Domain
+                {t("Domain")}
               </label>
               <Input
                 id="host-domain-domain-input"
@@ -564,14 +579,15 @@ function ChangeForm({
                 className="rounded border border-yellow-900/60 bg-yellow-900/20 px-3 py-2 text-[11px] text-yellow-200"
                 data-testid="host-domain-dns-hint"
               >
-                <span className="font-semibold">DNS first:</span> point an{" "}
-                <code className="font-mono">A</code> record for{" "}
-                <code className="font-mono">{domain || "<domain>"}</code> at{" "}
+                <span className="font-semibold">{t("DNS first:")}</span>{" "}
+                {t("point an")}{" "}
+                <code className="font-mono">A</code> {t("record for")}{" "}
+                <code className="font-mono">{domain || "<domain>"}</code> {t("at")}{" "}
                 <code className="font-mono">
-                  {current.publicIp || "this host's IP"}
+                  {current.publicIp || t("this host's IP")}
                 </code>{" "}
-                <strong>before</strong> applying. The change will fail if
-                DNS isn&rsquo;t pointing yet.
+                <strong>{t("before")}</strong>{" "}
+                {t("applying. The change will fail if DNS isn’t pointing yet.")}
               </p>
 
               {matchingCredential && (
@@ -588,17 +604,18 @@ function ChangeForm({
                   />
                   <span className="space-y-0.5">
                     <span className="block font-medium text-emerald-100">
-                      Auto-configure DNS via Cloudflare credential “
-                      {matchingCredential.cred.label}”
+                      {t("Auto-configure DNS via Cloudflare credential “{label}”", {
+                        label: matchingCredential.cred.label,
+                      })}
                     </span>
                     <span className="block text-emerald-200/80">
-                      Synapse will upsert{" "}
+                      {t("Synapse will upsert")}{" "}
                       <code className="font-mono">A {domain || "<domain>"}</code>{" "}
-                      → this host&rsquo;s IP in zone{" "}
+                      {t("→ this host’s IP in zone")}{" "}
                       <code className="font-mono">
                         {matchingCredential.zone}
                       </code>{" "}
-                      before applying. Skip this if you manage DNS by hand.
+                      {t("before applying. Skip this if you manage DNS by hand.")}
                     </span>
                   </span>
                 </label>
@@ -612,7 +629,7 @@ function ChangeForm({
                 htmlFor="host-domain-base-input"
                 className="block text-xs text-neutral-400"
               >
-                Wildcard base domain
+                {t("Wildcard base domain")}
               </label>
               <Input
                 id="host-domain-base-input"
@@ -625,11 +642,10 @@ function ChangeForm({
                 data-testid="host-domain-base-input"
               />
               <p className="text-[11px] text-neutral-500">
-                Add a wildcard{" "}
-                <code className="font-mono">A</code> record (
-                <code className="font-mono">*.{baseDomain || "<base>"}</code>)
-                pointing at the same IP. Caddy issues per-subdomain certs
-                on demand.
+                {t("Add a wildcard")}{" "}
+                <code className="font-mono">A</code> {t("record (")}
+                <code className="font-mono">*.{baseDomain || "<base>"}</code>
+                {t(") pointing at the same IP. Caddy issues per-subdomain certs on demand.")}
               </p>
               {/* v1.9.0: live URL preview — concrete sample URL so the
                   operator can visualise the shape before submitting. */}
@@ -638,7 +654,7 @@ function ChangeForm({
                   className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[11px] text-neutral-300"
                   data-testid="host-domain-wildcard-preview"
                 >
-                  <span className="text-neutral-500">Deployments will appear as: </span>
+                  <span className="text-neutral-500">{t("Deployments will appear as:")} </span>
                   <code className="font-mono text-cyan-200">
                     https://&lt;name&gt;.{baseDomain.trim().toLowerCase()}
                   </code>
@@ -653,8 +669,8 @@ function ChangeForm({
                 htmlFor="host-domain-acme-input"
                 className="block text-xs text-neutral-400"
               >
-                ACME contact email{" "}
-                <span className="text-neutral-600">(optional)</span>
+                {t("ACME contact email")}{" "}
+                <span className="text-neutral-600">{t("(optional)")}</span>
               </label>
               <Input
                 id="host-domain-acme-input"
@@ -666,8 +682,9 @@ function ChangeForm({
                 data-testid="host-domain-acme-input"
               />
               <p className="text-[11px] text-neutral-500">
-                Let&rsquo;s Encrypt uses this for cert-expiry warnings.
-                Leaving it blank keeps the existing contact.
+                {t(
+                  "Let’s Encrypt uses this for cert-expiry warnings. Leaving it blank keeps the existing contact.",
+                )}
               </p>
             </div>
           )}
@@ -685,11 +702,9 @@ function ChangeForm({
                 data-testid="host-domain-plain-confirm"
               />
               <span>
-                I understand this strips TLS and the dashboard will be
-                reachable over plain HTTP only. The CLI and any browser
-                bookmarks pointing at the current{" "}
-                <code className="font-mono">https://</code> URL will stop
-                working until I update them.
+                {t("I understand this strips TLS and the dashboard will be reachable over plain HTTP only. The CLI and any browser bookmarks pointing at the current")}{" "}
+                <code className="font-mono">https://</code>{" "}
+                {t("URL will stop working until I update them.")}
               </span>
             </label>
           )}
@@ -706,14 +721,14 @@ function ChangeForm({
 
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onCancel}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               type="submit"
               disabled={validationMessage !== null}
               data-testid="host-domain-apply"
             >
-              Apply…
+              {t("Apply…")}
             </Button>
           </div>
         </form>
@@ -824,6 +839,7 @@ function ConfirmDialogInner({
   mode: Mode;
   onConfirm: () => Promise<void>;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -834,7 +850,7 @@ function ConfirmDialogInner({
       await onConfirm();
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : "Could not start the change",
+        err instanceof ApiError ? err.message : t("Could not start the change"),
       );
     } finally {
       setPending(false);
@@ -845,16 +861,16 @@ function ConfirmDialogInner({
     <Dialog
       open={open}
       onClose={() => !pending && onClose()}
-      title="Confirm host change"
+      title={t("Confirm host change")}
     >
       <div className="space-y-3" data-testid="host-domain-confirm-dialog">
         <div className="space-y-1 rounded-md border border-neutral-800 bg-neutral-950 p-3 text-xs">
           <div className="flex items-baseline gap-2">
-            <span className="w-16 text-neutral-500">From</span>
+            <span className="w-16 text-neutral-500">{t("From")}</span>
             <code className="font-mono text-neutral-200">{currentUrl}</code>
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="w-16 text-neutral-500">To</span>
+            <span className="w-16 text-neutral-500">{t("To")}</span>
             <code
               className="font-mono text-neutral-100"
               data-testid="host-domain-confirm-target"
@@ -866,17 +882,21 @@ function ConfirmDialogInner({
 
         <p className="text-xs text-neutral-300">
           {mode === "plain"
-            ? "Synapse will switch to plain HTTP in ~30s. The browser tab will redirect automatically when it's reachable."
-            : "Synapse will be reachable at the new domain in ~30s. The page will redirect automatically when the new URL is live."}
+            ? t(
+                "Synapse will switch to plain HTTP in ~30s. The browser tab will redirect automatically when it's reachable.",
+              )
+            : t(
+                "Synapse will be reachable at the new domain in ~30s. The page will redirect automatically when the new URL is live.",
+              )}
         </p>
 
         <p
           className="rounded border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-200"
           data-testid="host-domain-confirm-fallback"
         >
-          <span className="font-semibold">If anything goes wrong,</span> the
-          dashboard will still be reachable at{" "}
-          <code className="font-mono">{fallbackUrl}</code>. Bookmark it now.
+          <span className="font-semibold">{t("If anything goes wrong,")}</span>{" "}
+          {t("the dashboard will still be reachable at")}{" "}
+          <code className="font-mono">{fallbackUrl}</code>. {t("Bookmark it now.")}
         </p>
 
         {error && <p className="text-xs text-red-400">{error}</p>}
@@ -888,14 +908,14 @@ function ConfirmDialogInner({
             disabled={pending}
             data-testid="host-domain-confirm-cancel"
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             onClick={submit}
             disabled={pending}
             data-testid="host-domain-confirm-apply"
           >
-            {pending ? "Starting…" : "Apply"}
+            {pending ? t("Starting…") : t("Apply")}
           </Button>
         </div>
       </div>
@@ -920,6 +940,7 @@ function ApplyDialog({
   targetUrl: string;
   dnsAuto?: HostDomainDNSAutoResult;
 }) {
+  const { t } = useT();
   const [status, setStatus] = useState<HostDomainJobStatus | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [probeTimedOut, setProbeTimedOut] = useState(false);
@@ -953,7 +974,7 @@ function ApplyDialog({
           setPollError(
             err instanceof ApiError
               ? err.message
-              : "Lost contact with the host updater",
+              : t("Lost contact with the host updater"),
           );
         }
       }
@@ -965,7 +986,7 @@ function ApplyDialog({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [open, jobId]);
+  }, [open, jobId, t]);
 
   // When the job succeeds, kick off the new-URL probe. We hit
   // /v1/install_status (public, no auth) every 3s; first 200 wins.
@@ -1025,16 +1046,16 @@ function ApplyDialog({
   }, [status?.state, open, targetUrl]);
 
   const stateBadge = (() => {
-    if (!status) return { tone: "neutral" as const, label: "starting…" };
+    if (!status) return { tone: "neutral" as const, label: t("starting…") };
     switch (status.state) {
       case "queued":
-        return { tone: "neutral" as const, label: "queued" };
+        return { tone: "neutral" as const, label: t("queued") };
       case "running":
-        return { tone: "yellow" as const, label: "running" };
+        return { tone: "yellow" as const, label: t("running") };
       case "succeeded":
-        return { tone: "green" as const, label: "succeeded" };
+        return { tone: "green" as const, label: t("succeeded") };
       case "failed":
-        return { tone: "red" as const, label: "failed" };
+        return { tone: "red" as const, label: t("failed") };
     }
   })();
 
@@ -1043,12 +1064,12 @@ function ApplyDialog({
 
   const dialogTitle =
     status?.state === "failed"
-      ? "Host change failed"
+      ? t("Host change failed")
       : status?.state === "succeeded"
         ? probeTimedOut
-          ? "Almost there — TLS may still be issuing"
-          : "Waiting for the new URL to come up"
-        : "Changing host configuration…";
+          ? t("Almost there — TLS may still be issuing")
+          : t("Waiting for the new URL to come up")
+        : t("Changing host configuration…");
 
   return (
     <Dialog
@@ -1067,7 +1088,7 @@ function ApplyDialog({
           <Badge tone={stateBadge.tone} data-testid="host-domain-apply-state">
             {stateBadge.label}
           </Badge>
-          <span className="text-neutral-500">target</span>
+          <span className="text-neutral-500">{t("target")}</span>
           <code className="truncate rounded bg-neutral-900 px-2 py-0.5 font-mono text-[11px] text-neutral-200">
             {targetUrl}
           </code>
@@ -1078,11 +1099,11 @@ function ApplyDialog({
             className="rounded border border-emerald-900/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-100"
             data-testid="host-domain-dns-auto-success"
           >
-            ✓ Created A record{" "}
+            {t("✓ Created A record")}{" "}
             <code className="font-mono">{dnsAuto.recordName}</code> →{" "}
             <code className="font-mono">{dnsAuto.ip}</code>{" "}
-            in zone <code className="font-mono">{dnsAuto.zone}</code>{" "}
-            via Cloudflare
+            {t("in zone")} <code className="font-mono">{dnsAuto.zone}</code>{" "}
+            {t("via Cloudflare")}
             {dnsAuto.ipDetectedVia ? ` (${dnsAuto.ipDetectedVia})` : ""}.
           </p>
         )}
@@ -1091,16 +1112,15 @@ function ApplyDialog({
             className="rounded border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-200"
             data-testid="host-domain-dns-auto-failure"
           >
-            <span className="font-semibold">Auto DNS skipped:</span>{" "}
-            {dnsAuto.reason ?? "unknown reason"}. Create the A record by
-            hand and re-apply if the reconfigure fails below.
+            <span className="font-semibold">{t("Auto DNS skipped:")}</span>{" "}
+            {dnsAuto.reason ?? t("unknown reason")}.{" "}
+            {t("Create the A record by hand and re-apply if the reconfigure fails below.")}
           </p>
         )}
 
         {pollError && (
           <p className="rounded border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-[11px] text-amber-200">
-            {pollError} — the synapse-api might be restarting. Will keep
-            polling.
+            {pollError} {t("— the synapse-api might be restarting. Will keep polling.")}
           </p>
         )}
 
@@ -1115,21 +1135,22 @@ function ApplyDialog({
 
         {status?.state === "succeeded" && !probeTimedOut && (
           <p className="rounded bg-emerald-900/40 px-3 py-2 text-xs text-emerald-200">
-            Setup completed. Probing the new URL — the page will redirect
-            automatically once it answers.
+            {t(
+              "Setup completed. Probing the new URL — the page will redirect automatically once it answers.",
+            )}
           </p>
         )}
 
         {status?.state === "succeeded" && probeTimedOut && (
           <div className="space-y-2">
             <p className="rounded border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
-              The host change finished, but the new URL isn&rsquo;t
-              answering yet. TLS issuance can take a couple of minutes the
-              first time. Open the URL manually when you&rsquo;re ready.
+              {t(
+                "The host change finished, but the new URL isn’t answering yet. TLS issuance can take a couple of minutes the first time. Open the URL manually when you’re ready.",
+              )}
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={onClose}>
-                Close
+                {t("Close")}
               </Button>
               <a
                 href={targetUrl}
@@ -1137,7 +1158,7 @@ function ApplyDialog({
                 rel="noopener noreferrer"
                 className="inline-flex h-9 items-center justify-center rounded-md bg-violet-500 px-3.5 text-sm font-medium text-white hover:bg-violet-400"
               >
-                Open new URL
+                {t("Open new URL")}
               </a>
             </div>
           </div>
@@ -1146,21 +1167,21 @@ function ApplyDialog({
         {status?.state === "failed" && (
           <div className="space-y-2">
             <p className="rounded bg-red-900/40 px-3 py-2 text-xs text-red-200">
-              <span className="font-semibold">Change failed.</span>{" "}
-              {status.error || "setup.sh exited non-zero."} A rollback may
-              be needed — SSH to your VPS and run{" "}
+              <span className="font-semibold">{t("Change failed.")}</span>{" "}
+              {status.error || t("setup.sh exited non-zero.")}{" "}
+              {t("A rollback may be needed — SSH to your VPS and run")}{" "}
               <code className="rounded bg-neutral-900 px-1 py-0.5 font-mono">
                 ./setup.sh --status
               </code>{" "}
-              to inspect the current state, then{" "}
+              {t("to inspect the current state, then")}{" "}
               <code className="rounded bg-neutral-900 px-1 py-0.5 font-mono">
                 ./setup.sh --change-domain
               </code>{" "}
-              to retry.
+              {t("to retry.")}
             </p>
             <div className="flex justify-end gap-2">
               <Button onClick={onClose} data-testid="host-domain-apply-close">
-                Close
+                {t("Close")}
               </Button>
             </div>
           </div>

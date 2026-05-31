@@ -7,6 +7,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -70,6 +71,7 @@ const DESCRIPTIONS: Record<TokenScope, string> = {
 };
 
 export function TokensPanel(props: Props = { scope: "user" }) {
+  const { t } = useT();
   const scope = props.scope ?? "user";
   const target = "target" in props ? props.target : undefined;
 
@@ -125,7 +127,7 @@ export function TokensPanel(props: Props = { scope: "user" }) {
       setName("");
       await mutate();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Could not create token");
+      setFormError(err instanceof ApiError ? err.message : t("Could not create token"));
     } finally {
       setPending(false);
     }
@@ -134,7 +136,9 @@ export function TokensPanel(props: Props = { scope: "user" }) {
   const remove = async (token: AccessToken) => {
     if (
       typeof window !== "undefined" &&
-      !window.confirm(`Delete token "${token.name}"? This can't be undone.`)
+      !window.confirm(
+        t(`Delete token "{name}"? This can't be undone.`, { name: token.name }),
+      )
     ) {
       return;
     }
@@ -143,7 +147,7 @@ export function TokensPanel(props: Props = { scope: "user" }) {
       await mutate();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not delete token",
+        err instanceof ApiError ? err.message : t("Could not delete token"),
       );
     }
   };
@@ -160,15 +164,15 @@ export function TokensPanel(props: Props = { scope: "user" }) {
             id={headingId}
             className="text-sm font-semibold text-neutral-200"
           >
-            {heading}
+            {t(heading)}
           </h2>
-          <p className="text-xs text-neutral-500">{description}</p>
+          <p className="text-xs text-neutral-500">{t(description)}</p>
         </div>
         <Button
           onClick={() => setOpen(true)}
           data-testid={`tokens-new-${scope}`}
         >
-          New token
+          {t("New token")}
         </Button>
       </div>
 
@@ -183,16 +187,18 @@ export function TokensPanel(props: Props = { scope: "user" }) {
 
       {error && (
         <p className="text-xs text-red-400">
-          Failed to load tokens: {(error as Error).message}
+          {t("Failed to load tokens: {message}", {
+            message: (error as Error).message,
+          })}
         </p>
       )}
 
       {data && data.items.length === 0 && (
         <Card>
           <CardBody className="text-center">
-            <p className="text-sm text-neutral-300">No tokens yet.</p>
+            <p className="text-sm text-neutral-300">{t("No tokens yet.")}</p>
             <p className="mt-1 text-xs text-neutral-500">
-              Create one to use the Synapse API from outside the dashboard.
+              {t("Create one to use the Synapse API from outside the dashboard.")}
             </p>
           </CardBody>
         </Card>
@@ -210,20 +216,24 @@ export function TokensPanel(props: Props = { scope: "user" }) {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-neutral-100">{tok.name}</p>
                   <p className="font-mono text-xs text-neutral-500">
-                    scope: {tok.scope} · created{" "}
-                    {new Date(tok.createTime).toLocaleString()}
+                    {t("scope: {scope} · created {created}", {
+                      scope: tok.scope,
+                      created: new Date(tok.createTime).toLocaleString(),
+                    })}
                     {tok.lastUsedAt
-                      ? ` · last used ${new Date(tok.lastUsedAt).toLocaleString()}`
-                      : " · never used"}
+                      ? t(" · last used {lastUsed}", {
+                          lastUsed: new Date(tok.lastUsedAt).toLocaleString(),
+                        })
+                      : t(" · never used")}
                   </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => remove(tok)}
-                  aria-label={`Delete token ${tok.name}`}
+                  aria-label={t("Delete token {name}", { name: tok.name })}
                 >
-                  Delete
+                  {t("Delete")}
                 </Button>
               </div>
             ))}
@@ -234,7 +244,9 @@ export function TokensPanel(props: Props = { scope: "user" }) {
       <Dialog
         open={open}
         onClose={closeDialog}
-        title={issued ? "Token created" : `New ${scope} access token`}
+        title={
+          issued ? t("Token created") : t("New {scope} access token", { scope })
+        }
       >
         {!issued && (
           <form onSubmit={submit} className="space-y-4">
@@ -243,7 +255,7 @@ export function TokensPanel(props: Props = { scope: "user" }) {
                 htmlFor={`token-name-${scope}`}
                 className="block text-xs text-neutral-400"
               >
-                Name
+                {t("Name")}
               </label>
               <Input
                 id={`token-name-${scope}`}
@@ -255,7 +267,7 @@ export function TokensPanel(props: Props = { scope: "user" }) {
                 maxLength={100}
               />
               <p className="text-xs text-neutral-500">
-                A short label so you can recognise this token later.
+                {t("A short label so you can recognise this token later.")}
               </p>
             </div>
             {formError && <p className="text-xs text-red-400">{formError}</p>}
@@ -266,14 +278,14 @@ export function TokensPanel(props: Props = { scope: "user" }) {
                 onClick={closeDialog}
                 disabled={pending}
               >
-                Cancel
+                {t("Cancel")}
               </Button>
               <Button
                 type="submit"
                 disabled={pending || !name.trim()}
                 data-testid={`tokens-create-${scope}`}
               >
-                {pending ? "Creating..." : "Create"}
+                {pending ? t("Creating...") : t("Create")}
               </Button>
             </div>
           </form>
@@ -282,11 +294,12 @@ export function TokensPanel(props: Props = { scope: "user" }) {
         {issued && (
           <div className="space-y-3">
             <p className="rounded bg-yellow-900/40 px-3 py-2 text-xs text-yellow-200">
-              Save this token now — you won&apos;t see it again. If you lose it,
-              create a new one.
+              {t(
+                "Save this token now — you won't see it again. If you lose it, create a new one.",
+              )}
             </p>
             <p className="text-xs text-neutral-400">
-              Token for <span className="font-medium">{issued.name}</span>:
+              {t("Token for")} <span className="font-medium">{issued.name}</span>:
             </p>
             <code
               data-testid="issued-token"
@@ -295,7 +308,7 @@ export function TokensPanel(props: Props = { scope: "user" }) {
               {issued.token}
             </code>
             <div className="flex justify-end">
-              <Button onClick={closeDialog}>Done</Button>
+              <Button onClick={closeDialog}>{t("Done")}</Button>
             </div>
           </div>
         )}

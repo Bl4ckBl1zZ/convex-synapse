@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IconLayers } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -35,6 +36,7 @@ type Props = { projectId: string };
 // tolerates a 403 there (non-admin operators just see the host id instead of
 // the friendly name — Cells themselves stay fully usable).
 export function CellsPanel({ projectId }: Props) {
+  const { t } = useT();
   const cells = useSWR<Cell[]>(["/cells", projectId], () =>
     api.cells.listByProject(projectId),
   );
@@ -88,10 +90,10 @@ export function CellsPanel({ projectId }: Props) {
         <div className="flex items-baseline gap-2">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
             <IconLayers className="opacity-70" />
-            Cells
+            {t("Cells")}
           </h3>
           <span className="text-xs text-neutral-500">
-            — operational units in this project
+            {t("— operational units in this project")}
           </span>
         </div>
         <Button
@@ -99,17 +101,17 @@ export function CellsPanel({ projectId }: Props) {
           onClick={() => setCreateOpen(true)}
           data-testid="create-cell-button"
         >
-          + Create cell
+          {t("+ Create cell")}
         </Button>
       </div>
 
       <div className="p-5">
         {cells.error && !(cells.error instanceof ApiError) && (
-          <p className="text-xs text-red-400">Failed to load cells.</p>
+          <p className="text-xs text-red-400">{t("Failed to load cells.")}</p>
         )}
         {cells.error instanceof ApiError && (
           <p className="text-xs text-red-400">
-            Failed to load cells: {cells.error.message}
+            {t("Failed to load cells: {message}", { message: cells.error.message })}
           </p>
         )}
 
@@ -123,12 +125,14 @@ export function CellsPanel({ projectId }: Props) {
 
         {cells.data && list.length === 0 && (
           <EmptyState
-            title="No cells yet"
-            description="Existing deployments are backfilled into core cells when cells are enabled (SYNAPSE_ENABLE_CELLS). You can also create one manually — e.g. a runtime cell for background processing."
+            title={t("No cells yet")}
+            description={t(
+              "Existing deployments are backfilled into core cells when cells are enabled (SYNAPSE_ENABLE_CELLS). You can also create one manually — e.g. a runtime cell for background processing.",
+            )}
             testId="cells-empty"
             action={
               <Button size="sm" onClick={() => setCreateOpen(true)}>
-                Create cell
+                {t("Create cell")}
               </Button>
             }
           />
@@ -272,6 +276,7 @@ function CellCard({
   onDrain: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useT();
   return (
     <Card data-testid="cell-card" data-cell-name={cell.name}>
       <CardBody className="flex items-start justify-between gap-4">
@@ -292,23 +297,23 @@ function CellCard({
           {/* Project → Cell → Deployment / Host tree. */}
           <div className="space-y-0.5 text-xs text-neutral-400">
             <p>
-              <span className="text-neutral-600">Deployment:</span>{" "}
+              <span className="text-neutral-600">{t("Deployment:")}</span>{" "}
               {cell.primaryDeploymentId ? (
                 <span className="font-mono text-neutral-300">
                   {deploymentName ?? cell.primaryDeploymentId.slice(0, 8)}
                 </span>
               ) : (
-                <span className="text-neutral-600">none attached</span>
+                <span className="text-neutral-600">{t("none attached")}</span>
               )}
             </p>
             <p>
-              <span className="text-neutral-600">Host:</span>{" "}
+              <span className="text-neutral-600">{t("Host:")}</span>{" "}
               {cell.primaryHostId ? (
                 <span className="text-neutral-300">
-                  {hostName ?? `host ${cell.primaryHostId.slice(0, 8)}`}
+                  {hostName ?? t("host {id}", { id: cell.primaryHostId.slice(0, 8) })}
                 </span>
               ) : (
-                <span className="text-neutral-600">none</span>
+                <span className="text-neutral-600">{t("none")}</span>
               )}
             </p>
           </div>
@@ -319,21 +324,21 @@ function CellCard({
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <Button variant="secondary" size="sm" onClick={onDetails}>
-            Details
+            {t("Details")}
           </Button>
           <Button variant="ghost" size="sm" onClick={onAttachDeployment}>
-            Attach deployment
+            {t("Attach deployment")}
           </Button>
           <Button variant="ghost" size="sm" onClick={onAttachHost}>
-            Attach host
+            {t("Attach host")}
           </Button>
           {cell.status !== "draining" && (
             <Button variant="ghost" size="sm" onClick={onDrain}>
-              Drain
+              {t("Drain")}
             </Button>
           )}
           <Button variant="danger" size="sm" onClick={onDelete}>
-            Delete
+            {t("Delete")}
           </Button>
         </div>
       </CardBody>
@@ -377,6 +382,7 @@ function CreateCellDialog({
   const [description, setDescription] = useState("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const { t } = useT();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -395,7 +401,7 @@ function CreateCellDialog({
       onClose();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not create cell",
+        err instanceof ApiError ? err.message : t("Could not create cell"),
       );
     } finally {
       setPending(false);
@@ -403,11 +409,11 @@ function CreateCellDialog({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title="Create cell">
+    <Dialog open={open} onClose={onClose} title={t("Create cell")}>
       <form onSubmit={submit} className="space-y-4">
         <div className="space-y-2">
           <label htmlFor="cell-name" className="block text-xs text-neutral-400">
-            Name
+            {t("Name")}
           </label>
           <Input
             id="cell-name"
@@ -421,9 +427,9 @@ function CreateCellDialog({
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <SelectField label="Kind" id="cell-kind" value={kind} onChange={setKind} options={KINDS} />
+          <SelectField label={t("Kind")} id="cell-kind" value={kind} onChange={setKind} options={KINDS} />
           <SelectField
-            label="Environment"
+            label={t("Environment")}
             id="cell-env"
             value={environment}
             onChange={setEnvironment}
@@ -434,7 +440,7 @@ function CreateCellDialog({
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-2">
             <label htmlFor="cell-region" className="block text-xs text-neutral-400">
-              Region <span className="text-neutral-600">(optional)</span>
+              {t("Region")} <span className="text-neutral-600">{t("(optional)")}</span>
             </label>
             <Input
               id="cell-region"
@@ -444,7 +450,7 @@ function CreateCellDialog({
             />
           </div>
           <SelectField
-            label="Isolation tier"
+            label={t("Isolation tier")}
             id="cell-tier"
             value={isolationTier}
             onChange={setIsolationTier}
@@ -454,7 +460,7 @@ function CreateCellDialog({
 
         <div className="space-y-2">
           <label htmlFor="cell-desc" className="block text-xs text-neutral-400">
-            Description <span className="text-neutral-600">(optional)</span>
+            {t("Description")} <span className="text-neutral-600">{t("(optional)")}</span>
           </label>
           <Input
             id="cell-desc"
@@ -467,10 +473,10 @@ function CreateCellDialog({
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button type="submit" disabled={pending || !name.trim()}>
-            {pending ? "Creating…" : "Create"}
+            {pending ? t("Creating…") : t("Create")}
           </Button>
         </div>
       </form>
@@ -525,6 +531,7 @@ function CellDetailsDialog({
   hostNameById: Map<string, string>;
   onClose: () => void;
 }) {
+  const { t } = useT();
   // Only fetch resources while the dialog is open for a given cell.
   const { data, error, isLoading } = useSWR<CellResourcesResponse>(
     cell ? ["/cell-resources", cell.id] : null,
@@ -551,9 +558,9 @@ function CellDetailsDialog({
         </div>
 
         <dl className="grid grid-cols-3 gap-y-1 text-xs">
-          <Meta label="Slug" value={cell.slug} mono />
+          <Meta label={t("Slug")} value={cell.slug} mono />
           <Meta
-            label="Primary deployment"
+            label={t("Primary deployment")}
             value={
               cell.primaryDeploymentId
                 ? deploymentNameById.get(cell.primaryDeploymentId) ??
@@ -563,26 +570,26 @@ function CellDetailsDialog({
             mono
           />
           <Meta
-            label="Primary host"
+            label={t("Primary host")}
             value={
               cell.primaryHostId
                 ? hostNameById.get(cell.primaryHostId) ?? cell.primaryHostId
                 : "—"
             }
           />
-          <Meta label="Created" value={formatDate(cell.createdAt)} />
-          <Meta label="Updated" value={formatDate(cell.updatedAt)} />
+          <Meta label={t("Created")} value={formatDate(cell.createdAt)} />
+          <Meta label={t("Updated")} value={formatDate(cell.updatedAt)} />
         </dl>
 
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-neutral-200">Resources</p>
-          {isLoading && <p className="text-xs text-neutral-500">Loading…</p>}
+          <p className="text-xs font-semibold text-neutral-200">{t("Resources")}</p>
+          {isLoading && <p className="text-xs text-neutral-500">{t("Loading…")}</p>}
           {error instanceof ApiError && (
             <p className="text-xs text-red-400">{error.message}</p>
           )}
           {data && data.resources.length === 0 && (
             <p className="text-xs text-neutral-500">
-              No resources attached yet.
+              {t("No resources attached yet.")}
             </p>
           )}
           {data && data.resources.length > 0 && (
@@ -590,10 +597,10 @@ function CellDetailsDialog({
               <table className="w-full text-[11px]">
                 <thead className="bg-neutral-950 text-neutral-400">
                   <tr>
-                    <th className="px-3 py-2 text-left font-medium">Type</th>
-                    <th className="px-3 py-2 text-left font-medium">Resource</th>
-                    <th className="px-3 py-2 text-left font-medium">Role</th>
-                    <th className="px-3 py-2 text-left font-medium">Observed</th>
+                    <th className="px-3 py-2 text-left font-medium">{t("Type")}</th>
+                    <th className="px-3 py-2 text-left font-medium">{t("Resource")}</th>
+                    <th className="px-3 py-2 text-left font-medium">{t("Role")}</th>
+                    <th className="px-3 py-2 text-left font-medium">{t("Observed")}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-900">
@@ -622,7 +629,7 @@ function CellDetailsDialog({
         </div>
 
         <div className="flex justify-end">
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose}>{t("Close")}</Button>
         </div>
       </div>
     </Dialog>
@@ -666,6 +673,7 @@ function AttachDeploymentDialog({
   onClose: () => void;
   onAttached: () => void;
 }) {
+  const { t } = useT();
   const available = deployments.filter(
     (d) => !(d.id && attachedDeploymentIds.has(d.id)),
   );
@@ -693,7 +701,7 @@ function AttachDeploymentDialog({
       onClose();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not attach deployment",
+        err instanceof ApiError ? err.message : t("Could not attach deployment"),
       );
     } finally {
       setPending(false);
@@ -701,17 +709,16 @@ function AttachDeploymentDialog({
   };
 
   return (
-    <Dialog open onClose={onClose} title={`Attach deployment to ${cell.name}`}>
+    <Dialog open onClose={onClose} title={t("Attach deployment to {name}", { name: cell.name })}>
       <form onSubmit={submit} className="space-y-4">
         {available.length === 0 ? (
           <p className="text-xs text-neutral-500">
-            Every deployment in this project is already attached to a cell. A
-            deployment can belong to only one cell at a time.
+            {t("Every deployment in this project is already attached to a cell. A deployment can belong to only one cell at a time.")}
           </p>
         ) : (
           <div className="space-y-2">
             <label htmlFor="attach-dep" className="block text-xs text-neutral-400">
-              Deployment
+              {t("Deployment")}
             </label>
             <select
               id="attach-dep"
@@ -729,8 +736,7 @@ function AttachDeploymentDialog({
               ))}
             </select>
             <p className="text-xs text-neutral-500">
-              The deployment becomes this cell&apos;s primary resource and is
-              placed on the cell&apos;s host (if one is attached).
+              {t("The deployment becomes this cell's primary resource and is placed on the cell's host (if one is attached).")}
             </p>
           </div>
         )}
@@ -738,10 +744,10 @@ function AttachDeploymentDialog({
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button type="submit" disabled={pending || available.length === 0}>
-            {pending ? "Attaching…" : "Attach"}
+            {pending ? t("Attaching…") : t("Attach")}
           </Button>
         </div>
       </form>
@@ -764,6 +770,7 @@ function AttachHostDialog({
   onClose: () => void;
   onAttached: () => void;
 }) {
+  const { t } = useT();
   const [selected, setSelected] = useState("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -791,7 +798,7 @@ function AttachHostDialog({
       onClose();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not attach host",
+        err instanceof ApiError ? err.message : t("Could not attach host"),
       );
     } finally {
       setPending(false);
@@ -799,22 +806,20 @@ function AttachHostDialog({
   };
 
   return (
-    <Dialog open onClose={onClose} title={`Attach host to ${cell.name}`}>
+    <Dialog open onClose={onClose} title={t("Attach host to {name}", { name: cell.name })}>
       <form onSubmit={submit} className="space-y-4">
         {forbidden ? (
           <p className="text-xs text-neutral-500">
-            Hosts are managed by instance admins. Ask an instance admin to
-            create a host, or sign in as one.
+            {t("Hosts are managed by instance admins. Ask an instance admin to create a host, or sign in as one.")}
           </p>
         ) : hosts.length === 0 ? (
           <p className="text-xs text-neutral-500">
-            No hosts yet. Create a host in the Hosts section first, then attach
-            it here.
+            {t("No hosts yet. Create a host in the Hosts section first, then attach it here.")}
           </p>
         ) : (
           <div className="space-y-2">
             <label htmlFor="attach-host" className="block text-xs text-neutral-400">
-              Host
+              {t("Host")}
             </label>
             <select
               id="attach-host"
@@ -830,8 +835,7 @@ function AttachHostDialog({
               ))}
             </select>
             <p className="text-xs text-neutral-500">
-              Sets the cell&apos;s primary host. Existing placements without a
-              host are pinned to it; running deployments are not moved.
+              {t("Sets the cell's primary host. Existing placements without a host are pinned to it; running deployments are not moved.")}
             </p>
           </div>
         )}
@@ -839,13 +843,13 @@ function AttachHostDialog({
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="submit"
             disabled={pending || forbidden || hosts.length === 0}
           >
-            {pending ? "Attaching…" : "Attach"}
+            {pending ? t("Attaching…") : t("Attach")}
           </Button>
         </div>
       </form>
@@ -864,6 +868,7 @@ function DrainCellDialog({
   onClose: () => void;
   onDrained: () => void;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -883,26 +888,25 @@ function DrainCellDialog({
       onDrained();
       onClose();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Could not drain cell");
+      setFormError(err instanceof ApiError ? err.message : t("Could not drain cell"));
       setPending(false);
     }
   };
 
   return (
-    <Dialog open onClose={pending ? () => {} : onClose} title="Drain cell">
+    <Dialog open onClose={pending ? () => {} : onClose} title={t("Drain cell")}>
       <div className="space-y-4">
         <p className="text-sm text-neutral-300">
-          Mark{" "}
+          {t("Mark")}{" "}
           <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
             {cell.name}
           </code>{" "}
-          as <Badge tone="yellow" className="align-middle">draining</Badge>? This
-          is a status change only — it does not stop or move any deployment.
+          {t("as")} <Badge tone="yellow" className="align-middle">{t("draining")}</Badge>{t("? This is a status change only — it does not stop or move any deployment.")}
         </p>
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="button"
@@ -910,7 +914,7 @@ function DrainCellDialog({
             disabled={pending}
             data-testid="confirm-drain-cell"
           >
-            {pending ? "Draining…" : "Drain cell"}
+            {pending ? t("Draining…") : t("Drain cell")}
           </Button>
         </div>
       </div>
@@ -929,6 +933,7 @@ function DeleteCellDialog({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -948,27 +953,25 @@ function DeleteCellDialog({
       onDeleted();
       onClose();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Could not delete cell");
+      setFormError(err instanceof ApiError ? err.message : t("Could not delete cell"));
       setPending(false);
     }
   };
 
   return (
-    <Dialog open onClose={pending ? () => {} : onClose} title="Delete cell">
+    <Dialog open onClose={pending ? () => {} : onClose} title={t("Delete cell")}>
       <div className="space-y-4">
         <p className="text-sm text-neutral-300">
-          Delete{" "}
+          {t("Delete")}{" "}
           <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
             {cell.name}
           </code>
-          ? Any deployments in it become <strong>unassigned</strong> — they keep
-          running, they just lose the grouping. A cell with active links can&apos;t
-          be deleted; remove its links first. This can&apos;t be undone.
+          {t("? Any deployments in it become")} <strong>{t("unassigned")}</strong>{t(" — they keep running, they just lose the grouping. A cell with active links can't be deleted; remove its links first. This can't be undone.")}
         </p>
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="button"
@@ -977,7 +980,7 @@ function DeleteCellDialog({
             disabled={pending}
             data-testid="confirm-delete-cell"
           >
-            {pending ? "Deleting…" : "Delete cell"}
+            {pending ? t("Deleting…") : t("Delete cell")}
           </Button>
         </div>
       </div>

@@ -5,9 +5,12 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { ApiError, api } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 export default function RegisterPage() {
+  const { t } = useT();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -19,7 +22,7 @@ export default function RegisterPage() {
     e.preventDefault();
     setError(null);
     if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setError(t("Password must be at least 8 characters."));
       return;
     }
     setPending(true);
@@ -27,7 +30,7 @@ export default function RegisterPage() {
       await api.register(email, password, name || undefined);
       router.push("/teams");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Registration failed");
+      setError(err instanceof ApiError ? err.message : t("Registration failed"));
     } finally {
       setPending(false);
     }
@@ -35,19 +38,20 @@ export default function RegisterPage() {
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
+      <LocaleSwitcher variant="pill" className="fixed right-4 top-4 z-50" />
       <form
         onSubmit={submit}
         className="w-full max-w-sm space-y-4 rounded-lg border border-neutral-800 bg-neutral-900/40 p-6"
       >
         <div>
-          <h1 className="text-lg font-semibold">Create your account</h1>
+          <h1 className="text-lg font-semibold">{t("Create your account")}</h1>
           <p className="mt-1 text-xs text-neutral-400">
-            One account spans all teams you belong to.
+            {t("One account spans all teams you belong to.")}
           </p>
         </div>
         <div className="space-y-2">
           <label htmlFor="register-name" className="block text-xs text-neutral-400">
-            Name (optional)
+            {t("Name (optional)")}
           </label>
           <Input
             id="register-name"
@@ -58,7 +62,7 @@ export default function RegisterPage() {
         </div>
         <div className="space-y-2">
           <label htmlFor="register-email" className="block text-xs text-neutral-400">
-            Email
+            {t("Email")}
           </label>
           <Input
             id="register-email"
@@ -71,7 +75,7 @@ export default function RegisterPage() {
         </div>
         <div className="space-y-2">
           <label htmlFor="register-password" className="block text-xs text-neutral-400">
-            Password (8+ chars)
+            {t("Password (8+ chars)")}
           </label>
           <Input
             id="register-password"
@@ -88,12 +92,12 @@ export default function RegisterPage() {
           </p>
         )}
         <Button type="submit" disabled={pending} className="w-full">
-          {pending ? "Creating account..." : "Create account"}
+          {pending ? t("Creating account...") : t("Create account")}
         </Button>
         <p className="text-center text-xs text-neutral-500">
-          Already have one?{" "}
+          {t("Already have one?")}{" "}
           <Link href="/login" className="text-neutral-200 hover:underline">
-            Sign in
+            {t("Sign in")}
           </Link>
         </p>
       </form>

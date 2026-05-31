@@ -9,6 +9,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, type ActivityEvent, type ActivityResponse, type AuditEvent, type ListAuditLogResponse } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // AuditLogView — shared table used by:
 //   - /teams/<ref>/audit              (team-wide audit, admin-only on the API)
@@ -84,6 +85,7 @@ function normaliseProject(e: ActivityEvent): NormalEvent {
 }
 
 export function AuditLogView({ source, embedded = false }: Props) {
+  const { t } = useT();
   const key =
     source.kind === "team"
       ? ["/audit", source.teamRef]
@@ -178,12 +180,12 @@ export function AuditLogView({ source, embedded = false }: Props) {
       <div className="flex items-center justify-between gap-4 border-b border-neutral-800/80 px-5 py-3.5">
         <div className="flex items-baseline gap-2">
           <h3 className="text-sm font-semibold text-neutral-100">
-            {source.kind === "team" ? "Audit log" : "Project activity"}
+            {source.kind === "team" ? t("Audit log") : t("Project activity")}
           </h3>
           <span className="text-xs text-neutral-500">
-            {filtered.length} {filtered.length === 1 ? "event" : "events"}
+            {filtered.length} {filtered.length === 1 ? t("event") : t("events")}
             {events.length !== filtered.length && (
-              <span className="text-neutral-600"> (of {events.length})</span>
+              <span className="text-neutral-600"> {t("(of {count})", { count: events.length })}</span>
             )}
           </span>
         </div>
@@ -200,9 +202,9 @@ export function AuditLogView({ source, embedded = false }: Props) {
             <FilterSelect
               value={actorFilter}
               onChange={setActorFilter}
-              placeholder="All actors"
+              placeholder={t("All actors")}
               options={[
-                { value: "", label: "All actors" },
+                { value: "", label: t("All actors") },
                 ...actorOptions.map(([id, label]) => ({ value: id, label })),
               ]}
               testid="audit-filter-actor"
@@ -212,8 +214,8 @@ export function AuditLogView({ source, embedded = false }: Props) {
             value={verbFilter}
             onChange={(v) => setVerbFilter(v as VerbBucket | "all")}
             options={[
-              { value: "all", label: "All actions" },
-              ...VERB_BUCKETS.map((b) => ({ value: b, label: VERB_LABEL[b] })),
+              { value: "all", label: t("All actions") },
+              ...VERB_BUCKETS.map((b) => ({ value: b, label: t(VERB_LABEL[b]) })),
             ]}
             testid="audit-filter-verb"
           />
@@ -222,8 +224,8 @@ export function AuditLogView({ source, embedded = false }: Props) {
               value={targetFilter}
               onChange={setTargetFilter}
               options={[
-                { value: "all", label: "All targets" },
-                ...targetOptions.map((t) => ({ value: t, label: t })),
+                { value: "all", label: t("All targets") },
+                ...targetOptions.map((tt) => ({ value: tt, label: tt })),
               ]}
               testid="audit-filter-target"
             />
@@ -231,7 +233,7 @@ export function AuditLogView({ source, embedded = false }: Props) {
           <Input
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Search metadata, names…"
+            placeholder={t("Search metadata, names…")}
             className="h-7 flex-1 min-w-[160px] text-xs"
             data-testid="audit-filter-search"
           />
@@ -250,20 +252,20 @@ export function AuditLogView({ source, embedded = false }: Props) {
         {error instanceof ApiError && error.status === 403 && (
           <p className="px-5 py-6 text-sm text-neutral-300">
             {source.kind === "team"
-              ? "Only team admins can view the audit log."
-              : "You don't have permission to view this project's activity."}
+              ? t("Only team admins can view the audit log.")
+              : t("You don't have permission to view this project's activity.")}
           </p>
         )}
         {error && !(error instanceof ApiError && error.status === 403) && (
           <p className="px-5 py-6 text-sm text-red-400">
-            Failed to load audit log: {(error as Error).message}
+            {t("Failed to load audit log: {message}", { message: (error as Error).message })}
           </p>
         )}
         {data && filtered.length === 0 && (
           <p className="px-5 py-6 text-center text-sm text-neutral-500">
             {events.length === 0
-              ? "No audit events recorded yet."
-              : "No events match the current filters."}
+              ? t("No audit events recorded yet.")
+              : t("No events match the current filters.")}
           </p>
         )}
         {data && filtered.length > 0 && (
@@ -303,6 +305,7 @@ const RANGE_MS: Record<RangeKey, number | null> = {
 const RANGE_LABEL: Record<RangeKey, string> = { "1d": "24h", "7d": "7 days", "30d": "30 days", all: "All time" };
 
 function RangeChips({ value, onChange }: { value: RangeKey; onChange: (k: RangeKey) => void }) {
+  const { t } = useT();
   return (
     <div className="inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5">
       {(["1d", "7d", "30d", "all"] as RangeKey[]).map((k) => (
@@ -318,7 +321,7 @@ function RangeChips({ value, onChange }: { value: RangeKey; onChange: (k: RangeK
           )}
           data-testid={`audit-range-${k}`}
         >
-          {RANGE_LABEL[k]}
+          {t(RANGE_LABEL[k])}
         </button>
       ))}
     </div>
@@ -412,10 +415,11 @@ function humanDayLabel(d: Date): string {
 }
 
 function DaySection({ day }: { day: DayGroup }) {
+  const { t } = useT();
   return (
     <section data-testid={`audit-day-${day.iso}`}>
       <div className="sticky top-0 z-10 border-b border-neutral-900 bg-neutral-950/80 px-5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-neutral-500 backdrop-blur">
-        {day.label}
+        {t(day.label)}
       </div>
       <ul>
         {day.events.map((e) => (
@@ -438,6 +442,7 @@ const VERB_TONE: Record<VerbBucket, { border: string; text: string; icon: string
 };
 
 function EventRow({ event }: { event: NormalEvent }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const bucket = verbBucketOf(event.action);
   const tone = VERB_TONE[bucket];
@@ -484,11 +489,11 @@ function EventRow({ event }: { event: NormalEvent }) {
             )}
           </div>
           <p className="mt-0.5 font-mono text-[10.5px] text-neutral-500">
-            {event.actorName || event.actorEmail || "system"} ·{" "}
+            {event.actorName || event.actorEmail || t("system")} ·{" "}
             <span title={event.createTime}>{formatTime(event.createTime)}</span>
             {hasMeta && (
               <span className="ml-2 text-neutral-600">
-                {open ? "▼ hide details" : "▶ show details"}
+                {open ? t("▼ hide details") : t("▶ show details")}
               </span>
             )}
           </p>
@@ -514,6 +519,7 @@ function formatTime(iso: string): string {
 /* -------------------- Export -------------------- */
 
 function ExportButton({ events, sourceKind }: { events: NormalEvent[]; sourceKind: "team" | "project" }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const filename = `synapse-${sourceKind}-audit-${new Date().toISOString().slice(0, 10)}`;
   return (
@@ -525,7 +531,7 @@ function ExportButton({ events, sourceKind }: { events: NormalEvent[]; sourceKin
         disabled={events.length === 0}
         data-testid="audit-export-open"
       >
-        Export…
+        {t("Export…")}
       </Button>
       {open && (
         <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-md border border-neutral-800 bg-neutral-950 shadow-xl">
@@ -538,7 +544,7 @@ function ExportButton({ events, sourceKind }: { events: NormalEvent[]; sourceKin
             className="block w-full px-3 py-1.5 text-left text-xs text-neutral-200 hover:bg-neutral-900"
             data-testid="audit-export-csv"
           >
-            Download CSV
+            {t("Download CSV")}
           </button>
           <button
             type="button"
@@ -549,7 +555,7 @@ function ExportButton({ events, sourceKind }: { events: NormalEvent[]; sourceKin
             className="block w-full px-3 py-1.5 text-left text-xs text-neutral-200 hover:bg-neutral-900"
             data-testid="audit-export-json"
           >
-            Download JSON
+            {t("Download JSON")}
           </button>
         </div>
       )}

@@ -3,6 +3,7 @@
 import { use } from "react";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TokensPanel } from "@/components/TokensPanel";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string; project: string };
 
@@ -21,15 +22,16 @@ export default function ProjectAccessTokensPage({
   params: Promise<Params>;
 }) {
   const { project: projectId } = use(params);
+  const { t } = useT();
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Project access tokens</CardTitle>
+          <CardTitle>{t("Project access tokens")}</CardTitle>
           <CardDescription>
-            Long-lived service tokens scoped to this project. Use for CI
-            scripts and infra automation that acts on the project as a
-            whole.
+            {t(
+              "Long-lived service tokens scoped to this project. Use for CI scripts and infra automation that acts on the project as a whole.",
+            )}
           </CardDescription>
         </CardHeader>
         <CardBody>
@@ -38,12 +40,11 @@ export default function ProjectAccessTokensPage({
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>App tokens (preview deploy keys)</CardTitle>
+          <CardTitle>{t("App tokens (preview deploy keys)")}</CardTitle>
           <CardDescription>
-            Short-lived tokens for CI/CD preview deploys. Same access
-            surface as project tokens; categorised separately so you can
-            rotate them on a different cadence without losing track of
-            which is which.
+            {t(
+              "Short-lived tokens for CI/CD preview deploys. Same access surface as project tokens; categorised separately so you can rotate them on a different cadence without losing track of which is which.",
+            )}
           </CardDescription>
         </CardHeader>
         <CardBody>

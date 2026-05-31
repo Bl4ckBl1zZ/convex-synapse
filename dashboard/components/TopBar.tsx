@@ -9,9 +9,11 @@ import { Avatar } from "@/components/ui/avatar";
 import { SynapseLogo } from "@/components/ui/logo";
 import { CliVersionChip } from "@/components/CliVersionChip";
 import { VersionStatusChip } from "@/components/VersionStatusChip";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { replayTour } from "@/components/WelcomeTour";
 import { api, type Team } from "@/lib/api";
 import { clearAuth, getCurrentUser, type User } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 // Persistent top-of-page navigation. Mirrors the structure of the Convex
 // Cloud dashboard: logo on the left, team picker next to it, primary tabs
@@ -22,6 +24,7 @@ import { clearAuth, getCurrentUser, type User } from "@/lib/auth";
 // `teamRef` is derived from the URL — outside a /teams/<ref>/… route the
 // picker is still shown but the active item is unset.
 export function TopBar() {
+  const { t } = useT();
   const pathname = usePathname();
   const teamRef = extractTeamRef(pathname);
   const router = useRouter();
@@ -50,7 +53,7 @@ export function TopBar() {
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4 sm:px-6">
         <Link
           href="/teams"
-          aria-label="Synapse home"
+          aria-label={t("Synapse home")}
           className="flex shrink-0 items-center gap-2 rounded-md p-1 text-neutral-100 transition-colors hover:bg-neutral-900"
         >
           <SynapseLogo />
@@ -66,16 +69,16 @@ export function TopBar() {
         {teamRef && (
           <nav
             className="ml-2 hidden items-center gap-0.5 md:flex"
-            aria-label="Team sections"
+            aria-label={t("Team sections")}
           >
             <TabLink
               href={`/teams/${encodeURIComponent(teamRef)}`}
-              label="Home"
+              label={t("Home")}
               active={isHomeActive(pathname, teamRef)}
             />
             <TabLink
               href={`/teams/${encodeURIComponent(teamRef)}/settings`}
-              label="Team Settings"
+              label={t("Team Settings")}
               active={pathname?.startsWith(`/teams/${teamRef}/settings`) ?? false}
             />
           </nav>
@@ -92,9 +95,9 @@ export function TopBar() {
                   ? "bg-violet-500/10 text-violet-200"
                   : "text-violet-300 hover:bg-violet-500/10 hover:text-violet-200",
               )}
-              title="Host-wide configuration (instance admin)"
+              title={t("Host-wide configuration (instance admin)")}
             >
-              Admin
+              {t("Admin")}
             </Link>
           )}
           {/* Version + GitHub-cache countdown. Hides itself for non
@@ -116,8 +119,9 @@ export function TopBar() {
                 : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200",
             )}
           >
-            Docs
+            {t("Docs")}
           </Link>
+          <LocaleSwitcher className="hidden sm:inline-flex" />
           {user && <ProfileMenu user={user} onLogout={logout} />}
         </div>
       </div>
@@ -186,6 +190,7 @@ function ChevronSep() {
 }
 
 function TeamPicker({ teamRef }: { teamRef?: string }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -221,7 +226,7 @@ function TeamPicker({ teamRef }: { teamRef?: string }) {
     };
   }, [open]);
 
-  const display = current?.name ?? teamRef ?? "Select a team";
+  const display = current?.name ?? teamRef ?? t("Select a team");
   const seed = current?.slug ?? teamRef ?? "synapse";
 
   return (
@@ -244,15 +249,15 @@ function TeamPicker({ teamRef }: { teamRef?: string }) {
           className="synapse-fade-in absolute left-0 top-full z-50 mt-1.5 w-72 overflow-hidden rounded-lg border border-neutral-800 bg-[#141416] shadow-2xl"
         >
           <div className="border-b border-neutral-800 px-3 py-2 text-[11px] uppercase tracking-wider text-neutral-500">
-            Teams
+            {t("Teams")}
           </div>
           <div className="max-h-64 overflow-y-auto py-1">
             {!teams && (
-              <div className="px-3 py-2 text-xs text-neutral-500">Loading…</div>
+              <div className="px-3 py-2 text-xs text-neutral-500">{t("Loading…")}</div>
             )}
             {teams && teams.length === 0 && (
               <div className="px-3 py-2 text-xs text-neutral-500">
-                You don't belong to any team yet.
+                {t("You don't belong to any team yet.")}
               </div>
             )}
             {teams?.map((t) => {
@@ -288,7 +293,7 @@ function TeamPicker({ teamRef }: { teamRef?: string }) {
               className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-neutral-200 transition-colors hover:bg-neutral-900"
             >
               <Plus />
-              <span>All teams · Create new</span>
+              <span>{t("All teams · Create new")}</span>
             </Link>
           </div>
         </div>
@@ -298,6 +303,7 @@ function TeamPicker({ teamRef }: { teamRef?: string }) {
 }
 
 function ProfileMenu({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -327,7 +333,7 @@ function ProfileMenu({ user, onLogout }: { user: User; onLogout: () => void }) {
           /me; the chevron next to it opens the popover. */}
       <Link
         href="/me"
-        aria-label="Account"
+        aria-label={t("Account")}
         className="flex items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
       >
         <Avatar seed={user.email} label={user.name || user.email} size="md" />
@@ -337,7 +343,7 @@ function ProfileMenu({ user, onLogout }: { user: User; onLogout: () => void }) {
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Open profile menu"
+        aria-label={t("Open profile menu")}
         className="ml-1 flex h-7 w-5 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-900 hover:text-neutral-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70"
       >
         <ChevronDown />
@@ -364,7 +370,7 @@ function ProfileMenu({ user, onLogout }: { user: User; onLogout: () => void }) {
               className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-neutral-200 transition-colors hover:bg-neutral-900"
             >
               <UserIcon />
-              Account & tokens
+              {t("Account & tokens")}
             </Link>
             <button
               type="button"
@@ -375,7 +381,7 @@ function ProfileMenu({ user, onLogout }: { user: User; onLogout: () => void }) {
               className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-neutral-200 transition-colors hover:bg-neutral-900"
             >
               <TourIcon />
-              Replay welcome tour
+              {t("Replay welcome tour")}
             </button>
             <button
               type="button"
@@ -386,7 +392,7 @@ function ProfileMenu({ user, onLogout }: { user: User; onLogout: () => void }) {
               className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-neutral-200 transition-colors hover:bg-neutral-900"
             >
               <LogoutIcon />
-              Logout
+              {t("Logout")}
             </button>
           </div>
         </div>

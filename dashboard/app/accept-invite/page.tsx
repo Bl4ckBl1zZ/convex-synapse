@@ -4,10 +4,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { ApiError, api } from "@/lib/api";
 import { loadAuth } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 function AcceptInviteInner() {
+  const { t } = useT();
   const params = useSearchParams();
   const router = useRouter();
   const token = params.get("token") ?? "";
@@ -30,7 +33,7 @@ function AcceptInviteInner() {
 
   const accept = async () => {
     if (!token) {
-      setState({ kind: "error", message: "Missing invite token in URL" });
+      setState({ kind: "error", message: t("Missing invite token in URL") });
       return;
     }
     setState({ kind: "running" });
@@ -40,45 +43,47 @@ function AcceptInviteInner() {
     } catch (err) {
       setState({
         kind: "error",
-        message: err instanceof ApiError ? err.message : "Could not accept invite",
+        message: err instanceof ApiError ? err.message : t("Could not accept invite"),
       });
     }
   };
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
+      <LocaleSwitcher variant="pill" className="fixed right-4 top-4 z-50" />
       <Card className="w-full max-w-md">
         <CardBody className="space-y-4">
           <div>
-            <h1 className="text-lg font-semibold">Accept team invite</h1>
+            <h1 className="text-lg font-semibold">{t("Accept team invite")}</h1>
             <p className="mt-1 text-xs text-neutral-400">
-              Click below to join. The invite token is consumed on accept.
+              {t("Click below to join. The invite token is consumed on accept.")}
             </p>
           </div>
 
           {!token && (
             <p className="text-xs text-red-400">
-              No <code>token</code> query parameter — the link is incomplete.
+              {t("No")} <code>token</code>{" "}
+              {t("query parameter — the link is incomplete.")}
             </p>
           )}
 
           {state.kind === "idle" && token && (
-            <Button onClick={accept}>Accept invite</Button>
+            <Button onClick={accept}>{t("Accept invite")}</Button>
           )}
           {state.kind === "running" && (
-            <p className="text-sm text-neutral-400">Joining…</p>
+            <p className="text-sm text-neutral-400">{t("Joining…")}</p>
           )}
           {state.kind === "ok" && (
             <div className="space-y-3">
               <p className="text-sm text-neutral-200">
-                You're now a member of <strong>{state.teamName}</strong>.
+                {t("You're now a member of")} <strong>{state.teamName}</strong>.
               </p>
               <Button
                 onClick={() =>
                   router.push(`/teams/${encodeURIComponent(state.teamSlug)}`)
                 }
               >
-                Go to team
+                {t("Go to team")}
               </Button>
             </div>
           )}

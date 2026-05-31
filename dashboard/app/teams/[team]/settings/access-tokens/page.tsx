@@ -3,6 +3,7 @@
 import { use } from "react";
 import { Card, CardBody, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { TokensPanel } from "@/components/TokensPanel";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string };
 
@@ -17,15 +18,14 @@ export default function TeamAccessTokensPage({
   params: Promise<Params>;
 }) {
   const { team: teamRef } = use(params);
+  const { t } = useT();
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Access Tokens</CardTitle>
+          <CardTitle>{t("Access Tokens")}</CardTitle>
           <CardDescription>
-            Team-scoped opaque tokens for CLI / CI access against this team.
-            Less privileged than your personal account tokens; more
-            privileged than per-project keys.
+            {t("Team-scoped opaque tokens for CLI / CI access against this team. Less privileged than your personal account tokens; more privileged than per-project keys.")}
           </CardDescription>
         </CardHeader>
         <CardBody>

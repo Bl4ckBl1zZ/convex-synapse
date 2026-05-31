@@ -20,6 +20,7 @@ import {
   type RemoteSetupBundle,
 } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useT } from "@/lib/i18n";
 
 // HostsPanel (feat/cell-control-plane) — instance-level machines (VPSs).
 //
@@ -32,6 +33,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 // The synapse-agent runtime (heartbeat / observed state) is a later block;
 // today hosts are registered manually + issued one-time adoption tokens.
 export function HostsPanel() {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<Host[]>(
     ["/hosts"],
     () => api.hosts.list(),
@@ -63,10 +65,10 @@ export function HostsPanel() {
         <div className="flex items-baseline gap-2">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
             <IconServer className="opacity-70" />
-            Hosts
+            {t("Hosts")}
           </h3>
           <span className="text-xs text-neutral-500">
-            — machines that run deployments
+            {t("— machines that run deployments")}
           </span>
         </div>
         <Button
@@ -74,24 +76,23 @@ export function HostsPanel() {
           onClick={() => setCreateOpen(true)}
           data-testid="create-host-button"
         >
-          + Create host
+          {t("+ Create host")}
         </Button>
       </div>
 
       <div className="space-y-3 p-5">
         <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
-          The synapse-agent is observe-only: register a host, issue an adoption
-          token, and run the agent there to get live heartbeat + observed
-          container state. The host running Synapse itself shows online
-          automatically.
+          {t(
+            "The synapse-agent is observe-only: register a host, issue an adoption token, and run the agent there to get live heartbeat + observed container state. The host running Synapse itself shows online automatically.",
+          )}
         </p>
 
         {error && !(error instanceof ApiError) && (
-          <p className="text-xs text-red-400">Failed to load hosts.</p>
+          <p className="text-xs text-red-400">{t("Failed to load hosts.")}</p>
         )}
         {error instanceof ApiError && (
           <p className="text-xs text-red-400">
-            Failed to load hosts: {error.message}
+            {t("Failed to load hosts: {message}", { message: error.message })}
           </p>
         )}
 
@@ -103,12 +104,14 @@ export function HostsPanel() {
 
         {data && hosts.length === 0 && (
           <EmptyState
-            title="No hosts yet"
-            description="Create a host to represent a VPS the control plane can place deployments on. The host this Synapse runs on is created automatically when cells are enabled."
+            title={t("No hosts yet")}
+            description={t(
+              "Create a host to represent a VPS the control plane can place deployments on. The host this Synapse runs on is created automatically when cells are enabled.",
+            )}
             testId="hosts-empty"
             action={
               <Button size="sm" onClick={() => setCreateOpen(true)}>
-                Create host
+                {t("Create host")}
               </Button>
             }
           />
@@ -215,6 +218,7 @@ function HostCard({
   onRemove: () => void;
   onRemoteSetup: () => void;
 }) {
+  const { t } = useT();
   return (
     <Card data-testid="host-card" data-host-name={host.name}>
       <CardBody className="flex items-start justify-between gap-4">
@@ -224,29 +228,29 @@ function HostCard({
               {host.name}
             </span>
             <Badge tone={hostStatusTone(hostStatus(host))}>{hostStatus(host)}</Badge>
-            {host.isSynapseHost && <Badge tone="violet">this host</Badge>}
+            {host.isSynapseHost && <Badge tone="violet">{t("this host")}</Badge>}
             <Badge tone="neutral">{host.provider}</Badge>
             {host.region && <Badge tone="neutral">{host.region}</Badge>}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-neutral-400">
             {host.publicIp && (
               <span>
-                <span className="text-neutral-600">IP:</span>{" "}
+                <span className="text-neutral-600">{t("IP:")}</span>{" "}
                 <span className="font-mono">{host.publicIp}</span>
               </span>
             )}
-            {host.cpuCores != null && <span>{host.cpuCores} vCPU</span>}
+            {host.cpuCores != null && <span>{t("{cores} vCPU", { cores: host.cpuCores })}</span>}
             {host.memoryMb != null && <span>{formatMb(host.memoryMb)}</span>}
-            {host.diskGb != null && <span>{host.diskGb} GB disk</span>}
+            {host.diskGb != null && <span>{t("{gb} GB disk", { gb: host.diskGb })}</span>}
             <span title={host.lastHeartbeatAt ? formatDate(host.lastHeartbeatAt) : undefined}>
-              <span className="text-neutral-600">Last seen:</span>{" "}
+              <span className="text-neutral-600">{t("Last seen:")}</span>{" "}
               {timeAgo(host.lastHeartbeatAt)}
             </span>
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <Button variant="secondary" size="sm" onClick={onToken}>
-            Adoption token
+            {t("Adoption token")}
           </Button>
           {/* v1.18+ Remote Hosts — only meaningful for adoptable hosts.
               The self-host runs Synapse itself; install-agent.sh there
@@ -260,15 +264,15 @@ function HostCard({
               onClick={onRemoteSetup}
               data-testid={`setup-remote-${host.name}`}
             >
-              Setup remote install
+              {t("Setup remote install")}
             </Button>
           )}
           <Button variant="ghost" size="sm" onClick={onDetails}>
-            Details
+            {t("Details")}
           </Button>
           {host.status !== "draining" && (
             <Button variant="ghost" size="sm" onClick={onDrain}>
-              Drain
+              {t("Drain")}
             </Button>
           )}
           {/* Registry-only removal. NEVER offered for the self-host — the
@@ -282,7 +286,7 @@ function HostCard({
               onClick={onRemove}
               data-testid={`remove-host-${host.name}`}
             >
-              Remove
+              {t("Remove")}
             </Button>
           )}
         </div>
@@ -302,6 +306,7 @@ function CreateHostDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { t } = useT();
   const [name, setName] = useState("");
   const [provider, setProvider] = useState("");
   const [region, setRegion] = useState("");
@@ -328,7 +333,7 @@ function CreateHostDialog({
       onClose();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not create host",
+        err instanceof ApiError ? err.message : t("Could not create host"),
       );
     } finally {
       setPending(false);
@@ -336,11 +341,11 @@ function CreateHostDialog({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title="Create host">
+    <Dialog open={open} onClose={onClose} title={t("Create host")}>
       <form onSubmit={submit} className="space-y-4">
         <div className="space-y-2">
           <label htmlFor="host-name" className="block text-xs text-neutral-400">
-            Name
+            {t("Name")}
           </label>
           <Input
             id="host-name"
@@ -355,7 +360,7 @@ function CreateHostDialog({
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-2">
             <label htmlFor="host-provider" className="block text-xs text-neutral-400">
-              Provider <span className="text-neutral-600">(optional)</span>
+              {t("Provider")} <span className="text-neutral-600">{t("(optional)")}</span>
             </label>
             <Input
               id="host-provider"
@@ -366,7 +371,7 @@ function CreateHostDialog({
           </div>
           <div className="space-y-2">
             <label htmlFor="host-region" className="block text-xs text-neutral-400">
-              Region <span className="text-neutral-600">(optional)</span>
+              {t("Region")} <span className="text-neutral-600">{t("(optional)")}</span>
             </label>
             <Input
               id="host-region"
@@ -379,7 +384,7 @@ function CreateHostDialog({
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-2">
             <label htmlFor="host-public-ip" className="block text-xs text-neutral-400">
-              Public IP <span className="text-neutral-600">(optional)</span>
+              {t("Public IP")} <span className="text-neutral-600">{t("(optional)")}</span>
             </label>
             <Input
               id="host-public-ip"
@@ -390,7 +395,7 @@ function CreateHostDialog({
           </div>
           <div className="space-y-2">
             <label htmlFor="host-private-ip" className="block text-xs text-neutral-400">
-              Private IP <span className="text-neutral-600">(optional)</span>
+              {t("Private IP")} <span className="text-neutral-600">{t("(optional)")}</span>
             </label>
             <Input
               id="host-private-ip"
@@ -402,7 +407,7 @@ function CreateHostDialog({
         </div>
         <div className="space-y-2">
           <label htmlFor="host-labels" className="block text-xs text-neutral-400">
-            Labels <span className="text-neutral-600">(optional, key=value, comma-separated)</span>
+            {t("Labels")} <span className="text-neutral-600">{t("(optional, key=value, comma-separated)")}</span>
           </label>
           <Input
             id="host-labels"
@@ -414,10 +419,10 @@ function CreateHostDialog({
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button type="submit" disabled={pending || !name.trim()}>
-            {pending ? "Creating…" : "Create"}
+            {pending ? t("Creating…") : t("Create")}
           </Button>
         </div>
       </form>
@@ -447,6 +452,7 @@ function AdoptionTokenDialog({
   host: Host | null;
   onClose: () => void;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [issued, setIssued] = useState<HostAdoptionToken | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -468,7 +474,7 @@ function AdoptionTokenDialog({
       setIssued(tok);
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not generate token",
+        err instanceof ApiError ? err.message : t("Could not generate token"),
       );
     } finally {
       setPending(false);
@@ -482,7 +488,7 @@ function AdoptionTokenDialog({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } else {
-      setFormError("Could not copy — select the command manually and Ctrl+C");
+      setFormError(t("Could not copy — select the command manually and Ctrl+C"));
     }
   };
 
@@ -490,46 +496,47 @@ function AdoptionTokenDialog({
     <Dialog
       open
       onClose={onClose}
-      title={issued ? "Adoption token created" : `Adoption token for ${host.name}`}
+      title={issued ? t("Adoption token created") : t("Adoption token for {name}", { name: host.name })}
     >
       {!issued ? (
         <div className="space-y-4">
           <p className="text-sm text-neutral-300">
-            Generate a one-time token to connect a synapse-agent on{" "}
-            <span className="font-mono">{host.name}</span>. The token is shown
-            only once and expires in 1 hour.
+            {t("Generate a one-time token to connect a synapse-agent on")}{" "}
+            <span className="font-mono">{host.name}</span>
+            {t(". The token is shown only once and expires in 1 hour.")}
           </p>
           {formError && <p className="text-xs text-red-400">{formError}</p>}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button type="button" onClick={generate} disabled={pending}>
-              {pending ? "Generating…" : "Generate token"}
+              {pending ? t("Generating…") : t("Generate token")}
             </Button>
           </div>
         </div>
       ) : (
         <div className="space-y-3">
           <p className="rounded bg-yellow-900/40 px-3 py-2 text-xs text-yellow-200">
-            This token appears only once. Run the command below on the VPS now —
-            if you lose it, generate a new one.
+            {t(
+              "This token appears only once. Run the command below on the VPS now — if you lose it, generate a new one.",
+            )}
           </p>
-          <p className="text-xs text-neutral-400">Run on the host:</p>
+          <p className="text-xs text-neutral-400">{t("Run on the host:")}</p>
           <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-neutral-800/80 bg-neutral-950 p-3 font-mono text-[11px] leading-snug text-neutral-200">
             {issued.joinCommand}
           </pre>
           {issued.expiresAt && (
             <p className="text-[11px] text-neutral-500">
-              Expires {formatDate(issued.expiresAt)}.
+              {t("Expires {date}.", { date: formatDate(issued.expiresAt) })}
             </p>
           )}
           {formError && <p className="text-xs text-red-400">{formError}</p>}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={copy} data-testid="copy-join-command">
-              {copied ? "Copied!" : "Copy join command"}
+              {copied ? t("Copied!") : t("Copy join command")}
             </Button>
-            <Button onClick={onClose}>Done</Button>
+            <Button onClick={onClose}>{t("Done")}</Button>
           </div>
         </div>
       )}
@@ -559,6 +566,7 @@ function HostDetailsDialog({
   host: Host | null;
   onClose: () => void;
 }) {
+  const { t } = useT();
   // Fetch this host's agents while the dialog is open (null key → no fetch).
   // Hooks run unconditionally (before the !host early-return) per the rules
   // of hooks.
@@ -589,7 +597,7 @@ function HostDetailsDialog({
       await api.hosts.revokeAgent(agentId);
       await mutate();
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not revoke agent");
+      setActionError(e instanceof ApiError ? e.message : t("Could not revoke agent"));
     } finally {
       setBusyAgentId(null);
     }
@@ -603,7 +611,7 @@ function HostDetailsDialog({
       setCopied(false);
       await mutate();
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not rotate token");
+      setActionError(e instanceof ApiError ? e.message : t("Could not rotate token"));
     } finally {
       setBusyAgentId(null);
     }
@@ -614,24 +622,24 @@ function HostDetailsDialog({
       <div className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={hostStatusTone(hostStatus(host))}>{hostStatus(host)}</Badge>
-          {host.isSynapseHost && <Badge tone="violet">this host</Badge>}
+          {host.isSynapseHost && <Badge tone="violet">{t("this host")}</Badge>}
           <Badge tone="neutral">{host.provider}</Badge>
           {host.region && <Badge tone="neutral">{host.region}</Badge>}
         </div>
         <dl className="grid grid-cols-3 gap-y-1 text-xs">
-          <Meta label="Public IP" value={host.publicIp || "—"} mono />
-          <Meta label="Private IP" value={host.privateIp || "—"} mono />
-          <Meta label="Agent version" value={host.agentVersion || "—"} />
-          <Meta label="Docker version" value={host.dockerVersion || "—"} />
-          <Meta label="vCPU" value={host.cpuCores != null ? String(host.cpuCores) : "—"} />
-          <Meta label="Memory" value={host.memoryMb != null ? formatMb(host.memoryMb) : "—"} />
-          <Meta label="Disk" value={host.diskGb != null ? `${host.diskGb} GB` : "—"} />
-          <Meta label="Last seen" value={timeAgo(host.lastHeartbeatAt)} />
-          <Meta label="Created" value={formatDate(host.createdAt)} />
+          <Meta label={t("Public IP")} value={host.publicIp || "—"} mono />
+          <Meta label={t("Private IP")} value={host.privateIp || "—"} mono />
+          <Meta label={t("Agent version")} value={host.agentVersion || "—"} />
+          <Meta label={t("Docker version")} value={host.dockerVersion || "—"} />
+          <Meta label={t("vCPU")} value={host.cpuCores != null ? String(host.cpuCores) : "—"} />
+          <Meta label={t("Memory")} value={host.memoryMb != null ? formatMb(host.memoryMb) : "—"} />
+          <Meta label={t("Disk")} value={host.diskGb != null ? `${host.diskGb} GB` : "—"} />
+          <Meta label={t("Last seen")} value={timeAgo(host.lastHeartbeatAt)} />
+          <Meta label={t("Created")} value={formatDate(host.createdAt)} />
         </dl>
         {labelEntries.length > 0 && (
           <div className="space-y-1">
-            <p className="text-xs font-semibold text-neutral-200">Labels</p>
+            <p className="text-xs font-semibold text-neutral-200">{t("Labels")}</p>
             <div className="flex flex-wrap gap-1.5">
               {labelEntries.map(([k, v]) => (
                 <Badge key={k} tone="neutral">
@@ -645,15 +653,16 @@ function HostDetailsDialog({
         {/* Agents on this host (Bloco 6.5). */}
         <div className="space-y-2">
           <p className="text-xs font-semibold text-neutral-200">
-            Agents{agents.length ? ` (${agents.length})` : ""}
+            {t("Agents")}
+            {agents.length ? ` (${agents.length})` : ""}
           </p>
           {error instanceof ApiError && (
             <p className="text-xs text-red-400">{error.message}</p>
           )}
           {agents.length === 0 ? (
             <p className="text-[11px] text-neutral-500">
-              No agent has registered on this host yet. Generate an adoption
-              token and run <code>synapse-agent join</code> on the VPS.
+              {t("No agent has registered on this host yet. Generate an adoption token and run")}{" "}
+              <code>synapse-agent join</code> {t("on the VPS.")}
             </p>
           ) : (
             <div className="space-y-1.5">
@@ -666,12 +675,14 @@ function HostDetailsDialog({
                     <div className="flex items-center gap-1.5">
                       <Badge tone={agentTone(a.status)}>{a.status}</Badge>
                       <span className="text-neutral-500">{a.connectionMode}</span>
-                      <span className="text-neutral-500">seen {timeAgo(a.lastSeenAt)}</span>
+                      <span className="text-neutral-500">{t("seen {ago}", { ago: timeAgo(a.lastSeenAt) })}</span>
                     </div>
                     {a.observed && (
                       <p className="mt-0.5 text-neutral-600">
-                        docker {a.observed.dockerAvailable ? "up" : "down"} ·{" "}
-                        {a.observed.managedContainerCount} managed
+                        {t("docker {state} · {count} managed", {
+                          state: a.observed.dockerAvailable ? t("up") : t("down"),
+                          count: a.observed.managedContainerCount,
+                        })}
                       </p>
                     )}
                   </div>
@@ -683,7 +694,7 @@ function HostDetailsDialog({
                         disabled={busyAgentId === a.id}
                         onClick={() => revoke(a.id)}
                       >
-                        Revoke
+                        {t("Revoke")}
                       </Button>
                     )}
                     <Button
@@ -692,7 +703,7 @@ function HostDetailsDialog({
                       disabled={busyAgentId === a.id}
                       onClick={() => rotate(a.id)}
                     >
-                      Rotate
+                      {t("Rotate")}
                     </Button>
                   </div>
                 </div>
@@ -703,7 +714,7 @@ function HostDetailsDialog({
           {rotated && (
             <div className="space-y-1 rounded border border-yellow-900/60 bg-yellow-900/20 px-2.5 py-2">
               <p className="text-[11px] text-yellow-200">
-                New agent token (shown once) — update the VPS config or re-run{" "}
+                {t("New agent token (shown once) — update the VPS config or re-run")}{" "}
                 <code>synapse-agent join</code>:
               </p>
               <pre className="overflow-x-auto break-all rounded bg-neutral-950 p-2 font-mono text-[11px] text-neutral-200">
@@ -720,7 +731,7 @@ function HostDetailsDialog({
                     }
                   }}
                 >
-                  {copied ? "Copied!" : "Copy token"}
+                  {copied ? t("Copied!") : t("Copy token")}
                 </Button>
               </div>
             </div>
@@ -728,11 +739,12 @@ function HostDetailsDialog({
         </div>
 
         <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
-          The agent is observe-only — live heartbeat + metrics; no
-          apply/reconcile yet.
+          {t(
+            "The agent is observe-only — live heartbeat + metrics; no apply/reconcile yet.",
+          )}
         </p>
         <div className="flex justify-end">
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose}>{t("Close")}</Button>
         </div>
       </div>
     </Dialog>
@@ -772,6 +784,7 @@ function DrainHostDialog({
   onClose: () => void;
   onDrained: () => void;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -791,26 +804,26 @@ function DrainHostDialog({
       onDrained();
       onClose();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Could not drain host");
+      setFormError(err instanceof ApiError ? err.message : t("Could not drain host"));
       setPending(false);
     }
   };
 
   return (
-    <Dialog open onClose={pending ? () => {} : onClose} title="Drain host">
+    <Dialog open onClose={pending ? () => {} : onClose} title={t("Drain host")}>
       <div className="space-y-4">
         <p className="text-sm text-neutral-300">
-          Mark{" "}
+          {t("Mark")}{" "}
           <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
             {host.name}
           </code>{" "}
-          as <Badge tone="yellow" className="align-middle">draining</Badge>? This
-          is a status change only — no containers are stopped or moved.
+          {t("as")} <Badge tone="yellow" className="align-middle">{t("draining")}</Badge>
+          {t("? This is a status change only — no containers are stopped or moved.")}
         </p>
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="button"
@@ -818,7 +831,7 @@ function DrainHostDialog({
             disabled={pending}
             data-testid="confirm-drain-host"
           >
-            {pending ? "Draining…" : "Drain host"}
+            {pending ? t("Draining…") : t("Drain host")}
           </Button>
         </div>
       </div>
@@ -844,6 +857,7 @@ function RemoveHostDialog({
   onClose: () => void;
   onRemoved: () => void;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -863,36 +877,32 @@ function RemoveHostDialog({
       onRemoved();
       onClose();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Failed to remove host");
+      setFormError(err instanceof ApiError ? err.message : t("Failed to remove host"));
       setPending(false);
     }
   };
 
   return (
-    <Dialog open onClose={pending ? () => {} : onClose} title="Remove host">
+    <Dialog open onClose={pending ? () => {} : onClose} title={t("Remove host")}>
       <div className="space-y-4" data-testid="remove-host-dialog">
         <p className="text-sm text-neutral-300">
-          Remove{" "}
+          {t("Remove")}{" "}
           <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
             {host.name}
           </code>{" "}
-          from the control plane? This deletes the host record here. It does not
-          stop or move any deployments — a host that still owns deployments or
-          pending jobs is refused.
+          {t("from the control plane? This deletes the host record here. It does not stop or move any deployments — a host that still owns deployments or pending jobs is refused.")}
         </p>
         {host.isRemote && (
           <p className="rounded border border-yellow-900/60 bg-yellow-900/20 px-3 py-2 text-[11px] text-yellow-200">
-            Heads up: this only clears the host from Synapse. The VPS itself is
-            untouched — the Headscale tailnet node stays registered and the
-            synapse-agent (its systemd unit, service user, and SSH keys) keeps
-            running. Deregister the tailnet node and uninstall the agent on the
-            host manually if you&apos;re decommissioning it.
+            {t(
+              "Heads up: this only clears the host from Synapse. The VPS itself is untouched — the Headscale tailnet node stays registered and the synapse-agent (its systemd unit, service user, and SSH keys) keeps running. Deregister the tailnet node and uninstall the agent on the host manually if you're decommissioning it.",
+            )}
           </p>
         )}
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="button"
@@ -901,7 +911,7 @@ function RemoveHostDialog({
             disabled={pending}
             data-testid="confirm-remove-host"
           >
-            {pending ? "Removing…" : "Remove host"}
+            {pending ? t("Removing…") : t("Remove host")}
           </Button>
         </div>
       </div>
@@ -938,6 +948,7 @@ function RemoteSetupDialog({
   host: Host | null;
   onClose: () => void;
 }) {
+  const { t } = useT();
   const [bundle, setBundle] = useState<RemoteSetupBundle | null>(null);
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -964,7 +975,7 @@ function RemoteSetupDialog({
         setErrorCode(err.code ?? null);
         setFormError(err.message);
       } else {
-        setFormError("Could not generate one-liner");
+        setFormError(t("Could not generate one-liner"));
       }
     } finally {
       setPending(false);
@@ -978,7 +989,7 @@ function RemoteSetupDialog({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } else {
-      setFormError("Could not copy — select the command manually and Ctrl+C");
+      setFormError(t("Could not copy — select the command manually and Ctrl+C"));
     }
   };
 
@@ -986,22 +997,22 @@ function RemoteSetupDialog({
     <Dialog
       open
       onClose={onClose}
-      title={bundle ? `Remote install for ${host.name}` : `Set up ${host.name}`}
+      title={bundle ? t("Remote install for {name}", { name: host.name }) : t("Set up {name}", { name: host.name })}
     >
       <div className="space-y-4" data-testid="remote-setup-dialog">
         {!bundle && !formError && (
           <div className="space-y-4">
             <p className="text-sm text-neutral-300">
-              Generates a one-time bundle so a new VPS can join your
-              tailnet AND register with Synapse in a single SSH paste.
-              Both secrets shown next expire in 1 hour.
+              {t(
+                "Generates a one-time bundle so a new VPS can join your tailnet AND register with Synapse in a single SSH paste. Both secrets shown next expire in 1 hour.",
+              )}
             </p>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-                Cancel
+                {t("Cancel")}
               </Button>
               <Button type="button" onClick={generate} disabled={pending}>
-                {pending ? "Generating…" : "Generate one-liner"}
+                {pending ? t("Generating…") : t("Generate one-liner")}
               </Button>
             </div>
           </div>
@@ -1014,23 +1025,23 @@ function RemoteSetupDialog({
             </p>
             {errorCode === "remote_hosts_disabled" && (
               <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-400">
-                Configure Headscale in{" "}
+                {t("Configure Headscale in")}{" "}
                 <Link
                   href="/admin/remote-hosts"
                   className="text-violet-300 underline-offset-2 hover:underline"
                   data-testid="hosts-panel-remote-hosts-link"
                 >
-                  Admin → Remote Hosts
+                  {t("Admin → Remote Hosts")}
                 </Link>{" "}
-                to enable this flow.
+                {t("to enable this flow.")}
               </p>
             )}
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={onClose}>
-                Close
+                {t("Close")}
               </Button>
               <Button onClick={generate} disabled={pending}>
-                Retry
+                {t("Retry")}
               </Button>
             </div>
           </div>
@@ -1039,19 +1050,19 @@ function RemoteSetupDialog({
         {bundle && (
           <div className="space-y-3" data-testid="remote-setup-result">
             <p className="rounded bg-yellow-900/40 px-3 py-2 text-xs text-yellow-200">
-              This command appears only once. SSH into the new VPS and
-              paste it now — if you lose it, regenerate from this host
-              row.
+              {t(
+                "This command appears only once. SSH into the new VPS and paste it now — if you lose it, regenerate from this host row.",
+              )}
             </p>
             <ol className="list-decimal space-y-1 pl-5 text-xs text-neutral-300">
-              <li>SSH into the new VPS as root (or via sudo)</li>
+              <li>{t("SSH into the new VPS as root (or via sudo)")}</li>
               <li>
-                Paste the command below — expires{" "}
+                {t("Paste the command below — expires")}{" "}
                 <span className="font-mono text-neutral-200">
                   {formatDate(bundle.expiresAt)}
                 </span>
               </li>
-              <li>Wait ~60s; this host will flip to online here</li>
+              <li>{t("Wait ~60s; this host will flip to online here")}</li>
             </ol>
             <div className="flex items-start gap-2">
               <pre
@@ -1068,14 +1079,14 @@ function RemoteSetupDialog({
                 onClick={copy}
                 data-testid="remote-setup-copy"
               >
-                {copied ? "Copied!" : "Copy one-liner"}
+                {copied ? t("Copied!") : t("Copy one-liner")}
               </Button>
-              <Button onClick={onClose}>Done</Button>
+              <Button onClick={onClose}>{t("Done")}</Button>
             </div>
             <p className="text-[11px] text-neutral-500">
-              Tokens are single-use. If you don&apos;t paste within an
-              hour, click &ldquo;Setup remote install&rdquo; again to
-              regenerate.
+              {t(
+                "Tokens are single-use. If you don't paste within an hour, click “Setup remote install” again to regenerate.",
+              )}
             </p>
           </div>
         )}

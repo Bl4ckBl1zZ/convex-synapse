@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { IconTerminal } from "@/components/ui/icon";
 import { JsonDetails } from "@/components/JsonDetails";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -22,6 +23,7 @@ type Props = { projectId: string };
 // Read-only. Details show the (redacted) input/plan/result + planned steps; the
 // dashboard never surfaces tokens, secrets, or an Apply control.
 export function OperationRunsPanel({ projectId }: Props) {
+  const { t } = useT();
   const { data, error, isLoading } = useSWR<OperationRun[]>(
     ["/operation-runs", projectId],
     () => api.operationRuns.project(projectId),
@@ -42,17 +44,17 @@ export function OperationRunsPanel({ projectId }: Props) {
       <div className="flex items-center justify-between border-b border-neutral-800/80 px-5 py-3.5">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
           <IconTerminal className="opacity-70" />
-          Operations
-          <span className="text-xs font-normal text-neutral-500">— sync · drift · dry-run</span>
+          {t("Operations")}
+          <span className="text-xs font-normal text-neutral-500">{t("— sync · drift · dry-run")}</span>
         </h3>
-        <Badge tone="violet">read-only</Badge>
+        <Badge tone="violet">{t("read-only")}</Badge>
       </div>
 
       <div className="space-y-2 p-5">
-        {isLoading && !data && <p className="text-xs text-neutral-500">Loading…</p>}
+        {isLoading && !data && <p className="text-xs text-neutral-500">{t("Loading…")}</p>}
         {!isLoading && runs.length === 0 && (
           <p className="text-xs text-neutral-500" data-testid="operation-runs-empty">
-            No operations yet. Sync desired state or recompute drift to create one.
+            {t("No operations yet. Sync desired state or recompute drift to create one.")}
           </p>
         )}
         {runs.map((r) => (
@@ -69,7 +71,7 @@ export function OperationRunsPanel({ projectId }: Props) {
             {r.error && <span className="text-[11px] text-red-400">{r.error}</span>}
             <div className="ml-auto">
               <Button variant="ghost" size="sm" onClick={() => setSelected(r.id)}>
-                View details
+                {t("View details")}
               </Button>
             </div>
           </div>
@@ -91,6 +93,7 @@ function OperationRunDetailDialog({
   runId: string | null;
   onClose: () => void;
 }) {
+  const { t } = useT();
   const { data, error, isLoading } = useSWR<OperationRunDetail>(
     runId ? ["/operation-run", runId] : null,
     () => api.operationRuns.get(runId as string),
@@ -101,12 +104,12 @@ function OperationRunDetailDialog({
   const steps = data?.steps ?? [];
 
   return (
-    <Dialog open={runId !== null} onClose={onClose} title="Operation run">
+    <Dialog open={runId !== null} onClose={onClose} title={t("Operation run")}>
       <div className="space-y-3" data-testid="operation-run-detail">
-        {isLoading && <p className="text-xs text-neutral-500">Loading…</p>}
+        {isLoading && <p className="text-xs text-neutral-500">{t("Loading…")}</p>}
         {error && (
           <p className="text-xs text-red-400">
-            {error instanceof ApiError ? error.message : "Could not load operation run."}
+            {error instanceof ApiError ? error.message : t("Could not load operation run.")}
           </p>
         )}
         {run && (
@@ -125,7 +128,7 @@ function OperationRunDetailDialog({
 
             {steps.length > 0 && (
               <div className="space-y-1" data-testid="operation-run-steps">
-                <p className="text-xs font-semibold text-neutral-300">Steps ({steps.length})</p>
+                <p className="text-xs font-semibold text-neutral-300">{t("Steps ({count})", { count: steps.length })}</p>
                 {steps.map((st) => (
                   <div
                     key={st.id}
@@ -148,7 +151,7 @@ function OperationRunDetailDialog({
             </div>
 
             <p className="text-[11px] text-neutral-500">
-              Operations are diagnosis + planning only. The agent is observe-only; no host change was applied.
+              {t("Operations are diagnosis + planning only. The agent is observe-only; no host change was applied.")}
             </p>
           </>
         )}

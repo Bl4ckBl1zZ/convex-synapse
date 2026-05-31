@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { IconServer, IconLayers } from "@/components/ui/icon";
 import { ApiError, api, type CellTopologyResponse, type CellTopologyCell } from "@/lib/api";
 import { cellKindTone } from "@/components/CellsPanel";
+import { useT } from "@/lib/i18n";
 
 type Props = { projectId: string };
 
@@ -14,6 +15,7 @@ type Props = { projectId: string };
 // Cell Links + warnings. Hides itself (returns null) when the project has no
 // cells (mode=legacy_synthetic); the legacy TopologyPanel renders that case.
 export function CellTopologyPanel({ projectId }: Props) {
+  const { t } = useT();
   const { data, error, isLoading } = useSWR<CellTopologyResponse>(
     ["/cell-topology", projectId],
     () => api.projects.cellTopology(projectId),
@@ -49,11 +51,11 @@ export function CellTopologyPanel({ projectId }: Props) {
         <div className="flex items-baseline gap-2">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
             <IconLayers className="opacity-70" />
-            Topology
+            {t("Topology")}
           </h3>
-          <span className="text-xs text-neutral-500">— host → cell → deployment</span>
+          <span className="text-xs text-neutral-500">{t("— host → cell → deployment")}</span>
         </div>
-        <Badge tone="violet">cell control plane</Badge>
+        <Badge tone="violet">{t("cell control plane")}</Badge>
       </div>
 
       <div className="space-y-5 p-5">
@@ -63,7 +65,7 @@ export function CellTopologyPanel({ projectId }: Props) {
             data-testid="topology-warnings"
           >
             <p className="text-xs font-semibold text-yellow-300">
-              Warnings ({data.warnings.length})
+              {t("Warnings ({count})", { count: data.warnings.length })}
             </p>
             <ul className="space-y-0.5">
               {data.warnings.map((w, i) => (
@@ -82,10 +84,12 @@ export function CellTopologyPanel({ projectId }: Props) {
               <IconServer className="text-neutral-500" />
               <span className="font-mono text-sm text-neutral-100">{host.name}</span>
               <Badge tone={hostTone(host.effectiveStatus)}>{host.effectiveStatus}</Badge>
-              {host.isSynapseHost && <Badge tone="violet">this host</Badge>}
+              {host.isSynapseHost && <Badge tone="violet">{t("this host")}</Badge>}
               {host.region && <Badge tone="neutral">{host.region}</Badge>}
               <span className="text-[11px] text-neutral-500">
-                {host.agentCount} agent{host.agentCount === 1 ? "" : "s"}
+                {host.agentCount === 1
+                  ? t("{count} agent", { count: host.agentCount })
+                  : t("{count} agents", { count: host.agentCount })}
               </span>
             </div>
             <div className="space-y-2 border-l border-neutral-800/80 pl-4">
@@ -93,7 +97,7 @@ export function CellTopologyPanel({ projectId }: Props) {
                 <CellBlock key={cell.id} cell={cell} cellName={cellName} />
               ))}
               {(cellsByHost.get(host.id) ?? []).length === 0 && (
-                <p className="text-[11px] text-neutral-600">No cells on this host.</p>
+                <p className="text-[11px] text-neutral-600">{t("No cells on this host.")}</p>
               )}
             </div>
           </div>
@@ -102,7 +106,7 @@ export function CellTopologyPanel({ projectId }: Props) {
         {unplaced.length > 0 && (
           <div className="space-y-2" data-testid="topology-unplaced-cells">
             <p className="text-xs font-semibold text-neutral-300">
-              Unplaced cells <span className="text-neutral-600">(no host)</span>
+              {t("Unplaced cells")} <span className="text-neutral-600">{t("(no host)")}</span>
             </p>
             <div className="space-y-2 border-l border-neutral-800/80 pl-4">
               {unplaced.map((cell) => (
@@ -115,7 +119,7 @@ export function CellTopologyPanel({ projectId }: Props) {
         {data.unassignedDeployments.length > 0 && (
           <div className="space-y-2" data-testid="topology-unassigned-deployments">
             <p className="text-xs font-semibold text-neutral-300">
-              Unassigned deployments <span className="text-neutral-600">(no cell)</span>
+              {t("Unassigned deployments")} <span className="text-neutral-600">{t("(no cell)")}</span>
             </p>
             <div className="space-y-1 border-l border-neutral-800/80 pl-4">
               {data.unassignedDeployments.map((d) => (
@@ -130,7 +134,7 @@ export function CellTopologyPanel({ projectId }: Props) {
 
         {data.links.length > 0 && (
           <div className="space-y-2" data-testid="topology-links">
-            <p className="text-xs font-semibold text-neutral-300">Cell Links</p>
+            <p className="text-xs font-semibold text-neutral-300">{t("Cell Links")}</p>
             <div className="space-y-1">
               {data.links.map((l) => (
                 <div
@@ -143,13 +147,22 @@ export function CellTopologyPanel({ projectId }: Props) {
                   <Badge tone="neutral">{l.protocol}</Badge>
                   <Badge tone={l.status === "active" ? "green" : "neutral"}>{l.status}</Badge>
                   {l.hasEndpoint ? (
-                    <Badge tone="green">endpoint: {l.endpointSource}</Badge>
+                    <Badge tone="green">{t("endpoint: {source}", { source: l.endpointSource })}</Badge>
                   ) : (
-                    <Badge tone="yellow">endpoint unresolved</Badge>
+                    <Badge tone="yellow">{t("endpoint unresolved")}</Badge>
                   )}
                   <span className="text-neutral-500">
-                    {l.allowedCommandsCount} cmd · {l.allowedEventsCount} evt · {l.activeTokenCount} token
-                    {l.activeTokenCount === 1 ? "" : "s"}
+                    {l.activeTokenCount === 1
+                      ? t("{cmds} cmd · {evts} evt · {tokens} token", {
+                          cmds: l.allowedCommandsCount,
+                          evts: l.allowedEventsCount,
+                          tokens: l.activeTokenCount,
+                        })
+                      : t("{cmds} cmd · {evts} evt · {tokens} tokens", {
+                          cmds: l.allowedCommandsCount,
+                          evts: l.allowedEventsCount,
+                          tokens: l.activeTokenCount,
+                        })}
                   </span>
                 </div>
               ))}
@@ -168,6 +181,7 @@ function CellBlock({
   cell: CellTopologyCell;
   cellName: (id: string) => string;
 }) {
+  const { t } = useT();
   return (
     <div className="rounded-md border border-neutral-800/80 bg-neutral-900/30 px-3 py-2" data-testid="topology-cell" data-cell-name={cell.name}>
       <div className="flex flex-wrap items-center gap-2">
@@ -186,30 +200,33 @@ function CellBlock({
                 <Badge tone={statusTone(d.status)}>{d.status}</Badge>
                 {d.placement && (
                   <span className="text-neutral-600">
-                    desired {d.placement.desiredStatus} / observed {d.placement.observedStatus}
+                    {t("desired {desired} / observed {observed}", {
+                      desired: d.placement.desiredStatus,
+                      observed: d.placement.observedStatus,
+                    })}
                   </span>
                 )}
               </div>
               {d.url && <div className="truncate text-neutral-600">{d.url}</div>}
               {d.routes.length > 0 && (
                 <div className="text-neutral-600">
-                  routes: {d.routes.map((r) => r.domain).join(", ")}
+                  {t("routes: {domains}", { domains: d.routes.map((r) => r.domain).join(", ") })}
                 </div>
               )}
             </div>
           ))}
         </div>
       ) : (
-        <p className="mt-1 text-[11px] text-neutral-600">No deployment attached.</p>
+        <p className="mt-1 text-[11px] text-neutral-600">{t("No deployment attached.")}</p>
       )}
 
       {(cell.outgoingLinks.length > 0 || cell.incomingLinks.length > 0) && (
         <div className="mt-1.5 flex flex-wrap gap-x-3 text-[10px] text-neutral-500">
           {cell.outgoingLinks.map((l) => (
-            <span key={l.id}>→ {cellName(l.targetCellId)} ({l.protocol})</span>
+            <span key={l.id}>{t("→ {target} ({protocol})", { target: cellName(l.targetCellId), protocol: l.protocol })}</span>
           ))}
           {cell.incomingLinks.map((l) => (
-            <span key={l.id}>← {cellName(l.sourceCellId)} ({l.protocol})</span>
+            <span key={l.id}>{t("← {source} ({protocol})", { source: cellName(l.sourceCellId), protocol: l.protocol })}</span>
           ))}
         </div>
       )}

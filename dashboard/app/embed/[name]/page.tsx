@@ -4,6 +4,7 @@ import Link from "next/link";
 import { use, useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { DeploymentPicker } from "@/components/DeploymentPicker";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -117,6 +118,7 @@ export default function EmbedDashboardPage({
 }: {
   params: Promise<Params>;
 }) {
+  const { t } = useT();
   const { name } = use(params);
   const [auth, setAuth] = useState<DeploymentAuth | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,7 +145,7 @@ export default function EmbedDashboardPage({
       setError(
         err instanceof ApiError
           ? err.message
-          : "Could not refresh deployment credentials",
+          : t("Could not refresh deployment credentials"),
       );
     } finally {
       setRefreshing(false);
@@ -198,7 +200,7 @@ export default function EmbedDashboardPage({
           setError(
             err instanceof ApiError
               ? err.message
-              : "Could not load deployment credentials",
+              : t("Could not load deployment credentials"),
           );
         }
       });
@@ -269,10 +271,10 @@ export default function EmbedDashboardPage({
     return (
       <div className="flex min-h-screen items-center justify-center p-8">
         <div className="max-w-md text-center text-sm text-red-500">
-          <p className="font-semibold">Failed to open dashboard</p>
+          <p className="font-semibold">{t("Failed to open dashboard")}</p>
           <p className="mt-2">{error}</p>
           <p className="mt-4 text-xs text-zinc-400">
-            Deployment: <code>{name}</code>
+            {t("Deployment:")} <code>{name}</code>
           </p>
         </div>
       </div>
@@ -282,7 +284,7 @@ export default function EmbedDashboardPage({
   if (!auth || !deployment) {
     return (
       <div className="flex min-h-screen items-center justify-center p-8 text-sm text-zinc-400">
-        Loading deployment credentials for <code className="ml-1">{name}</code>…
+        {t("Loading deployment credentials for")} <code className="ml-1">{name}</code>…
       </div>
     );
   }
@@ -300,7 +302,7 @@ export default function EmbedDashboardPage({
         {team && project && (
           <nav
             className="flex items-center gap-2 text-xs text-neutral-500"
-            aria-label="Breadcrumb"
+            aria-label={t("Breadcrumb")}
           >
             <Link
               href={`/teams/${encodeURIComponent(team.slug)}`}
@@ -337,9 +339,11 @@ export default function EmbedDashboardPage({
             onClick={handleRefreshCredentials}
             disabled={refreshing}
             className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:border-neutral-700 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Re-mint this deployment's admin key from the current INSTANCE_SECRET. Use this if the dashboard reports 'admin key invalid' or you suspect the cached credential drifted."
+            title={t(
+              "Re-mint this deployment's admin key from the current INSTANCE_SECRET. Use this if the dashboard reports 'admin key invalid' or you suspect the cached credential drifted.",
+            )}
           >
-            {refreshing ? "Refreshing…" : "Refresh credentials"}
+            {refreshing ? t("Refreshing…") : t("Refresh credentials")}
           </button>
         )}
         {team && project && (
@@ -372,7 +376,7 @@ export default function EmbedDashboardPage({
           key={`${name}:${authNonce}`}
           ref={iframeRef}
           src={CONVEX_DASHBOARD_URL}
-          title={`${name} — Convex Dashboard`}
+          title={t("{name} — Convex Dashboard", { name })}
           className="h-full w-full flex-1 border-0"
           // The dashboard makes XHR calls to the deployment URL; allow
           // same-origin (within the iframe) plus scripts (it's a SPA).
@@ -402,6 +406,7 @@ function UnreachableDeploymentBanner({
   deploymentName: string;
   deploymentUrl: string;
 }) {
+  const { t } = useT();
   return (
     <div
       className="flex flex-1 items-center justify-center p-8"
@@ -411,36 +416,29 @@ function UnreachableDeploymentBanner({
       <div className="max-w-2xl space-y-5 rounded-lg border border-amber-900/60 bg-amber-950/30 p-6 text-sm text-amber-100">
         <div>
           <p className="text-base font-semibold text-amber-200">
-            This deployment isn&apos;t browser-reachable yet
+            {t("This deployment isn't browser-reachable yet")}
           </p>
           <p className="mt-2 text-amber-100/80">
-            Synapse returned <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">{deploymentUrl}</code>{" "}
-            as the deployment URL. Caddy only TLS-fronts the standard
-            ports (<code className="font-mono">:443</code>, <code className="font-mono">:6791</code>), so the embedded
-            Convex Dashboard iframe can&apos;t complete a TLS handshake
-            against this URL — it would fail silently with &ldquo;deployment URL
-            or admin key is invalid&rdquo; even though the credentials are fine.
+            {t("Synapse returned")} <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">{deploymentUrl}</code>{" "}
+            {t("as the deployment URL. Caddy only TLS-fronts the standard ports (")}<code className="font-mono">:443</code>, <code className="font-mono">:6791</code>{t("), so the embedded Convex Dashboard iframe can't complete a TLS handshake against this URL — it would fail silently with “deployment URL or admin key is invalid” even though the credentials are fine.")}
           </p>
         </div>
         <div>
-          <p className="font-semibold text-amber-200">Pick one of these fixes</p>
+          <p className="font-semibold text-amber-200">{t("Pick one of these fixes")}</p>
           <ol className="mt-2 list-decimal space-y-2 pl-5 text-amber-100/85">
             <li>
-              <strong>Wildcard subdomain (one-time setup, covers every deployment):</strong>{" "}
-              point a wildcard DNS A record (e.g. <code className="font-mono text-xs">*.app.example.com → &lt;your VPS IP&gt;</code>)
-              at this server, then set <code className="font-mono text-xs">SYNAPSE_BASE_DOMAIN=app.example.com</code> in
-              your <code className="font-mono text-xs">.env</code> and restart Synapse. Future deployments will be reachable at{" "}
+              <strong>{t("Wildcard subdomain (one-time setup, covers every deployment):")}</strong>{" "}
+              {t("point a wildcard DNS A record (e.g.")} <code className="font-mono text-xs">*.app.example.com → &lt;your VPS IP&gt;</code>{t(") at this server, then set")} <code className="font-mono text-xs">SYNAPSE_BASE_DOMAIN=app.example.com</code> {t("in your")} <code className="font-mono text-xs">.env</code> {t("and restart Synapse. Future deployments will be reachable at")}{" "}
               <code className="font-mono text-xs">https://&lt;name&gt;.app.example.com</code>.
             </li>
             <li>
-              <strong>Custom domain per deployment</strong>: open this deployment&apos;s settings and add
-              a domain with role <code className="font-mono text-xs">api</code> (e.g.{" "}
-              <code className="font-mono text-xs">api.your-customer.com</code>). DNS verification is automatic.
+              <strong>{t("Custom domain per deployment")}</strong>{t(": open this deployment's settings and add a domain with role")} <code className="font-mono text-xs">api</code> {t("(e.g.")}{" "}
+              <code className="font-mono text-xs">api.your-customer.com</code>{t("). DNS verification is automatic.")}
             </li>
           </ol>
         </div>
         <p className="text-xs text-amber-200/60">
-          Deployment: <code className="font-mono">{deploymentName}</code>
+          {t("Deployment:")} <code className="font-mono">{deploymentName}</code>
         </p>
       </div>
     </div>

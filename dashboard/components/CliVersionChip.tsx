@@ -5,6 +5,7 @@ import useSWR from "swr";
 import clsx from "clsx";
 import { api, type CLIVersion } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useT } from "@/lib/i18n";
 
 // CliVersionChip — TopBar pill that exposes the npm install command
 // for @iann29/synapse and the latest published version.
@@ -19,6 +20,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 // 15min). Falls back to a "no version published yet" message if npm
 // is unreachable on first fetch.
 export function CliVersionChip() {
+  const { t } = useT();
   const { data, mutate } = useSWR<CLIVersion>(
     "/v1/cli_latest_version",
     () => api.admin.cliLatestVersion(),
@@ -101,32 +103,34 @@ export function CliVersionChip() {
         )}
         title={
           data.latest
-            ? `Synapse CLI latest: v${data.latest} — click for install command`
-            : "Synapse CLI install — click for command"
+            ? t("Synapse CLI latest: v{latest} — click for install command", {
+                latest: data.latest,
+              })
+            : t("Synapse CLI install — click for command")
         }
       >
         <span aria-hidden className="font-mono text-neutral-500">CLI</span>
         <span className="font-mono">
-          {data.latest ? `v${data.latest}` : "install"}
+          {data.latest ? `v${data.latest}` : t("install")}
         </span>
       </button>
 
       {open && (
         <div
           role="dialog"
-          aria-label="Synapse CLI install"
+          aria-label={t("Synapse CLI install")}
           className="synapse-fade-in absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-lg border border-neutral-800 bg-[#141416] shadow-2xl"
           data-testid="cli-version-popover"
         >
           <div className="border-b border-neutral-800 px-3 py-2">
             <p className="text-xs font-semibold text-neutral-100">
-              Synapse CLI
+              {t("Synapse CLI")}
             </p>
             <p className="mt-0.5 text-[11px] text-neutral-500">
               {data.latest ? (
-                <>Latest published version: <span className="font-mono text-neutral-300">v{data.latest}</span></>
+                <>{t("Latest published version:")} <span className="font-mono text-neutral-300">v{data.latest}</span></>
               ) : (
-                "Couldn't reach npm; install command still works."
+                t("Couldn't reach npm; install command still works.")
               )}
             </p>
           </div>
@@ -134,7 +138,7 @@ export function CliVersionChip() {
           <div className="space-y-3 px-3 py-3">
             <div>
               <p className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
-                Install or upgrade
+                {t("Install or upgrade")}
               </p>
               <div className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5">
                 <code
@@ -148,9 +152,9 @@ export function CliVersionChip() {
                   onClick={() => onCopy(installCmd, "install")}
                   className="text-[10px] text-neutral-400 hover:text-neutral-200"
                   data-testid="cli-install-copy"
-                  aria-label="Copy install command"
+                  aria-label={t("Copy install command")}
                 >
-                  {copied === "install" ? "Copied!" : "Copy"}
+                  {copied === "install" ? t("Copied!") : t("Copy")}
                 </button>
               </div>
             </div>
@@ -160,17 +164,17 @@ export function CliVersionChip() {
                 {data.packageName}
               </p>
               <p className="mt-1 leading-snug">
-                Thin wrapper around <span className="font-mono">npx convex</span>.
-                Use <span className="font-mono text-neutral-300">synapse login</span>{" "}
-                to authenticate this machine against this Synapse host,
-                then <span className="font-mono text-neutral-300">synapse select</span>{" "}
-                in your project directory.
+                {t("Thin wrapper around")} <span className="font-mono">npx convex</span>.
+                {" "}{t("Use")} <span className="font-mono text-neutral-300">synapse login</span>{" "}
+                {t("to authenticate this machine against this Synapse host, then")}{" "}
+                <span className="font-mono text-neutral-300">synapse select</span>{" "}
+                {t("in your project directory.")}
               </p>
             </div>
 
             {data.error && (
               <p className="text-[11px] text-amber-300/80">
-                npm registry note: {data.error}
+                {t("npm registry note:")} {data.error}
               </p>
             )}
 
@@ -182,7 +186,7 @@ export function CliVersionChip() {
                 className="text-[11px] text-neutral-500 hover:text-neutral-300 disabled:opacity-50"
                 data-testid="cli-version-refresh"
               >
-                {refreshing ? "Checking…" : "Check now"}
+                {refreshing ? t("Checking…") : t("Check now")}
               </button>
               <a
                 href="https://www.npmjs.com/package/@iann29/synapse"

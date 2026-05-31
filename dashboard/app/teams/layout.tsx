@@ -6,12 +6,14 @@ import { TopBar } from "@/components/TopBar";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { getAccessToken } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 // Auth gate + persistent TopBar for everything under /teams. The TopBar
 // derives the active team from the URL itself, so per-team layouts don't
 // need to wrap it again.
 export default function TeamsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const { t } = useT();
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export default function TeamsLayout({ children }: { children: React.ReactNode })
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-neutral-500">
-        Loading...
+        {t("Loading...")}
       </div>
     );
   }

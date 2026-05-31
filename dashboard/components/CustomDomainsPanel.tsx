@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { IconGlobe } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -72,6 +73,7 @@ function relativeTime(iso?: string): string {
 // + CliCredentialsPanel; same canEdit gating applies server-side, so
 // failed actions surface as inline error strings.
 export function CustomDomainsPanel({ deploymentName }: Props) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   return open ? (
     <CustomDomainsPanelExpanded
@@ -84,11 +86,11 @@ export function CustomDomainsPanel({ deploymentName }: Props) {
         variant="ghost"
         size="sm"
         onClick={() => setOpen(true)}
-        aria-label={`Manage custom domains for ${deploymentName}`}
+        aria-label={t("Manage custom domains for {deploymentName}", { deploymentName })}
         data-testid={`custom-domains-open-${deploymentName}`}
       >
         <IconGlobe className="mr-1.5 inline-block opacity-70" />
-        Manage custom domains
+        {t("Manage custom domains")}
       </Button>
     </div>
   );
@@ -101,6 +103,7 @@ function CustomDomainsPanelExpanded({
   deploymentName: string;
   onCollapse: () => void;
 }) {
+  const { t } = useT();
   const { data, error, mutate, isLoading } = useSWR<DeploymentDomain[]>(
     ["/v1/deployments", deploymentName, "domains"],
     () => api.deployments.listDomains(deploymentName),
@@ -288,11 +291,11 @@ function CustomDomainsPanelExpanded({
     setFormError(null);
     const trimmed = domain.trim().toLowerCase();
     if (!trimmed) {
-      setFormError("Domain is required");
+      setFormError(t("Domain is required"));
       return;
     }
     if (!HOSTNAME_RE.test(trimmed)) {
-      setFormError("Domain must be a valid hostname (e.g. api.example.com)");
+      setFormError(t("Domain must be a valid hostname (e.g. api.example.com)"));
       return;
     }
     setPending(true);
@@ -329,8 +332,8 @@ function CustomDomainsPanelExpanded({
         } catch (err) {
           setActionError(
             err instanceof ApiError
-              ? `Auto-configure failed: ${err.message}`
-              : "Auto-configure failed",
+              ? t("Auto-configure failed: {message}", { message: err.message })
+              : t("Auto-configure failed"),
           );
         } finally {
           setConfiguringDomain(null);
@@ -344,7 +347,7 @@ function CustomDomainsPanelExpanded({
       await mutate();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not add domain",
+        err instanceof ApiError ? err.message : t("Could not add domain"),
       );
     } finally {
       setPending(false);
@@ -377,7 +380,7 @@ function CustomDomainsPanelExpanded({
       );
     } catch (err) {
       setActionError(
-        err instanceof ApiError ? err.message : "Could not verify domain",
+        err instanceof ApiError ? err.message : t("Could not verify domain"),
       );
       // Roll back to whatever the server actually has on file.
       await mutate();
@@ -387,7 +390,7 @@ function CustomDomainsPanelExpanded({
   };
 
   const remove = async (row: DeploymentDomain) => {
-    if (!confirm(`Remove custom domain "${row.domain}"?`)) {
+    if (!confirm(t('Remove custom domain "{domain}"?', { domain: row.domain }))) {
       return;
     }
     setActionError(null);
@@ -397,7 +400,7 @@ function CustomDomainsPanelExpanded({
       await mutate();
     } catch (err) {
       setActionError(
-        err instanceof ApiError ? err.message : "Could not remove domain",
+        err instanceof ApiError ? err.message : t("Could not remove domain"),
       );
     } finally {
       setDeletingId(null);
@@ -441,17 +444,23 @@ function CustomDomainsPanelExpanded({
         // else falls through to the raw backend message.
         if (err.code === "no_credential_for_zone") {
           setActionError(
-            `No DNS credential covers "${row.domain}". Add a Cloudflare credential covering the zone in the "DNS credentials" panel below, then retry.`,
+            t(
+              'No DNS credential covers "{domain}". Add a Cloudflare credential covering the zone in the "DNS credentials" panel below, then retry.',
+              { domain: row.domain },
+            ),
           );
         } else if (err.code === "credential_required") {
           setActionError(
-            `Multiple DNS credentials cover "${row.domain}". Remove the duplicate(s) in "DNS credentials" so the auto-pick has a unique match, then retry.`,
+            t(
+              'Multiple DNS credentials cover "{domain}". Remove the duplicate(s) in "DNS credentials" so the auto-pick has a unique match, then retry.',
+              { domain: row.domain },
+            ),
           );
         } else {
           setActionError(err.message);
         }
       } else {
-        setActionError("Could not auto-configure DNS");
+        setActionError(t("Could not auto-configure DNS"));
       }
     } finally {
       setAutoConfiguringId(null);
@@ -464,11 +473,12 @@ function CustomDomainsPanelExpanded({
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="text-xs font-semibold text-neutral-200">
-              Custom domains
+              {t("Custom domains")}
             </p>
             <p className="text-xs text-neutral-500">
-              Map your own domains to this deployment. Synapse handles TLS
-              automatically once DNS is configured.
+              {t(
+                "Map your own domains to this deployment. Synapse handles TLS automatically once DNS is configured.",
+              )}
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -476,9 +486,9 @@ function CustomDomainsPanelExpanded({
               variant="ghost"
               size="sm"
               onClick={onCollapse}
-              aria-label="Hide custom domains panel"
+              aria-label={t("Hide custom domains panel")}
             >
-              Hide
+              {t("Hide")}
             </Button>
           </div>
         </div>
@@ -488,25 +498,27 @@ function CustomDomainsPanelExpanded({
             className="rounded border border-yellow-900/60 bg-yellow-900/20 px-3 py-2 text-[11px] text-yellow-200"
             data-testid="custom-domains-public-ip-warning"
           >
-            <span className="font-semibold">DNS verification disabled:</span>{" "}
-            <code className="font-mono">SYNAPSE_PUBLIC_IP</code> is not set on
-            this Synapse host. Domains stay <code>pending</code> until the
-            operator configures it. TLS provisioning won&rsquo;t fire until
-            then either.
+            <span className="font-semibold">{t("DNS verification disabled:")}</span>{" "}
+            <code className="font-mono">SYNAPSE_PUBLIC_IP</code>{" "}
+            {t("is not set on this Synapse host. Domains stay")}{" "}
+            <code>pending</code>{" "}
+            {t(
+              "until the operator configures it. TLS provisioning won’t fire until then either.",
+            )}
           </p>
         )}
 
         <form
           onSubmit={submit}
           className="flex flex-wrap items-end gap-2"
-          aria-label="Add custom domain"
+          aria-label={t("Add custom domain")}
         >
           <div className="min-w-[12rem] flex-1 space-y-1">
             <label
               htmlFor={`custom-domain-input-${deploymentName}`}
               className="block text-xs text-neutral-400"
             >
-              Domain
+              {t("Domain")}
             </label>
             <Input
               id={`custom-domain-input-${deploymentName}`}
@@ -524,7 +536,7 @@ function CustomDomainsPanelExpanded({
               htmlFor={`custom-domain-role-${deploymentName}`}
               className="block text-xs text-neutral-400"
             >
-              Role
+              {t("Role")}
             </label>
             <select
               id={`custom-domain-role-${deploymentName}`}
@@ -535,9 +547,9 @@ function CustomDomainsPanelExpanded({
               className="h-9 rounded-md border border-neutral-700 bg-neutral-900 px-3 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
               data-testid="custom-domain-role"
             >
-              <option value="api">api — Cloud / client API (3210)</option>
-              <option value="site">site — HTTP actions: Better Auth, webhooks (3211)</option>
-              <option value="dashboard">dashboard — Convex Dashboard UI</option>
+              <option value="api">{t("api — Cloud / client API (3210)")}</option>
+              <option value="site">{t("site — HTTP actions: Better Auth, webhooks (3211)")}</option>
+              <option value="dashboard">{t("dashboard — Convex Dashboard UI")}</option>
             </select>
           </div>
           <Button
@@ -547,9 +559,9 @@ function CustomDomainsPanelExpanded({
           >
             {pending
               ? configuringDomain
-                ? "Configuring DNS…"
-                : "Adding…"
-              : "Add"}
+                ? t("Configuring DNS…")
+                : t("Adding…")
+              : t("Add")}
           </Button>
         </form>
 
@@ -561,7 +573,7 @@ function CustomDomainsPanelExpanded({
             className="text-[11px] text-neutral-500"
             data-testid="custom-domain-detection-pending"
           >
-            Detecting DNS provider…
+            {t("Detecting DNS provider…")}
           </p>
         )}
 
@@ -571,20 +583,21 @@ function CustomDomainsPanelExpanded({
             data-testid="custom-domain-cloudflare-box"
           >
             <p className="font-semibold text-emerald-200">
-              Cloudflare detected
+              {t("Cloudflare detected")}
             </p>
             <p className="text-emerald-100/90">
-              We can configure DNS for you automatically using a stored
-              Cloudflare credential.
+              {t(
+                "We can configure DNS for you automatically using a stored Cloudflare credential.",
+              )}
             </p>
             {!isInstanceAdmin && (
               <p
                 className="text-emerald-100/80"
                 data-testid="custom-domain-cloudflare-not-admin"
               >
-                Auto-configuration is gated to instance admins. Ask your
-                Synapse admin to add a Cloudflare credential, or follow the
-                manual instructions below.
+                {t(
+                  "Auto-configuration is gated to instance admins. Ask your Synapse admin to add a Cloudflare credential, or follow the manual instructions below.",
+                )}
               </p>
             )}
             {isInstanceAdmin && matchingCredentials.length === 0 && (
@@ -592,14 +605,14 @@ function CustomDomainsPanelExpanded({
                 className="text-emerald-100/90"
                 data-testid="custom-domain-cloudflare-no-credential"
               >
-                No credential covers this domain.{" "}
+                {t("No credential covers this domain.")}{" "}
                 <a
                   href="/admin/dns-credentials"
                   className="font-medium text-white underline-offset-2 hover:underline"
                 >
-                  Add a Cloudflare credential
+                  {t("Add a Cloudflare credential")}
                 </a>{" "}
-                to enable one-click DNS.
+                {t("to enable one-click DNS.")}
               </p>
             )}
             {isInstanceAdmin && matchingCredentials.length > 0 && (
@@ -615,7 +628,7 @@ function CustomDomainsPanelExpanded({
                     data-testid="custom-domain-autoconfigure-toggle"
                   />
                   <span className="text-emerald-100">
-                    Auto-configure with Cloudflare
+                    {t("Auto-configure with Cloudflare")}
                   </span>
                 </label>
                 {autoConfigure && (
@@ -624,7 +637,7 @@ function CustomDomainsPanelExpanded({
                       htmlFor={`custom-domain-cred-${deploymentName}`}
                       className="block text-emerald-100/80"
                     >
-                      Credential
+                      {t("Credential")}
                     </label>
                     <select
                       id={`custom-domain-cred-${deploymentName}`}
@@ -660,21 +673,23 @@ function CustomDomainsPanelExpanded({
             className="rounded-md border border-neutral-800/80 bg-neutral-950 px-3 py-2 text-[11px] text-neutral-400"
             data-testid="custom-domain-dns-hint"
           >
-            <p className="font-semibold text-neutral-300">DNS instructions</p>
+            <p className="font-semibold text-neutral-300">{t("DNS instructions")}</p>
             <p className="mt-1">
-              Point an <code className="font-mono">A</code> record for your
-              domain at this Synapse host&rsquo;s public IPv4
-              (<code className="font-mono">SYNAPSE_PUBLIC_IP</code>). Once the
-              record propagates, Synapse will issue a Let&rsquo;s Encrypt
-              certificate on demand.
+              {t("Point an")} <code className="font-mono">A</code>{" "}
+              {t("record for your domain at this Synapse host’s public IPv4")}
+              {" ("}<code className="font-mono">SYNAPSE_PUBLIC_IP</code>{"). "}
+              {t(
+                "Once the record propagates, Synapse will issue a Let’s Encrypt certificate on demand.",
+              )}
             </p>
             {detection?.provider === "unknown" && domain.trim() && (
               <p
                 className="mt-2 text-neutral-500"
                 data-testid="custom-domain-detection-unknown"
               >
-                DNS provider not detected — you can still configure
-                manually after the domain is added.
+                {t(
+                  "DNS provider not detected — you can still configure manually after the domain is added.",
+                )}
               </p>
             )}
           </div>
@@ -693,7 +708,7 @@ function CustomDomainsPanelExpanded({
           <p className="text-xs text-red-400">
             {error instanceof ApiError
               ? error.message
-              : "Could not load domains"}
+              : t("Could not load domains")}
           </p>
         )}
         {actionError && (
@@ -703,20 +718,21 @@ function CustomDomainsPanelExpanded({
         )}
 
         {isLoading ? (
-          <p className="text-xs text-neutral-500">Loading…</p>
+          <p className="text-xs text-neutral-500">{t("Loading…")}</p>
         ) : domains.length === 0 ? (
           <p
             className="text-xs text-neutral-500"
             data-testid="custom-domains-empty"
           >
-            No custom domains yet. Add one above to start routing traffic
-            from a domain you control.
+            {t(
+              "No custom domains yet. Add one above to start routing traffic from a domain you control.",
+            )}
           </p>
         ) : (
           <ul
             className="space-y-2"
             data-testid="custom-domains-list"
-            aria-label="Custom domains"
+            aria-label={t("Custom domains")}
           >
             {domains.map((d) => (
               <li
@@ -739,10 +755,10 @@ function CustomDomainsPanelExpanded({
                     <Badge
                       tone="neutral"
                       className="border-orange-500/40 bg-orange-500/10 text-orange-300"
-                      title="DNS managed by Synapse via Cloudflare"
+                      title={t("DNS managed by Synapse via Cloudflare")}
                       data-testid={`custom-domain-cloudflare-chip-${d.domain}`}
                     >
-                      Cloudflare
+                      {t("Cloudflare")}
                     </Badge>
                   )}
                   {configuringDomain === d.domain && (
@@ -750,12 +766,12 @@ function CustomDomainsPanelExpanded({
                       className="text-neutral-400"
                       data-testid={`custom-domain-configuring-${d.domain}`}
                     >
-                      Configuring DNS at Cloudflare…
+                      {t("Configuring DNS at Cloudflare…")}
                     </span>
                   )}
                   {d.status === "active" && d.dnsVerifiedAt && (
                     <span className="text-neutral-500">
-                      verified {relativeTime(d.dnsVerifiedAt)}
+                      {t("verified {time}", { time: relativeTime(d.dnsVerifiedAt) })}
                     </span>
                   )}
                   <span className="ml-auto flex shrink-0 gap-2">
@@ -771,13 +787,13 @@ function CustomDomainsPanelExpanded({
                         size="sm"
                         onClick={() => autoConfigureRow(d)}
                         disabled={autoConfiguringId === d.id}
-                        aria-label={`Auto-configure DNS for ${d.domain} via stored credential`}
+                        aria-label={t("Auto-configure DNS for {domain} via stored credential", { domain: d.domain })}
                         data-testid={`custom-domain-autoconfigure-${d.domain}`}
-                        title="Push the A record via a stored Cloudflare credential covering this zone"
+                        title={t("Push the A record via a stored Cloudflare credential covering this zone")}
                       >
                         {autoConfiguringId === d.id
-                          ? "Auto-configuring…"
-                          : "Auto-configure DNS"}
+                          ? t("Auto-configuring…")
+                          : t("Auto-configure DNS")}
                       </Button>
                     )}
                     <Button
@@ -785,20 +801,20 @@ function CustomDomainsPanelExpanded({
                       size="sm"
                       onClick={() => verify(d)}
                       disabled={verifyingId === d.id}
-                      aria-label={`Verify DNS for ${d.domain}`}
+                      aria-label={t("Verify DNS for {domain}", { domain: d.domain })}
                       data-testid={`custom-domain-verify-${d.domain}`}
                     >
-                      {verifyingId === d.id ? "Verifying…" : "Verify"}
+                      {verifyingId === d.id ? t("Verifying…") : t("Verify")}
                     </Button>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => remove(d)}
                       disabled={deletingId === d.id}
-                      aria-label={`Remove custom domain ${d.domain}`}
+                      aria-label={t("Remove custom domain {domain}", { domain: d.domain })}
                       data-testid={`custom-domain-remove-${d.domain}`}
                     >
-                      {deletingId === d.id ? "Removing…" : "Remove"}
+                      {deletingId === d.id ? t("Removing…") : t("Remove")}
                     </Button>
                   </span>
                 </div>

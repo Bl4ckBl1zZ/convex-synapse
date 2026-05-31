@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { use } from "react";
 import clsx from "clsx";
 import { Badge } from "@/components/ui/badge";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string };
 
@@ -22,6 +23,7 @@ export default function TeamSettingsLayout({
   params: Promise<Params>;
   children: React.ReactNode;
 }) {
+  const { t } = useT();
   const { team: teamRef } = use(params);
   const pathname = usePathname() ?? "";
   const base = `/teams/${encodeURIComponent(teamRef)}/settings`;
@@ -34,9 +36,9 @@ export default function TeamSettingsLayout({
   const groups: { label?: string; items: NavItem[] }[] = [
     {
       items: [
-        { href: `${base}/general`, label: "General" },
-        { href: `${base}/members`, label: "Members" },
-        { href: `${base}/access-tokens`, label: "Access Tokens" },
+        { href: `${base}/general`, label: t("General") },
+        { href: `${base}/members`, label: t("Members") },
+        { href: `${base}/access-tokens`, label: t("Access Tokens") },
       ],
     },
   ];
@@ -45,16 +47,16 @@ export default function TeamSettingsLayout({
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">
-          Team Settings
+          {t("Team Settings")}
         </h1>
         <p className="mt-1 text-sm text-neutral-400">
-          Manage members, access, and team-wide configuration.
+          {t("Manage members, access, and team-wide configuration.")}
         </p>
       </div>
 
       <div className="grid gap-8 md:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="md:sticky md:top-20 md:self-start">
-          <nav className="space-y-6" aria-label="Team settings sections">
+          <nav className="space-y-6" aria-label={t("Team settings sections")}>
             {groups.map((g, i) => (
               <div key={i} className="space-y-1">
                 {g.label && (

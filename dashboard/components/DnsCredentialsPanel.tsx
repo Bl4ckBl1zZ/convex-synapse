@@ -15,6 +15,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, type DNSCredential } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // Cloudflare API-token deep link. Pre-fills the "Edit zone DNS" template
 // on the operator's dashboard so they don't have to wade through every
@@ -58,6 +59,7 @@ function providerLabel(p: DNSCredential["provider"]): string {
 // Auth: `/admin/layout.tsx` already enforces is_instance_admin and
 // redirects everyone else to /teams. The backend re-checks anyway.
 export function DnsCredentialsPanel() {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<DNSCredential[]>(
     "/v1/admin/dns_credentials",
     () => api.admin.dnsCredentials.list(),
@@ -76,11 +78,11 @@ export function DnsCredentialsPanel() {
     <div className="space-y-6" data-testid="dns-credentials-panel">
       <Card>
         <CardHeader>
-          <CardTitle>DNS credentials</CardTitle>
+          <CardTitle>{t("DNS credentials")}</CardTitle>
           <CardDescription>
-            Register DNS provider tokens so Synapse can configure custom
-            domains for deployments automatically. Tokens are encrypted at
-            rest; we never echo them back.
+            {t(
+              "Register DNS provider tokens so Synapse can configure custom domains for deployments automatically. Tokens are encrypted at rest; we never echo them back.",
+            )}
           </CardDescription>
         </CardHeader>
         <CardBody className="space-y-4">
@@ -89,7 +91,7 @@ export function DnsCredentialsPanel() {
               onClick={() => setAddOpen(true)}
               data-testid="dns-credentials-add-cloudflare"
             >
-              Add Cloudflare credential
+              {t("Add Cloudflare credential")}
             </Button>
           </div>
 
@@ -108,7 +110,7 @@ export function DnsCredentialsPanel() {
             >
               {error instanceof ApiError
                 ? error.message
-                : "Could not load DNS credentials"}
+                : t("Could not load DNS credentials")}
             </p>
           )}
 
@@ -117,15 +119,16 @@ export function DnsCredentialsPanel() {
               className="rounded-md border border-neutral-800/80 bg-neutral-950 px-3 py-3 text-xs text-neutral-400"
               data-testid="dns-credentials-empty"
             >
-              No credentials yet. Add a Cloudflare token above so you can
-              auto-configure DNS for custom domains.
+              {t(
+                "No credentials yet. Add a Cloudflare token above so you can auto-configure DNS for custom domains.",
+              )}
             </p>
           )}
 
           {credentials.length > 0 && (
             <ul
               className="space-y-2"
-              aria-label="DNS credentials"
+              aria-label={t("DNS credentials")}
               data-testid="dns-credentials-list"
             >
               {credentials.map((c) => (
@@ -168,6 +171,7 @@ function CredentialRow({
   credential: DNSCredential;
   onDelete: () => void;
 }) {
+  const { t } = useT();
   const [zonesOpen, setZonesOpen] = useState(false);
   const zoneCount = credential.zones?.length ?? 0;
 
@@ -185,10 +189,12 @@ function CredentialRow({
         </span>
         <Badge tone="neutral">{providerLabel(credential.provider)}</Badge>
         <Badge tone={zoneCount > 0 ? "green" : "yellow"}>
-          {zoneCount} {zoneCount === 1 ? "zone" : "zones"}
+          {zoneCount === 1
+            ? t("{n} zone", { n: zoneCount })
+            : t("{n} zones", { n: zoneCount })}
         </Badge>
         <span className="text-neutral-500">
-          last used {relativeTime(credential.lastUsedAt)}
+          {t("last used {time}", { time: relativeTime(credential.lastUsedAt) })}
         </span>
         <span className="ml-auto flex shrink-0 gap-2">
           {zoneCount > 0 && (
@@ -199,22 +205,24 @@ function CredentialRow({
               aria-expanded={zonesOpen}
               aria-label={
                 zonesOpen
-                  ? `Hide zones for ${credential.label}`
-                  : `Show zones for ${credential.label}`
+                  ? t("Hide zones for {label}", { label: credential.label })
+                  : t("Show zones for {label}", { label: credential.label })
               }
               data-testid={`dns-credential-toggle-zones-${credential.id}`}
             >
-              {zonesOpen ? "Hide zones" : "Show zones"}
+              {zonesOpen ? t("Hide zones") : t("Show zones")}
             </Button>
           )}
           <Button
             variant="ghost"
             size="sm"
             onClick={onDelete}
-            aria-label={`Delete credential ${credential.label}`}
+            aria-label={t("Delete credential {label}", {
+              label: credential.label,
+            })}
             data-testid={`dns-credential-delete-${credential.id}`}
           >
-            Delete
+            {t("Delete")}
           </Button>
         </span>
       </div>
@@ -267,6 +275,7 @@ function AddCloudflareDialogInner({
   onClose: () => void;
   onAdded: () => Promise<void>;
 }) {
+  const { t } = useT();
   const [label, setLabel] = useState("");
   const [token, setToken] = useState("");
   const [revealToken, setRevealToken] = useState(false);
@@ -277,11 +286,11 @@ function AddCloudflareDialogInner({
     e.preventDefault();
     setError(null);
     if (!label.trim()) {
-      setError("Label is required");
+      setError(t("Label is required"));
       return;
     }
     if (!token.trim()) {
-      setError("API token is required");
+      setError(t("API token is required"));
       return;
     }
     setPending(true);
@@ -290,7 +299,7 @@ function AddCloudflareDialogInner({
       await onAdded();
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : "Could not add credential",
+        err instanceof ApiError ? err.message : t("Could not add credential"),
       );
     } finally {
       setPending(false);
@@ -301,12 +310,12 @@ function AddCloudflareDialogInner({
     <Dialog
       open
       onClose={() => !pending && onClose()}
-      title="Add Cloudflare credential"
+      title={t("Add Cloudflare credential")}
     >
       <form
         onSubmit={submit}
         className="space-y-4"
-        aria-label="Add Cloudflare credential"
+        aria-label={t("Add Cloudflare credential")}
         data-testid="dns-credentials-add-dialog"
       >
         <div className="space-y-1.5">
@@ -314,18 +323,18 @@ function AddCloudflareDialogInner({
             htmlFor="dns-credential-label"
             className="block text-xs text-neutral-400"
           >
-            Label
+            {t("Label")}
           </label>
           <Input
             id="dns-credential-label"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            placeholder="Personal CF account"
+            placeholder={t("Personal CF account")}
             autoComplete="off"
             data-testid="dns-credential-label-input"
           />
           <p className="text-[11px] text-neutral-500">
-            A short name so you can tell tokens apart later.
+            {t("A short name so you can tell tokens apart later.")}
           </p>
         </div>
 
@@ -334,7 +343,7 @@ function AddCloudflareDialogInner({
             htmlFor="dns-credential-token"
             className="block text-xs text-neutral-400"
           >
-            API token
+            {t("API token")}
           </label>
           <div className="relative">
             <Input
@@ -352,14 +361,14 @@ function AddCloudflareDialogInner({
               type="button"
               onClick={() => setRevealToken((v) => !v)}
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-[11px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
-              aria-label={revealToken ? "Hide token" : "Show token"}
+              aria-label={revealToken ? t("Hide token") : t("Show token")}
               data-testid="dns-credential-token-toggle"
             >
-              {revealToken ? "Hide" : "Show"}
+              {revealToken ? t("Hide") : t("Show")}
             </button>
           </div>
           <p className="text-[11px] text-neutral-500">
-            Need a token?{" "}
+            {t("Need a token?")}{" "}
             <a
               href={CLOUDFLARE_TOKEN_URL}
               target="_blank"
@@ -367,11 +376,11 @@ function AddCloudflareDialogInner({
               className="text-violet-300 underline-offset-2 hover:underline"
               data-testid="dns-credential-cloudflare-link"
             >
-              Open Cloudflare and create one
+              {t("Open Cloudflare and create one")}
             </a>{" "}
-            — needs <code className="font-mono">Zone:DNS:Edit</code> +{" "}
-            <code className="font-mono">Zone:Zone:Read</code> scoped to the
-            zone(s) you want Synapse to manage.
+            {t("— needs")} <code className="font-mono">Zone:DNS:Edit</code> +{" "}
+            <code className="font-mono">Zone:Zone:Read</code>{" "}
+            {t("scoped to the zone(s) you want Synapse to manage.")}
           </p>
         </div>
 
@@ -393,14 +402,14 @@ function AddCloudflareDialogInner({
             disabled={pending}
             data-testid="dns-credentials-add-cancel"
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="submit"
             disabled={pending}
             data-testid="dns-credentials-add-submit"
           >
-            {pending ? "Adding…" : "Add credential"}
+            {pending ? t("Adding…") : t("Add credential")}
           </Button>
         </div>
       </form>
@@ -436,6 +445,7 @@ function DeleteDialogInner({
   onClose: () => void;
   onDeleted: () => Promise<void>;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | undefined>(undefined);
@@ -452,7 +462,7 @@ function DeleteDialogInner({
         setError(err.message);
         setErrorCode(err.code);
       } else {
-        setError("Could not delete credential");
+        setError(t("Could not delete credential"));
       }
     } finally {
       setPending(false);
@@ -468,13 +478,13 @@ function DeleteDialogInner({
     <Dialog
       open
       onClose={() => !pending && onClose()}
-      title={`Delete "${target.label}"?`}
+      title={t('Delete "{label}"?', { label: target.label })}
     >
       <div className="space-y-3" data-testid="dns-credentials-delete-dialog">
         <p className="text-xs text-neutral-300">
-          Synapse will forget this token. Any deployment domains that were
-          auto-configured with it will keep working — only future
-          auto-configuration breaks.
+          {t(
+            "Synapse will forget this token. Any deployment domains that were auto-configured with it will keep working — only future auto-configuration breaks.",
+          )}
         </p>
 
         {error && (
@@ -485,8 +495,9 @@ function DeleteDialogInner({
           >
             {inUse && (
               <p className="font-semibold">
-                This credential is in use. Remove the dependent domains
-                first, then delete the credential.
+                {t(
+                  "This credential is in use. Remove the dependent domains first, then delete the credential.",
+                )}
               </p>
             )}
             <p className={inUse ? "text-red-200/80" : ""}>{error}</p>
@@ -500,7 +511,7 @@ function DeleteDialogInner({
             disabled={pending}
             data-testid="dns-credentials-delete-cancel"
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             variant="danger"
@@ -508,7 +519,7 @@ function DeleteDialogInner({
             disabled={pending}
             data-testid="dns-credentials-delete-confirm"
           >
-            {pending ? "Deleting…" : "Delete"}
+            {pending ? t("Deleting…") : t("Delete")}
           </Button>
         </div>
       </div>

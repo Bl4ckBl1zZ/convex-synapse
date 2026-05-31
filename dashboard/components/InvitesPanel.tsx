@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ApiError, api, type PendingInvite } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type Props = { teamRef: string };
 
@@ -14,6 +15,7 @@ type Props = { teamRef: string };
 // long as the invite is pending — by design, since admins are the trust
 // anchor here. Anyone with a token can join the team.
 export function InvitesPanel({ teamRef }: Props) {
+  const { t } = useT();
   const { data, error, mutate } = useSWR<PendingInvite[]>(
     ["/invites", teamRef],
     () => api.teams.listInvites(teamRef),
@@ -38,7 +40,7 @@ export function InvitesPanel({ teamRef }: Props) {
     } catch (err) {
       // 403 is the typical case (non-admin trying to invite). Surface it
       // gently rather than blowing up the panel.
-      setFormError(err instanceof ApiError ? err.message : "Could not invite");
+      setFormError(err instanceof ApiError ? err.message : t("Could not invite"));
     } finally {
       setPending(false);
     }
@@ -51,7 +53,7 @@ export function InvitesPanel({ teamRef }: Props) {
       await mutate();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not cancel invite",
+        err instanceof ApiError ? err.message : t("Could not cancel invite"),
       );
     }
   };
@@ -65,15 +67,17 @@ export function InvitesPanel({ teamRef }: Props) {
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="text-sm font-semibold text-neutral-200">Invites</h2>
+        <h2 className="text-sm font-semibold text-neutral-200">{t("Invites")}</h2>
         <p className="text-xs text-neutral-500">
-          Pending invitations to this team.
+          {t("Pending invitations to this team.")}
         </p>
       </div>
 
       {error && !(error instanceof ApiError && error.status === 403) && (
         <p className="text-xs text-red-400">
-          Failed to load invites: {(error as Error).message}
+          {t("Failed to load invites: {message}", {
+            message: (error as Error).message,
+          })}
         </p>
       )}
 
@@ -88,16 +92,21 @@ export function InvitesPanel({ teamRef }: Props) {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-neutral-100">{inv.email}</p>
                   <p className="font-mono text-xs text-neutral-500 truncate">
-                    role: {inv.role} · token: {inv.token}
+                    {t("role: {role} · token: {token}", {
+                      role: inv.role,
+                      token: inv.token,
+                    })}
                   </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => cancel(inv.id)}
-                  aria-label={`Cancel invite for ${inv.email}`}
+                  aria-label={t("Cancel invite for {email}", {
+                    email: inv.email,
+                  })}
                 >
-                  Cancel
+                  {t("Cancel")}
                 </Button>
               </div>
             ))}
@@ -106,26 +115,26 @@ export function InvitesPanel({ teamRef }: Props) {
       )}
 
       {data && data.length === 0 && (
-        <p className="text-xs text-neutral-500">No pending invites.</p>
+        <p className="text-xs text-neutral-500">{t("No pending invites.")}</p>
       )}
 
       <form onSubmit={sendInvite} className="flex flex-wrap items-end gap-2">
         <div className="flex-1 min-w-[14rem] space-y-1">
           <label htmlFor="invite-email" className="block text-xs text-neutral-400">
-            Email
+            {t("Email")}
           </label>
           <Input
             id="invite-email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="teammate@example.com"
+            placeholder={t("teammate@example.com")}
             required
           />
         </div>
         <div className="space-y-1">
           <label htmlFor="invite-role" className="block text-xs text-neutral-400">
-            Role
+            {t("Role")}
           </label>
           <select
             id="invite-role"
@@ -138,7 +147,7 @@ export function InvitesPanel({ teamRef }: Props) {
           </select>
         </div>
         <Button type="submit" disabled={pending || !email.trim()}>
-          {pending ? "Inviting…" : "Invite"}
+          {pending ? t("Inviting…") : t("Invite")}
         </Button>
       </form>
 
@@ -148,8 +157,7 @@ export function InvitesPanel({ teamRef }: Props) {
         <Card>
           <CardBody>
             <p className="text-xs text-neutral-300">
-              Invite issued for <span className="font-medium">{lastIssued.email}</span>.
-              Share this URL with them:
+              {t("Invite issued for ")}<span className="font-medium">{lastIssued.email}</span>{t(". Share this URL with them:")}
             </p>
             <p className="mt-2 break-all rounded bg-neutral-900 px-3 py-2 font-mono text-xs text-neutral-100">
               {typeof window !== "undefined" ? window.location.origin : ""}/accept-invite?token=

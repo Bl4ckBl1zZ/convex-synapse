@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { useT } from "@/lib/i18n";
 
 // Fires-once tour shown on the first visit to /teams after a successful
 // sign-in. Surfaces the eight Synapse superpowers that an operator
@@ -94,6 +95,7 @@ export function WelcomeTour() {
   // SSR-safe: render nothing on first hydrate pass, then decide from
   // localStorage on the client. Avoids the "setState inside useEffect"
   // anti-pattern by keeping the read in a single derived state value.
+  const { t } = useT();
   const [phase, setPhase] = useState<"loading" | "open" | "closed">("loading");
   const [step, setStep] = useState(0);
 
@@ -138,20 +140,20 @@ export function WelcomeTour() {
       open
       onClose={close}
       className="max-w-xl"
-      title={slide.title}
+      title={t(slide.title)}
     >
       <div className="space-y-4">
-        <p className="text-sm leading-relaxed text-neutral-300">{slide.body}</p>
+        <p className="text-sm leading-relaxed text-neutral-300">{t(slide.body)}</p>
 
         {slide.cta && (
           <div className="rounded-md border border-emerald-900/60 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
-            Try it next:{" "}
+            {t("Try it next:")}{" "}
             <a
               href={slide.cta.href}
               className="font-semibold underline underline-offset-2 hover:text-emerald-100"
               onClick={close}
             >
-              {slide.cta.label} →
+              {t(slide.cta.label)} →
             </a>
           </div>
         )}
@@ -173,16 +175,16 @@ export function WelcomeTour() {
           <div className="flex gap-2">
             {step > 0 && (
               <Button variant="ghost" size="sm" onClick={prev}>
-                Back
+                {t("Back")}
               </Button>
             )}
             {!isLast ? (
               <Button size="sm" onClick={next}>
-                Next
+                {t("Next")}
               </Button>
             ) : (
               <Button size="sm" onClick={close}>
-                Got it
+                {t("Got it")}
               </Button>
             )}
           </div>
@@ -194,7 +196,7 @@ export function WelcomeTour() {
             onClick={close}
             className="text-xs text-neutral-500 hover:text-neutral-300"
           >
-            Skip tour — don&apos;t show again
+            {t("Skip tour — don't show again")}
           </button>
         </div>
       </div>

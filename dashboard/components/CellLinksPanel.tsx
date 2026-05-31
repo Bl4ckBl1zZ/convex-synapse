@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IconLink } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -30,6 +31,7 @@ const AUTH_MODES = ["service_token", "mtls", "none"];
 // count) and lets operators create links, disable them, and mint/revoke
 // service tokens. No secret is ever shown except the one-time token.
 export function CellLinksPanel({ projectId }: Props) {
+  const { t } = useT();
   const links = useSWR<CellLink[]>(["/cell-links", projectId], () =>
     api.cellLinks.listByProject(projectId),
   );
@@ -58,27 +60,29 @@ export function CellLinksPanel({ projectId }: Props) {
         <div className="flex items-baseline gap-2">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
             <IconLink className="opacity-70" />
-            Cell Links
+            {t("Cell Links")}
           </h3>
           <span className="text-xs text-neutral-500">
-            — service-to-service contracts between cells
+            {t("— service-to-service contracts between cells")}
           </span>
         </div>
         <Button
           size="sm"
           onClick={() => setCreateOpen(true)}
           disabled={!hasCells}
-          title={hasCells ? undefined : "Create at least two cells first"}
+          title={hasCells ? undefined : t("Create at least two cells first")}
           data-testid="create-cell-link-button"
         >
-          + Create link
+          {t("+ Create link")}
         </Button>
       </div>
 
       <div className="p-5">
         {links.error instanceof ApiError && (
           <p className="text-xs text-red-400">
-            Failed to load cell links: {links.error.message}
+            {t("Failed to load cell links: {message}", {
+              message: links.error.message,
+            })}
           </p>
         )}
 
@@ -86,13 +90,15 @@ export function CellLinksPanel({ projectId }: Props) {
 
         {links.data && list.length === 0 && (
           <EmptyState
-            title="No cell links yet"
-            description="A cell link is a contract that lets one cell talk to another (e.g. core → runtime) over a protocol, with an allow-list of commands and events. Create two cells, then link them."
+            title={t("No cell links yet")}
+            description={t(
+              "A cell link is a contract that lets one cell talk to another (e.g. core → runtime) over a protocol, with an allow-list of commands and events. Create two cells, then link them.",
+            )}
             testId="cell-links-empty"
             action={
               hasCells ? (
                 <Button size="sm" onClick={() => setCreateOpen(true)}>
-                  Create link
+                  {t("Create link")}
                 </Button>
               ) : undefined
             }
@@ -104,14 +110,14 @@ export function CellLinksPanel({ projectId }: Props) {
             <table className="w-full text-xs">
               <thead className="bg-neutral-950 text-neutral-400">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium">Source → Target</th>
-                  <th className="px-3 py-2 text-left font-medium">Protocol</th>
-                  <th className="px-3 py-2 text-left font-medium">Auth</th>
-                  <th className="px-3 py-2 text-left font-medium">Status</th>
-                  <th className="px-3 py-2 text-right font-medium">Cmds</th>
-                  <th className="px-3 py-2 text-right font-medium">Events</th>
-                  <th className="px-3 py-2 text-right font-medium">Tokens</th>
-                  <th className="px-3 py-2 text-right font-medium">Actions</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Source → Target")}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Protocol")}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Auth")}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Status")}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t("Cmds")}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t("Events")}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t("Tokens")}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-900">
@@ -123,7 +129,7 @@ export function CellLinksPanel({ projectId }: Props) {
                         {name(l.targetCellId)}
                       </div>
                       {l.endpoint && (
-                        <div className="text-[10px] text-neutral-600" title="Resolved target endpoint">
+                        <div className="text-[10px] text-neutral-600" title={t("Resolved target endpoint")}>
                           ↳ {l.endpoint}{" "}
                           <span className="text-neutral-700">({l.endpointSource})</span>
                         </div>
@@ -142,11 +148,11 @@ export function CellLinksPanel({ projectId }: Props) {
                     <td className="px-3 py-2 text-right">
                       <div className="flex justify-end gap-1">
                         <Button variant="ghost" size="sm" onClick={() => setTokensLink(l)}>
-                          Tokens
+                          {t("Tokens")}
                         </Button>
                         {l.status === "active" && (
                           <Button variant="ghost" size="sm" onClick={() => setDisableLink(l)}>
-                            Disable
+                            {t("Disable")}
                           </Button>
                         )}
                       </div>
@@ -201,6 +207,7 @@ function CreateLinkDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { t } = useT();
   const [sourceCellId, setSourceCellId] = useState(cells[0]?.id ?? "");
   const [targetCellId, setTargetCellId] = useState(cells[1]?.id ?? "");
   const [protocol, setProtocol] = useState("outbox");
@@ -214,7 +221,7 @@ function CreateLinkDialog({
     e.preventDefault();
     setFormError(null);
     if (sourceCellId === targetCellId) {
-      setFormError("Source and target must be different cells");
+      setFormError(t("Source and target must be different cells"));
       return;
     }
     setPending(true);
@@ -230,26 +237,26 @@ function CreateLinkDialog({
       onCreated();
       onClose();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Could not create link");
+      setFormError(err instanceof ApiError ? err.message : t("Could not create link"));
     } finally {
       setPending(false);
     }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title="Create cell link" className="max-w-lg">
+    <Dialog open={open} onClose={onClose} title={t("Create cell link")} className="max-w-lg">
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
-          <CellSelect label="Source cell" id="link-source" value={sourceCellId} onChange={setSourceCellId} cells={cells} />
-          <CellSelect label="Target cell" id="link-target" value={targetCellId} onChange={setTargetCellId} cells={cells} />
+          <CellSelect label={t("Source cell")} id="link-source" value={sourceCellId} onChange={setSourceCellId} cells={cells} />
+          <CellSelect label={t("Target cell")} id="link-target" value={targetCellId} onChange={setTargetCellId} cells={cells} />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <PlainSelect label="Protocol" id="link-protocol" value={protocol} onChange={setProtocol} options={PROTOCOLS} />
-          <PlainSelect label="Auth mode" id="link-auth" value={authMode} onChange={setAuthMode} options={AUTH_MODES} />
+          <PlainSelect label={t("Protocol")} id="link-protocol" value={protocol} onChange={setProtocol} options={PROTOCOLS} />
+          <PlainSelect label={t("Auth mode")} id="link-auth" value={authMode} onChange={setAuthMode} options={AUTH_MODES} />
         </div>
         <div className="space-y-2">
           <label htmlFor="link-commands" className="block text-xs text-neutral-400">
-            Allowed commands <span className="text-neutral-600">(one per line)</span>
+            {t("Allowed commands")} <span className="text-neutral-600">{t("(one per line)")}</span>
           </label>
           <textarea
             id="link-commands"
@@ -262,7 +269,7 @@ function CreateLinkDialog({
         </div>
         <div className="space-y-2">
           <label htmlFor="link-events" className="block text-xs text-neutral-400">
-            Allowed events <span className="text-neutral-600">(one per line)</span>
+            {t("Allowed events")} <span className="text-neutral-600">{t("(one per line)")}</span>
           </label>
           <textarea
             id="link-events"
@@ -276,10 +283,10 @@ function CreateLinkDialog({
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button type="submit" disabled={pending || !sourceCellId || !targetCellId}>
-            {pending ? "Creating…" : "Create link"}
+            {pending ? t("Creating…") : t("Create link")}
           </Button>
         </div>
       </form>
@@ -370,6 +377,7 @@ function TokensDialog({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<ServiceToken[]>(
     link ? ["/service-tokens", link.id] : null,
     () => api.cellLinks.listTokens(link!.id),
@@ -402,7 +410,7 @@ function TokensDialog({
       await mutate();
       onChanged();
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not create token");
+      setActionError(e instanceof ApiError ? e.message : t("Could not create token"));
     } finally {
       setPending(false);
     }
@@ -415,34 +423,34 @@ function TokensDialog({
       await mutate();
       onChanged();
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not revoke token");
+      setActionError(e instanceof ApiError ? e.message : t("Could not revoke token"));
     } finally {
       setBusyId(null);
     }
   };
 
   return (
-    <Dialog open onClose={onClose} title="Service tokens" className="max-w-lg">
+    <Dialog open onClose={onClose} title={t("Service tokens")} className="max-w-lg">
       <div className="space-y-4 text-sm">
         <div className="space-y-1">
           <p className="text-xs text-neutral-400">
-            For link{" "}
+            {t("For link")}{" "}
             <span className="font-mono text-neutral-300">
               {sourceName} → {targetName}
             </span>
             .
           </p>
           <p className="text-[11px] text-neutral-500">
-            Service tokens are link-scoped and can only discover this CellLink.
-            New tokens default to the <code className="text-neutral-400">discovery:read</code> scope.
-            The plaintext is shown once.
+            {t("Service tokens are link-scoped and can only discover this CellLink. New tokens default to the")}{" "}
+            <code className="text-neutral-400">discovery:read</code>{" "}
+            {t("scope. The plaintext is shown once.")}
           </p>
         </div>
 
         {issued && (
           <div className="space-y-1 rounded border border-yellow-900/60 bg-yellow-900/20 px-2.5 py-2">
             <p className="text-[11px] text-yellow-200">
-              New service token (shown once) — store it now:
+              {t("New service token (shown once) — store it now:")}
             </p>
             <pre className="overflow-x-auto break-all rounded bg-neutral-950 p-2 font-mono text-[11px] text-neutral-200">
               {issued}
@@ -458,7 +466,7 @@ function TokensDialog({
                   }
                 }}
               >
-                {copied ? "Copied!" : "Copy token"}
+                {copied ? t("Copied!") : t("Copy token")}
               </Button>
             </div>
           </div>
@@ -468,7 +476,7 @@ function TokensDialog({
           <div className="flex items-end gap-2">
             <div className="flex-1 space-y-1">
               <label htmlFor="token-name" className="block text-xs text-neutral-400">
-                New token name <span className="text-neutral-600">(optional)</span>
+                {t("New token name")} <span className="text-neutral-600">{t("(optional)")}</span>
               </label>
               <Input
                 id="token-name"
@@ -478,17 +486,17 @@ function TokensDialog({
               />
             </div>
             <Button onClick={create} disabled={pending} data-testid="generate-service-token">
-              {pending ? "Generating…" : "Generate"}
+              {pending ? t("Generating…") : t("Generate")}
             </Button>
           </div>
         ) : (
           <p className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
-            This link uses authMode{" "}
-            <span className="font-mono text-neutral-400">{link.authMode}</span>, which
+            {t("This link uses authMode")}{" "}
+            <span className="font-mono text-neutral-400">{link.authMode}</span>{t(", which")}
             {link.authMode === "none"
-              ? " is unauthenticated (placeholder — unsafe for production)"
-              : " is a placeholder and not implemented yet"}
-            , so service tokens can&apos;t be generated for it.
+              ? t(" is unauthenticated (placeholder — unsafe for production)")
+              : t(" is a placeholder and not implemented yet")}
+            {t(", so service tokens can't be generated for it.")}
           </p>
         )}
 
@@ -496,45 +504,45 @@ function TokensDialog({
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
 
         {isLoading ? (
-          <p className="text-xs text-neutral-500">Loading…</p>
+          <p className="text-xs text-neutral-500">{t("Loading…")}</p>
         ) : tokens.length === 0 ? (
-          <p className="text-xs text-neutral-500">No service tokens yet.</p>
+          <p className="text-xs text-neutral-500">{t("No service tokens yet.")}</p>
         ) : (
           <div className="overflow-hidden rounded-md border border-neutral-800/80">
             <table className="w-full text-[11px]">
               <thead className="bg-neutral-950 text-neutral-400">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium">Name</th>
-                  <th className="px-3 py-2 text-left font-medium">Status</th>
-                  <th className="px-3 py-2 text-left font-medium">Scopes</th>
-                  <th className="px-3 py-2 text-left font-medium">Last used</th>
-                  <th className="px-3 py-2 text-right font-medium">Actions</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Name")}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Status")}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Scopes")}</th>
+                  <th className="px-3 py-2 text-left font-medium">{t("Last used")}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-900">
-                {tokens.map((t) => {
-                  const eff = t.effectiveStatus || t.status;
+                {tokens.map((tok) => {
+                  const eff = tok.effectiveStatus || tok.status;
                   return (
-                    <tr key={t.id} className="text-neutral-200">
-                      <td className="px-3 py-2">{t.name || "—"}</td>
+                    <tr key={tok.id} className="text-neutral-200">
+                      <td className="px-3 py-2">{tok.name || "—"}</td>
                       <td className="px-3 py-2">
                         <Badge tone={tokenTone(eff)}>{eff}</Badge>
                       </td>
                       <td className="px-3 py-2 font-mono text-neutral-500">
-                        {t.scopes.length ? t.scopes.join(", ") : "—"}
+                        {tok.scopes.length ? tok.scopes.join(", ") : "—"}
                       </td>
                       <td className="px-3 py-2 text-neutral-500">
-                        {t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : "never"}
+                        {tok.lastUsedAt ? new Date(tok.lastUsedAt).toLocaleString() : t("never")}
                       </td>
                       <td className="px-3 py-2 text-right">
                         {eff === "active" && (
                           <Button
                             variant="ghost"
                             size="sm"
-                            disabled={busyId === t.id}
-                            onClick={() => revoke(t.id)}
+                            disabled={busyId === tok.id}
+                            onClick={() => revoke(tok.id)}
                           >
-                            Revoke
+                            {t("Revoke")}
                           </Button>
                         )}
                       </td>
@@ -547,7 +555,7 @@ function TokensDialog({
         )}
 
         <div className="flex justify-end">
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose}>{t("Close")}</Button>
         </div>
       </div>
     </Dialog>
@@ -569,6 +577,7 @@ function DisableLinkDialog({
   onClose: () => void;
   onDisabled: () => void;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -588,29 +597,28 @@ function DisableLinkDialog({
       onDisabled();
       onClose();
     } catch (e) {
-      setFormError(e instanceof ApiError ? e.message : "Could not disable link");
+      setFormError(e instanceof ApiError ? e.message : t("Could not disable link"));
       setPending(false);
     }
   };
 
   return (
-    <Dialog open onClose={pending ? () => {} : onClose} title="Disable cell link">
+    <Dialog open onClose={pending ? () => {} : onClose} title={t("Disable cell link")}>
       <div className="space-y-4">
         <p className="text-sm text-neutral-300">
-          Disable the link{" "}
+          {t("Disable the link")}{" "}
           <span className="font-mono">
             {sourceName} → {targetName}
           </span>
-          ? Existing service tokens stop appearing in discovery for this link.
-          You can create a fresh active link afterwards.
+          {t("? Existing service tokens stop appearing in discovery for this link. You can create a fresh active link afterwards.")}
         </p>
         {formError && <p className="text-xs text-red-400">{formError}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button type="button" onClick={disable} disabled={pending} data-testid="confirm-disable-link">
-            {pending ? "Disabling…" : "Disable link"}
+            {pending ? t("Disabling…") : t("Disable link")}
           </Button>
         </div>
       </div>

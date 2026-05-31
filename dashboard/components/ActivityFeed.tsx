@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import clsx from "clsx";
 import { Card } from "@/components/ui/card";
+import { useT } from "@/lib/i18n";
 import { ApiError, api, type ActivityEvent, type ActivityResponse } from "@/lib/api";
 
 type Props = { projectId: string };
@@ -23,6 +24,7 @@ type Props = { projectId: string };
 // shouldn't render an empty timeline next to a "no deployments yet"
 // state.
 export function ActivityFeed({ projectId }: Props) {
+  const { t } = useT();
   const { data, error, isLoading } = useSWR<ActivityResponse>(
     ["/activity", projectId],
     () => api.projects.activity(projectId, { limit: 30 }),
@@ -60,13 +62,13 @@ export function ActivityFeed({ projectId }: Props) {
     <Card className="overflow-hidden" data-testid="activity-feed">
       <div className="flex items-center justify-between border-b border-neutral-800/80 px-5 py-3.5">
         <div className="flex items-baseline gap-2">
-          <h3 className="text-sm font-semibold text-neutral-100">Activity</h3>
+          <h3 className="text-sm font-semibold text-neutral-100">{t("Activity")}</h3>
           <span className="text-xs text-neutral-500">
-            — recent events touching this project
+            {t("— recent events touching this project")}
           </span>
         </div>
         <span className="font-mono text-[11px] text-neutral-500">
-          {data.events.length} {data.events.length === 1 ? "event" : "events"}
+          {data.events.length} {data.events.length === 1 ? t("event") : t("events")}
         </span>
       </div>
       <div className="px-5 py-4">
@@ -139,6 +141,7 @@ function toMillis(iso: string): number {
 /* -------------------- Row renderers -------------------- */
 
 function SingleRow({ event }: { event: ActivityEvent }) {
+  const { t } = useT();
   const visual = visualFor(event.action);
   return (
     <li
@@ -150,7 +153,7 @@ function SingleRow({ event }: { event: ActivityEvent }) {
       <div className="min-w-0 flex-1 pb-3">
         <p className="text-[13px] text-neutral-200">
           <ActorLabel event={event} />{" "}
-          <span className="text-neutral-300">{visual.verb}</span>{" "}
+          <span className="text-neutral-300">{t(visual.verb)}</span>{" "}
           <TargetLabel event={event} />
         </p>
         <p className="mt-0.5 font-mono text-[10.5px] text-neutral-500">
@@ -168,6 +171,7 @@ function SingleRow({ event }: { event: ActivityEvent }) {
 }
 
 function GroupedRow({ events }: { events: ActivityEvent[] }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const first = events[0];
   const visual = visualFor(first.action);
@@ -188,16 +192,16 @@ function GroupedRow({ events }: { events: ActivityEvent[] }) {
           aria-expanded={open}
         >
           <ActorLabel event={first} />{" "}
-          <span className="text-neutral-300">{visual.verb}</span>{" "}
+          <span className="text-neutral-300">{t(visual.verb)}</span>{" "}
           <span className="font-mono text-neutral-100">
-            {events.length} {first.targetType || "items"}
+            {events.length} {first.targetType || t("items")}
           </span>{" "}
           <span className="text-neutral-500">— {previewTargets}{extra}</span>
         </button>
         <p className="mt-0.5 font-mono text-[10.5px] text-neutral-500">
           <RelativeTime iso={first.createTime} /> ·{" "}
           <span className="cursor-pointer hover:text-neutral-300" onClick={() => setOpen((v) => !v)}>
-            {open ? "hide" : "show all"}
+            {open ? t("hide") : t("show all")}
           </span>
         </p>
         {open && (
@@ -249,7 +253,8 @@ function DotMarker({
 }
 
 function ActorLabel({ event }: { event: ActivityEvent }) {
-  const name = event.actorName || event.actorEmail || "Someone";
+  const { t } = useT();
+  const name = event.actorName || event.actorEmail || t("Someone");
   return <span className="font-medium text-white">{name}</span>;
 }
 

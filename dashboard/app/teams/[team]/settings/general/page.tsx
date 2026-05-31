@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, type Team } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string };
 
@@ -25,6 +26,7 @@ export default function TeamGeneralPage({
 }: {
   params: Promise<Params>;
 }) {
+  const { t } = useT();
   const { team: teamRef } = use(params);
   const { data: team, isLoading, mutate } = useSWR<Team>(
     ["/team", teamRef],
@@ -35,9 +37,9 @@ export default function TeamGeneralPage({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Identity</CardTitle>
+          <CardTitle>{t("Identity")}</CardTitle>
           <CardDescription>
-            The team&apos;s display name, slug, and immutable id.
+            {t("The team's display name, slug, and immutable id.")}
           </CardDescription>
         </CardHeader>
         <CardBody className="space-y-4">
@@ -49,11 +51,11 @@ export default function TeamGeneralPage({
           )}
           {team && (
             <dl className="grid grid-cols-[6rem_1fr] gap-y-3 text-sm">
-              <dt className="text-neutral-500">Name</dt>
+              <dt className="text-neutral-500">{t("Name")}</dt>
               <dd className="text-neutral-100" data-testid="team-name">
                 {team.name}
               </dd>
-              <dt className="text-neutral-500">Slug</dt>
+              <dt className="text-neutral-500">{t("Slug")}</dt>
               <dd className="flex items-center gap-2">
                 <code
                   className="rounded bg-neutral-900 px-2 py-0.5 font-mono text-xs text-neutral-200"
@@ -63,7 +65,7 @@ export default function TeamGeneralPage({
                 </code>
                 <CopySlugButton slug={team.slug} />
               </dd>
-              <dt className="text-neutral-500">Team id</dt>
+              <dt className="text-neutral-500">{t("Team id")}</dt>
               <dd className="font-mono text-xs text-neutral-300">{team.id}</dd>
             </dl>
           )}
@@ -78,6 +80,7 @@ export default function TeamGeneralPage({
 }
 
 function CopySlugButton({ slug }: { slug: string }) {
+  const { t } = useT();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     const ok = await copyToClipboard(slug);
@@ -92,9 +95,9 @@ function CopySlugButton({ slug }: { slug: string }) {
       variant="ghost"
       size="sm"
       onClick={copy}
-      aria-label="Copy team slug"
+      aria-label={t("Copy team slug")}
     >
-      {copied ? "Copied!" : "Copy"}
+      {copied ? t("Copied!") : t("Copy")}
     </Button>
   );
 }
@@ -106,6 +109,7 @@ function EditCard({
   team: Team;
   onSaved: (next: Team) => void;
 }) {
+  const { t } = useT();
   const router = useRouter();
   const [name, setName] = useState(team.name);
   const [slug, setSlug] = useState(team.slug);
@@ -158,7 +162,7 @@ function EditCard({
       if (e instanceof ApiError) {
         setErr({ code: e.code, msg: e.message });
       } else {
-        setErr({ msg: "Could not save team" });
+        setErr({ msg: t("Could not save team") });
       }
     } finally {
       setPending(false);
@@ -168,9 +172,9 @@ function EditCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Edit team</CardTitle>
+        <CardTitle>{t("Edit team")}</CardTitle>
         <CardDescription>
-          Rename or re-slug your team and set the default region.
+          {t("Rename or re-slug your team and set the default region.")}
         </CardDescription>
       </CardHeader>
       <CardBody>
@@ -180,7 +184,7 @@ function EditCard({
               htmlFor="settings-team-name"
               className="block text-xs font-medium text-neutral-400"
             >
-              Team name
+              {t("Team name")}
             </label>
             <Input
               id="settings-team-name"
@@ -195,19 +199,18 @@ function EditCard({
               htmlFor="settings-team-slug"
               className="block text-xs font-medium text-neutral-400"
             >
-              Slug
+              {t("Slug")}
             </label>
             <Input
               id="settings-team-slug"
               value={slug}
               onChange={(e) => setSlug(e.target.value)}
               pattern="[a-z0-9-]+"
-              title="Lowercase letters, digits, and dashes only"
+              title={t("Lowercase letters, digits, and dashes only")}
               required
             />
             <p className="text-xs text-neutral-500">
-              Used in URLs. Lowercase letters, digits, and dashes only.
-              Changing this updates the URL of every page in this team.
+              {t("Used in URLs. Lowercase letters, digits, and dashes only. Changing this updates the URL of every page in this team.")}
             </p>
           </div>
           <div className="space-y-2">
@@ -215,7 +218,7 @@ function EditCard({
               htmlFor="settings-team-region"
               className="block text-xs font-medium text-neutral-400"
             >
-              Default region
+              {t("Default region")}
             </label>
             <Input
               id="settings-team-region"
@@ -224,16 +227,15 @@ function EditCard({
               placeholder="self-hosted"
             />
             <p className="text-xs text-neutral-500">
-              Stored for parity with Convex Cloud — Synapse self-hosted
-              is single-region today, so this is informational only.
+              {t("Stored for parity with Convex Cloud — Synapse self-hosted is single-region today, so this is informational only.")}
             </p>
           </div>
           {err && (
             <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
               {err.code === "slug_taken" ? (
-                <p>That slug is already in use by another team.</p>
+                <p>{t("That slug is already in use by another team.")}</p>
               ) : err.code === "invalid_slug" ? (
-                <p>Slug must contain only lowercase letters, digits, and dashes.</p>
+                <p>{t("Slug must contain only lowercase letters, digits, and dashes.")}</p>
               ) : (
                 <p>{err.msg}</p>
               )}
@@ -245,7 +247,7 @@ function EditCard({
               disabled={pending || !dirty}
               data-testid="team-save"
             >
-              {pending ? "Saving…" : "Save"}
+              {pending ? t("Saving…") : t("Save")}
             </Button>
           </div>
         </form>
@@ -255,6 +257,7 @@ function EditCard({
 }
 
 function DangerCard({ team }: { team: Team }) {
+  const { t } = useT();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState("");
@@ -272,7 +275,7 @@ function DangerCard({ team }: { team: Team }) {
       if (e instanceof ApiError) {
         setErr({ code: e.code, msg: e.message });
       } else {
-        setErr({ msg: "Could not delete team" });
+        setErr({ msg: t("Could not delete team") });
       }
     } finally {
       setPending(false);
@@ -282,16 +285,14 @@ function DangerCard({ team }: { team: Team }) {
   return (
     <Card className="border-red-500/30 bg-red-500/[0.04]">
       <CardHeader className="border-red-500/20">
-        <CardTitle className="text-red-200">Delete team</CardTitle>
+        <CardTitle className="text-red-200">{t("Delete team")}</CardTitle>
         <CardDescription className="text-red-300/70">
-          Irrevocably remove this team along with its projects and members.
-          Refused while any deployment in this team is still live —
-          delete or transfer those first.
+          {t("Irrevocably remove this team along with its projects and members. Refused while any deployment in this team is still live — delete or transfer those first.")}
         </CardDescription>
       </CardHeader>
       <CardBody className="flex items-center justify-between gap-3">
         <p className="text-xs text-red-300/70">
-          Cascades to projects, env vars, invites, and audit events.
+          {t("Cascades to projects, env vars, invites, and audit events.")}
         </p>
         <Button
           variant="danger"
@@ -301,20 +302,20 @@ function DangerCard({ team }: { team: Team }) {
             setErr(null);
           }}
           data-testid="team-delete-open"
-          aria-label="Delete team"
+          aria-label={t("Delete team")}
         >
-          Delete team
+          {t("Delete team")}
         </Button>
       </CardBody>
 
       <Dialog
         open={open}
         onClose={() => !pending && setOpen(false)}
-        title="Delete team"
+        title={t("Delete team")}
       >
         <form onSubmit={submit} className="space-y-4">
           <p className="text-sm text-neutral-300">
-            Type the team name <strong>{team.name}</strong> to confirm.
+            {t("Type the team name")} <strong>{team.name}</strong> {t("to confirm.")}
           </p>
           <Input
             id="team-delete-confirm"
@@ -327,8 +328,7 @@ function DangerCard({ team }: { team: Team }) {
             <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
               {err.code === "team_has_deployments" ? (
                 <p>
-                  This team still owns live deployments. Delete or transfer
-                  them first, then retry.
+                  {t("This team still owns live deployments. Delete or transfer them first, then retry.")}
                 </p>
               ) : (
                 <p>{err.msg}</p>
@@ -342,7 +342,7 @@ function DangerCard({ team }: { team: Team }) {
               onClick={() => setOpen(false)}
               disabled={pending}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               type="submit"
@@ -350,7 +350,7 @@ function DangerCard({ team }: { team: Team }) {
               disabled={pending || confirm !== team.name}
               data-testid="team-delete-confirm"
             >
-              {pending ? "Deleting…" : "Delete team"}
+              {pending ? t("Deleting…") : t("Delete team")}
             </Button>
           </div>
         </form>

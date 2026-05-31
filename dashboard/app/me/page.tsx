@@ -12,30 +12,32 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TokensPanel } from "@/components/TokensPanel";
 import { ApiError, api } from "@/lib/api";
 import { clearAuth, type User } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 // /me — the authenticated user's account page. Identity card up top,
 // personal-access-token panel below. Profile edits + account deletion
 // land here too — the cloud-spec endpoints are also exposed under
 // /v1/me/* so this page has the canonical edit surface.
 export default function MePage() {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<User>("/me", () => api.me());
 
   return (
     <div className="space-y-8">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">
-          Account
+          {t("Account")}
         </h1>
         <p className="mt-1 text-sm text-neutral-400">
-          Your Synapse identity and API access tokens.
+          {t("Your Synapse identity and API access tokens.")}
         </p>
       </header>
 
       <Card>
         <CardHeader>
-          <CardTitle>Profile</CardTitle>
+          <CardTitle>{t("Profile")}</CardTitle>
           <CardDescription>
-            Visible to teammates inside any team you belong to.
+            {t("Visible to teammates inside any team you belong to.")}
           </CardDescription>
         </CardHeader>
         <CardBody>
@@ -50,7 +52,9 @@ export default function MePage() {
           )}
           {error && (
             <p className="text-xs text-red-400">
-              Failed to load profile: {(error as Error).message}
+              {t("Failed to load profile: {message}", {
+                message: (error as Error).message,
+              })}
             </p>
           )}
           {data && <ProfileForm user={data} onSaved={() => mutate()} />}
@@ -78,6 +82,7 @@ export default function MePage() {
 // here is the fastest way to spot it. When they don't match, we surface
 // a yellow notice with the recovery hint (Ctrl+Shift+R).
 function AboutSection() {
+  const { t } = useT();
   const { data: install } = useSWR<{ version?: string; firstRun?: boolean }>(
     "/v1/install_status",
     async () => {
@@ -128,23 +133,23 @@ function AboutSection() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>About this Synapse</CardTitle>
+        <CardTitle>{t("About this Synapse")}</CardTitle>
         <CardDescription>
-          Versions of the components your browser is currently talking to.
-          A mismatch usually means a stale browser cache after an upgrade —
-          a hard refresh (Ctrl+Shift+R) usually fixes it.
+          {t(
+            "Versions of the components your browser is currently talking to. A mismatch usually means a stale browser cache after an upgrade — a hard refresh (Ctrl+Shift+R) usually fixes it.",
+          )}
         </CardDescription>
       </CardHeader>
       <CardBody>
         <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-          <dt className="text-neutral-500">Backend</dt>
+          <dt className="text-neutral-500">{t("Backend")}</dt>
           <dd
             className="font-mono text-neutral-100"
             data-testid="me-backend-version"
           >
             v{backendVersion}
           </dd>
-          <dt className="text-neutral-500">Frontend</dt>
+          <dt className="text-neutral-500">{t("Frontend")}</dt>
           <dd
             className="font-mono text-neutral-100"
             data-testid="me-frontend-version"
@@ -157,17 +162,16 @@ function AboutSection() {
             className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100"
             data-testid="me-version-mismatch"
           >
-            <span className="font-semibold">Frontend is out of sync.</span>{" "}
-            Backend is on <code>v{backendVersion}</code>, but the JS your
-            browser loaded is from <code>v{frontendVersion}</code>. Hit{" "}
+            <span className="font-semibold">{t("Frontend is out of sync.")}</span>{" "}
+            {t("Backend is on")} <code>v{backendVersion}</code>, {t("but the JS your browser loaded is from")} <code>v{frontendVersion}</code>. {t("Hit")}{" "}
             <kbd className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[10px]">
               Ctrl+Shift+R
             </kbd>{" "}
-            (Linux/Win) or{" "}
+            {t("(Linux/Win) or")}{" "}
             <kbd className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[10px]">
               Cmd+Shift+R
             </kbd>{" "}
-            (macOS) to load the new build.
+            {t("(macOS) to load the new build.")}
           </div>
         )}
       </CardBody>
@@ -179,6 +183,7 @@ function AboutSection() {
 // "name" affordance. The email and id are immutable; only the display
 // name flows through update_profile_name.
 function ProfileForm({ user, onSaved }: { user: User; onSaved: () => void }) {
+  const { t } = useT();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(user.name ?? "");
   const [pending, setPending] = useState(false);
@@ -204,7 +209,7 @@ function ProfileForm({ user, onSaved }: { user: User; onSaved: () => void }) {
       setEditing(false);
       onSaved();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "Could not save");
+      setErr(e instanceof ApiError ? e.message : t("Could not save"));
     } finally {
       setPending(false);
     }
@@ -219,7 +224,7 @@ function ProfileForm({ user, onSaved }: { user: User; onSaved: () => void }) {
         className="h-14 w-14 text-lg"
       />
       <dl className="grid flex-1 grid-cols-[6rem_1fr] gap-y-2 text-sm">
-        <dt className="text-neutral-500">Name</dt>
+        <dt className="text-neutral-500">{t("Name")}</dt>
         <dd className="text-neutral-100">
           {!editing && (
             <div className="flex items-center gap-3">
@@ -231,9 +236,9 @@ function ProfileForm({ user, onSaved }: { user: User; onSaved: () => void }) {
                   setValue(user.name ?? "");
                   setEditing(true);
                 }}
-                aria-label="Edit profile name"
+                aria-label={t("Edit profile name")}
               >
-                Edit
+                {t("Edit")}
               </Button>
             </div>
           )}
@@ -248,7 +253,7 @@ function ProfileForm({ user, onSaved }: { user: User; onSaved: () => void }) {
                 maxLength={100}
               />
               <Button type="submit" size="sm" disabled={pending}>
-                {pending ? "Saving…" : "Save"}
+                {pending ? t("Saving…") : t("Save")}
               </Button>
               <Button
                 type="button"
@@ -260,15 +265,15 @@ function ProfileForm({ user, onSaved }: { user: User; onSaved: () => void }) {
                 }}
                 disabled={pending}
               >
-                Cancel
+                {t("Cancel")}
               </Button>
             </form>
           )}
           {err && <p className="mt-1 text-xs text-red-400">{err}</p>}
         </dd>
-        <dt className="text-neutral-500">Email</dt>
+        <dt className="text-neutral-500">{t("Email")}</dt>
         <dd className="text-neutral-100">{user.email}</dd>
-        <dt className="text-neutral-500">User id</dt>
+        <dt className="text-neutral-500">{t("User id")}</dt>
         <dd className="font-mono text-xs text-neutral-300 break-all">
           {user.id}
         </dd>
@@ -281,6 +286,7 @@ function ProfileForm({ user, onSaved }: { user: User; onSaved: () => void }) {
 // gates with 409 last_admin / team_creator — surface those clearly so the
 // operator knows exactly what to clean up first.
 function DangerZone({ user }: { user: User }) {
+  const { t } = useT();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
@@ -299,7 +305,7 @@ function DangerZone({ user }: { user: User }) {
       if (e instanceof ApiError) {
         setErr({ code: e.code, msg: e.message });
       } else {
-        setErr({ msg: "Could not delete account" });
+        setErr({ msg: t("Could not delete account") });
       }
     } finally {
       setPending(false);
@@ -309,16 +315,16 @@ function DangerZone({ user }: { user: User }) {
   return (
     <Card className="border-red-500/30 bg-red-500/[0.04]">
       <CardHeader className="border-red-500/20">
-        <CardTitle className="text-red-200">Delete account</CardTitle>
+        <CardTitle className="text-red-200">{t("Delete account")}</CardTitle>
         <CardDescription className="text-red-300/70">
-          Irrevocably remove your Synapse account and any team memberships
-          you hold. Refused if you are the last admin of any team or the
-          creator of an existing team — clean those up first.
+          {t(
+            "Irrevocably remove your Synapse account and any team memberships you hold. Refused if you are the last admin of any team or the creator of an existing team — clean those up first.",
+          )}
         </CardDescription>
       </CardHeader>
       <CardBody className="flex items-center justify-between gap-3">
         <p className="text-xs text-red-300/70">
-          You&apos;ll be signed out and redirected to /login on success.
+          {t("You'll be signed out and redirected to /login on success.")}
         </p>
         <Button
           variant="danger"
@@ -327,21 +333,22 @@ function DangerZone({ user }: { user: User }) {
             setErr(null);
             setConfirmEmail("");
           }}
-          aria-label="Delete account"
+          aria-label={t("Delete account")}
         >
-          Delete account
+          {t("Delete account")}
         </Button>
       </CardBody>
 
       <Dialog
         open={open}
         onClose={() => !pending && setOpen(false)}
-        title="Delete account"
+        title={t("Delete account")}
       >
         <form onSubmit={submit} className="space-y-4">
           <p className="text-sm text-neutral-300">
-            This permanently removes your account. To confirm, type your
-            email below.
+            {t(
+              "This permanently removes your account. To confirm, type your email below.",
+            )}
           </p>
           <Input
             id="me-delete-confirm"
@@ -354,15 +361,16 @@ function DangerZone({ user }: { user: User }) {
             <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
               {err.code === "last_admin" && (
                 <p>
-                  You are the last admin of one or more teams. Promote
-                  another admin in each, or delete those teams, then try
-                  again.
+                  {t(
+                    "You are the last admin of one or more teams. Promote another admin in each, or delete those teams, then try again.",
+                  )}
                 </p>
               )}
               {err.code === "team_creator" && (
                 <p>
-                  You created one or more teams. Delete them first via
-                  Team Settings → General → Delete team.
+                  {t(
+                    "You created one or more teams. Delete them first via Team Settings → General → Delete team.",
+                  )}
                 </p>
               )}
               {err.code !== "last_admin" && err.code !== "team_creator" && (
@@ -377,14 +385,14 @@ function DangerZone({ user }: { user: User }) {
               onClick={() => setOpen(false)}
               disabled={pending}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               type="submit"
               variant="danger"
               disabled={pending || confirmEmail !== user.email}
             >
-              {pending ? "Deleting…" : "Delete account"}
+              {pending ? t("Deleting…") : t("Delete account")}
             </Button>
           </div>
         </form>

@@ -3,6 +3,7 @@
 import useSWR from "swr";
 import clsx from "clsx";
 import { ApiError, api, type BackendVersion } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // Small per-deployment pill that shows what version of the Convex
 // backend image the container is currently running and when it was
@@ -24,6 +25,7 @@ export function BackendVersionPill({
 }: {
   deploymentName: string;
 }) {
+  const { t } = useT();
   const { data, error } = useSWR<BackendVersion>(
     deploymentName ? `/backend_version:${deploymentName}` : null,
     () => api.deployments.backendVersion(deploymentName),
@@ -68,7 +70,7 @@ export function BackendVersionPill({
         {versionIsKnown ? (
           <>convex {rawVersion}</>
         ) : (
-          <>convex backend</>
+          <>{t("convex backend")}</>
         )}
       </span>
       {ageLabel && !probeFailed ? (

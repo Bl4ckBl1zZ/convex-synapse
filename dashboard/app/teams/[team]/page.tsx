@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ApiError, api, type Deployment, type Project, type Team } from "@/lib/api";
 import { InvitesPanel } from "@/components/InvitesPanel";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string };
 
@@ -22,6 +23,7 @@ type Params = { team: string };
 // list, a search field on the left and create CTA on the right, with a
 // grid/list density toggle.
 export default function TeamHomePage({ params }: { params: Promise<Params> }) {
+  const { t } = useT();
   const { team: teamRef } = use(params);
 
   const [tab, setTab] = useState<"projects" | "deployments">("projects");
@@ -46,12 +48,12 @@ export default function TeamHomePage({ params }: { params: Promise<Params> }) {
   if (teamError instanceof ApiError && (teamError.status === 404 || teamError.status === 403)) {
     return (
       <EmptyState
-        title="Team unavailable"
-        description="This team doesn't exist or you don't have access."
+        title={t("Team unavailable")}
+        description={t("This team doesn't exist or you don't have access.")}
         testId="team-unavailable"
         action={
           <Link href="/teams" className="text-sm text-cyan-400 hover:text-cyan-300">
-            ← Back to teams
+            {t("← Back to teams")}
           </Link>
         }
       />
@@ -66,7 +68,7 @@ export default function TeamHomePage({ params }: { params: Promise<Params> }) {
             {team?.name ?? teamRef}
           </h1>
           <p className="mt-1 text-sm text-neutral-400">
-            Projects and deployments owned by this team.
+            {t("Projects and deployments owned by this team.")}
           </p>
         </div>
         {/* Audit log lives next to the team title — admin-only feature, but
@@ -76,7 +78,7 @@ export default function TeamHomePage({ params }: { params: Promise<Params> }) {
           href={`/teams/${encodeURIComponent(teamRef)}/audit`}
           className="text-sm text-neutral-400 hover:text-neutral-200"
         >
-          Audit log
+          {t("Audit log")}
         </Link>
       </div>
 
@@ -107,9 +109,10 @@ function SubTabs({
   value: "projects" | "deployments";
   onChange: (v: "projects" | "deployments") => void;
 }) {
+  const { t } = useT();
   const items: { id: "projects" | "deployments"; label: string }[] = [
-    { id: "projects", label: "Projects" },
-    { id: "deployments", label: "Deployments" },
+    { id: "projects", label: t("Projects") },
+    { id: "deployments", label: t("Deployments") },
   ];
   return (
     <div className="flex gap-1 border-b border-neutral-900">
@@ -143,6 +146,7 @@ function SubTabs({
 type Density = "grid" | "list";
 
 function ProjectsView({ teamRef }: { teamRef: string }) {
+  const { t } = useT();
   const {
     data: projects,
     error,
@@ -169,7 +173,7 @@ function ProjectsView({ teamRef }: { teamRef: string }) {
       setOpen(false);
       await mutate();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Could not create project");
+      setFormError(err instanceof ApiError ? err.message : t("Could not create project"));
     } finally {
       setPending(false);
     }
@@ -190,16 +194,16 @@ function ProjectsView({ teamRef }: { teamRef: string }) {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <SearchField value={query} onChange={setQuery} placeholder="Search projects" />
+          <SearchField value={query} onChange={setQuery} placeholder={t("Search projects")} />
           <DensityToggle value={density} onChange={setDensity} />
         </div>
-        <Button onClick={() => setOpen(true)}>New project</Button>
+        <Button onClick={() => setOpen(true)}>{t("New project")}</Button>
       </div>
 
       {isLoading && <ProjectsSkeleton density={density} />}
       {error && (
         <p className="text-sm text-red-400">
-          Failed to load projects: {(error as Error).message}
+          {t("Failed to load projects:")} {(error as Error).message}
         </p>
       )}
 
@@ -210,7 +214,7 @@ function ProjectsView({ teamRef }: { teamRef: string }) {
       {filtered && filtered.length === 0 && projects && projects.length > 0 && (
         <Card>
           <CardBody className="py-10 text-center text-sm text-neutral-400">
-            No projects match <span className="text-neutral-200">"{query}"</span>.
+            {t("No projects match")} <span className="text-neutral-200">"{query}"</span>.
           </CardBody>
         </Card>
       )}
@@ -247,11 +251,11 @@ function ProjectsView({ teamRef }: { teamRef: string }) {
         </Card>
       )}
 
-      <Dialog open={open} onClose={() => setOpen(false)} title="Create project">
+      <Dialog open={open} onClose={() => setOpen(false)} title={t("Create project")}>
         <form onSubmit={create} className="space-y-4">
           <div className="space-y-2">
             <label htmlFor="project-name" className="block text-xs font-medium text-neutral-400">
-              Project name
+              {t("Project name")}
             </label>
             <Input
               id="project-name"
@@ -262,7 +266,7 @@ function ProjectsView({ teamRef }: { teamRef: string }) {
               autoFocus
             />
             <p className="text-xs text-neutral-500">
-              The slug is generated from the name and stays stable across renames.
+              {t("The slug is generated from the name and stays stable across renames.")}
             </p>
           </div>
           {formError && <p className="text-xs text-red-400">{formError}</p>}
@@ -273,10 +277,10 @@ function ProjectsView({ teamRef }: { teamRef: string }) {
               onClick={() => setOpen(false)}
               disabled={pending}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button type="submit" disabled={pending || !name.trim()}>
-              {pending ? "Creating..." : "Create"}
+              {pending ? t("Creating...") : t("Create")}
             </Button>
           </div>
         </form>
@@ -286,6 +290,7 @@ function ProjectsView({ teamRef }: { teamRef: string }) {
 }
 
 function ProjectCard({ project, teamRef }: { project: Project; teamRef: string }) {
+  const { t } = useT();
   return (
     <Link
       href={`/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(project.id)}`}
@@ -305,7 +310,7 @@ function ProjectCard({ project, teamRef }: { project: Project; teamRef: string }
           </div>
           <div className="flex items-center gap-1.5 text-[11px] text-neutral-500">
             <DotIcon />
-            <span>Open project</span>
+            <span>{t("Open project")}</span>
           </div>
         </CardBody>
       </Card>
@@ -314,17 +319,18 @@ function ProjectCard({ project, teamRef }: { project: Project; teamRef: string }
 }
 
 function ProjectsEmpty({ onCreate }: { onCreate: () => void }) {
+  const { t } = useT();
   return (
     <Card>
       <CardBody className="flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
         <NodesMark />
         <div>
-          <p className="text-base font-semibold text-neutral-100">No projects yet.</p>
+          <p className="text-base font-semibold text-neutral-100">{t("No projects yet.")}</p>
           <p className="mt-1 max-w-sm text-sm text-neutral-400">
-            Each project owns one or more Convex deployments — dev, prod, or both.
+            {t("Each project owns one or more Convex deployments — dev, prod, or both.")}
           </p>
         </div>
-        <Button onClick={onCreate}>Create project</Button>
+        <Button onClick={onCreate}>{t("Create project")}</Button>
       </CardBody>
     </Card>
   );
@@ -370,6 +376,7 @@ function ProjectsSkeleton({ density }: { density: Density }) {
 /* ---------------- Deployments tab ---------------- */
 
 function DeploymentsView({ teamRef }: { teamRef: string }) {
+  const { t } = useT();
   const { data, error, isLoading } = useSWR<Deployment[]>(
     ["/team-deployments", teamRef],
     () => api.teams.listDeployments(teamRef),
@@ -403,7 +410,7 @@ function DeploymentsView({ teamRef }: { teamRef: string }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SearchField value={query} onChange={setQuery} placeholder="Search deployments" />
+        <SearchField value={query} onChange={setQuery} placeholder={t("Search deployments")} />
       </div>
 
       {isLoading && (
@@ -420,7 +427,7 @@ function DeploymentsView({ teamRef }: { teamRef: string }) {
       )}
       {error && (
         <p className="text-sm text-red-400">
-          Failed to load deployments: {(error as Error).message}
+          {t("Failed to load deployments:")} {(error as Error).message}
         </p>
       )}
 
@@ -429,10 +436,10 @@ function DeploymentsView({ teamRef }: { teamRef: string }) {
           <CardBody className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
             <NodesMark />
             <p className="text-sm font-medium text-neutral-200">
-              No deployments yet.
+              {t("No deployments yet.")}
             </p>
             <p className="max-w-sm text-xs text-neutral-500">
-              Deployments show up here as you provision them inside a project.
+              {t("Deployments show up here as you provision them inside a project.")}
             </p>
           </CardBody>
         </Card>
@@ -441,7 +448,7 @@ function DeploymentsView({ teamRef }: { teamRef: string }) {
       {filtered && filtered.length === 0 && data && data.length > 0 && (
         <Card>
           <CardBody className="py-10 text-center text-sm text-neutral-400">
-            No deployments match <span className="text-neutral-200">"{query}"</span>.
+            {t("No deployments match")} <span className="text-neutral-200">"{query}"</span>.
           </CardBody>
         </Card>
       )}
@@ -535,17 +542,18 @@ function DensityToggle({
   value: Density;
   onChange: (v: Density) => void;
 }) {
+  const { t } = useT();
   return (
     <div
       role="group"
-      aria-label="View density"
+      aria-label={t("View density")}
       className="inline-flex h-9 rounded-md border border-neutral-800 bg-neutral-900 p-0.5"
     >
       <button
         type="button"
         onClick={() => onChange("grid")}
         aria-pressed={value === "grid"}
-        aria-label="Grid view"
+        aria-label={t("Grid view")}
         className={clsx(
           "flex h-full w-8 items-center justify-center rounded transition-colors",
           value === "grid"
@@ -559,7 +567,7 @@ function DensityToggle({
         type="button"
         onClick={() => onChange("list")}
         aria-pressed={value === "list"}
-        aria-label="List view"
+        aria-label={t("List view")}
         className={clsx(
           "flex h-full w-8 items-center justify-center rounded transition-colors",
           value === "list"

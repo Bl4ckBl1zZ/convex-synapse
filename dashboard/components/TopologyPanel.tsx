@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody } from "@/components/ui/card";
 import { ApiError, api, type TopologyHost, type TopologyDeployment, type TopologyResponse } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type Props = { projectId: string };
 
@@ -19,6 +20,7 @@ type Props = { projectId: string };
 // while any deployment is provisioning so the operator sees state
 // transitions without manual reload.
 export function TopologyPanel({ projectId }: Props) {
+  const { t } = useT();
   const { data, error, isLoading } = useSWR<TopologyResponse>(
     ["/topology", projectId],
     () => api.projects.topology(projectId),
@@ -52,9 +54,9 @@ export function TopologyPanel({ projectId }: Props) {
     <Card className="overflow-hidden" data-testid="topology-panel">
       <div className="flex items-center justify-between border-b border-neutral-800/80 px-5 py-3.5">
         <div className="flex items-baseline gap-2">
-          <h3 className="text-sm font-semibold text-neutral-100">Topology</h3>
+          <h3 className="text-sm font-semibold text-neutral-100">{t("Topology")}</h3>
           <span className="text-xs text-neutral-500">
-            — deployments grouped by host
+            {t("— deployments grouped by host")}
           </span>
         </div>
         <TopologyStatusSummary
@@ -89,11 +91,12 @@ function TopologyStatusSummary({
   provisioning: number;
   failed: number;
 }) {
+  const { t } = useT();
   return (
     <div className="flex items-center gap-3 font-mono text-[11px] text-neutral-500">
-      <Stat tone="ok" count={running} label="running" />
-      {provisioning > 0 && <Stat tone="warn" count={provisioning} label="provisioning" />}
-      {failed > 0 && <Stat tone="fail" count={failed} label="failed" />}
+      <Stat tone="ok" count={running} label={t("running")} />
+      {provisioning > 0 && <Stat tone="warn" count={provisioning} label={t("provisioning")} />}
+      {failed > 0 && <Stat tone="fail" count={failed} label={t("failed")} />}
     </div>
   );
 }
@@ -141,6 +144,7 @@ const HOST_TONE = {
 } as const;
 
 function HostColumn({ host, index }: { host: TopologyHost; index: number }) {
+  const { t } = useT();
   // Visual tone alternates so multi-VPS federations don't all look
   // identical. Primary always = violet; subsequent hosts cycle.
   const tone = host.isPrimary
@@ -168,10 +172,10 @@ function HostColumn({ host, index }: { host: TopologyHost; index: number }) {
           </span>
           <span className="rounded bg-neutral-900/70 px-1.5 py-0.5 font-mono text-[10px] text-neutral-500">
             {host.isPrimary
-              ? `primary${host.synapseVersion ? ` · v${host.synapseVersion}` : ""}`
+              ? `${t("primary")}${host.synapseVersion ? ` · v${host.synapseVersion}` : ""}`
               : host.id === "adopted"
-                ? "adopted (external)"
-                : "federated"}
+                ? t("adopted (external)")
+                : t("federated")}
           </span>
         </div>
         <p className="truncate font-mono text-[12.5px] font-semibold text-neutral-100" title={host.name}>
@@ -180,27 +184,29 @@ function HostColumn({ host, index }: { host: TopologyHost; index: number }) {
         <p className="mt-0.5 truncate font-mono text-[10px] text-neutral-500">
           {[host.ip, host.provider, host.city || host.region]
             .filter(Boolean)
-            .join(" · ") || (host.isPrimary ? "host metadata unavailable" : "")}
+            .join(" · ") || (host.isPrimary ? t("host metadata unavailable") : "")}
         </p>
         <div className="mt-2.5 flex flex-wrap gap-3 font-mono text-[10px] text-neutral-400">
           {host.runningCount > 0 && (
-            <span className="text-emerald-400">● {host.runningCount} running</span>
+            <span className="text-emerald-400">● {t("{n} running", { n: host.runningCount })}</span>
           )}
           {host.provisioningCount > 0 && (
-            <span className="text-amber-400">◐ {host.provisioningCount} provisioning</span>
+            <span className="text-amber-400">◐ {t("{n} provisioning", { n: host.provisioningCount })}</span>
           )}
           {host.failedCount > 0 && (
-            <span className="text-rose-400">✗ {host.failedCount} failed</span>
+            <span className="text-rose-400">✗ {t("{n} failed", { n: host.failedCount })}</span>
           )}
           <span className="ml-auto text-neutral-500">
-            {host.deployments.length} {host.deployments.length === 1 ? "deployment" : "deployments"}
+            {host.deployments.length === 1
+              ? t("{n} deployment", { n: host.deployments.length })
+              : t("{n} deployments", { n: host.deployments.length })}
           </span>
         </div>
       </div>
       <div className="flex flex-col gap-2 p-3">
         {host.deployments.length === 0 ? (
           <p className="px-2 py-4 text-center font-mono text-[11px] text-neutral-600">
-            no deployments here
+            {t("no deployments here")}
           </p>
         ) : (
           host.deployments.map((d) => <DeploymentTile key={d.name} d={d} />)
@@ -225,13 +231,14 @@ const STATUS_PULSE = {
 } as const;
 
 function DeploymentTile({ d }: { d: TopologyDeployment }) {
+  const { t } = useT();
   const typeTone = TYPE_TONE[d.type as keyof typeof TYPE_TONE] ?? "border-l-neutral-600";
   const failed = d.status === "failed";
   const replicas = d.haEnabled
-    ? `${d.healthyCount} / ${d.replicaCount} healthy`
+    ? t("{healthy} / {total} healthy", { healthy: d.healthyCount, total: d.replicaCount })
     : d.status === "running"
-      ? "1 (single)"
-      : "0 (single)";
+      ? t("1 (single)")
+      : t("0 (single)");
 
   return (
     <div
@@ -256,37 +263,37 @@ function DeploymentTile({ d }: { d: TopologyDeployment }) {
           )}
           {d.customDomain && (
             <Badge tone="red" className="px-1.5 py-0 text-[9px]">
-              custom
+              {t("custom")}
             </Badge>
           )}
           {d.adopted && (
             <Badge tone="neutral" className="px-1.5 py-0 text-[9px]">
-              adopted
+              {t("adopted")}
             </Badge>
           )}
           {d.isDefault && !d.adopted && (
             <Badge tone="neutral" className="px-1.5 py-0 text-[9px]">
-              default
+              {t("default")}
             </Badge>
           )}
           {failed && (
             <Badge tone="red" className="px-1.5 py-0 text-[9px]">
-              failed
+              {t("failed")}
             </Badge>
           )}
           {d.status === "provisioning" && (
             <Badge tone="yellow" className="px-1.5 py-0 text-[9px]">
-              prov
+              {t("prov")}
             </Badge>
           )}
         </div>
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 font-mono text-[10px]">
-        <Row k="storage" v={d.storage} />
-        {d.port != null && <Row k="port" v={`:${d.port}`} dim />}
-        <Row k="replicas" v={replicas} highlight={failed ? "fail" : undefined} />
-        {d.version && <Row k="version" v={`v${d.version}`} dim />}
-        <Row k="uptime" v={<UptimeLabel runningSinceMs={d.runningSinceMs} status={d.status} />} />
+        <Row k={t("storage")} v={d.storage} />
+        {d.port != null && <Row k={t("port")} v={`:${d.port}`} dim />}
+        <Row k={t("replicas")} v={replicas} highlight={failed ? "fail" : undefined} />
+        {d.version && <Row k={t("version")} v={`v${d.version}`} dim />}
+        <Row k={t("uptime")} v={<UptimeLabel runningSinceMs={d.runningSinceMs} status={d.status} />} />
       </dl>
       {(d.customDomain || d.url) && (
         <p className="mt-1.5 truncate font-mono text-[10px] text-cyan-300" title={d.customDomain ?? d.url}>
@@ -354,6 +361,7 @@ function UptimeLabel({
   runningSinceMs?: number;
   status: string;
 }) {
+  const { t } = useT();
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (status !== "running") return;
@@ -364,7 +372,7 @@ function UptimeLabel({
   // computation itself just reads Date.now().
   void tick;
 
-  if (status === "provisioning") return <span className="text-amber-400">building…</span>;
+  if (status === "provisioning") return <span className="text-amber-400">{t("building…")}</span>;
   if (status === "failed") return <span className="text-rose-400">—</span>;
   if (!runningSinceMs) return <span className="text-neutral-500">—</span>;
   const seconds = Math.max(0, Math.floor((Date.now() - runningSinceMs) / 1000));
@@ -384,16 +392,17 @@ function formatDuration(s: number): string {
 /* -------------------- Future placeholder -------------------- */
 
 function FuturePlaceholder() {
+  const { t } = useT();
   return (
     <div
       className="hidden flex-col items-center justify-center rounded-lg border border-dashed border-neutral-800 bg-neutral-950/40 p-6 opacity-50 xl:flex"
       aria-hidden
     >
       <p className="text-center font-mono text-[10px] uppercase tracking-widest text-neutral-600">
-        Multi-VPS coming soon
+        {t("Multi-VPS coming soon")}
       </p>
       <p className="mt-2 max-w-[200px] text-center font-mono text-[10px] text-neutral-600">
-        Federate another host and its deployments show up here.
+        {t("Federate another host and its deployments show up here.")}
       </p>
     </div>
   );

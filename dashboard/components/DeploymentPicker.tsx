@@ -38,6 +38,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Deployment } from "@/lib/api";
+import { useT, type TFunction } from "@/lib/i18n";
 
 // Deployment-type styling. Match the cloud picker pixel-for-pixel
 // where it's stable: dev = blue, prod = green, preview = orange.
@@ -119,16 +120,16 @@ function statusStyleFor(d: Deployment) {
 const recencyKey = (projectId: string, name: string) =>
   `synapse.lastViewedAt.${projectId}.${name}`;
 
-function recencyLabel(ts: number | null): string | null {
+function recencyLabel(ts: number | null, t: TFunction): string | null {
   if (!ts) return null;
   const ms = Date.now() - ts;
   if (ms < RECENCY_VISIBLE_AFTER_MS) return null;
   const min = Math.floor(ms / 60_000);
-  if (min < 60) return `visited ${min}m ago`;
+  if (min < 60) return t("visited {min}m ago", { min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `visited ${hr}h ago`;
+  if (hr < 24) return t("visited {hr}h ago", { hr });
   const d = Math.floor(hr / 24);
-  return `visited ${d}d ago`;
+  return t("visited {d}d ago", { d });
 }
 
 export function DeploymentPicker({
@@ -142,6 +143,7 @@ export function DeploymentPicker({
   teamRef: string;
   projectId: string;
 }) {
+  const { t } = useT();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -252,7 +254,7 @@ export function DeploymentPicker({
     if (!raw) return null;
     const ts = parseInt(raw, 10);
     if (Number.isNaN(ts)) return null;
-    return recencyLabel(ts);
+    return recencyLabel(ts, t);
   };
 
   const switchTo = (d: Deployment) => {
@@ -351,6 +353,24 @@ export function DeploymentPicker({
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
+  // Translate a deployment-type display label. The raw values live in
+  // the module-level TYPE_STYLES map (can't call the hook there), so we
+  // map the known display labels to exact-English t() keys here.
+  const typeLabel = (label: string): string => {
+    switch (label) {
+      case "Production":
+        return t("Production");
+      case "Development":
+        return t("Development");
+      case "Preview":
+        return t("Preview");
+      case "Custom":
+        return t("Custom");
+      default:
+        return label;
+    }
+  };
+
   const currentStyle = styleFor(current);
   const currentStatusStyle = statusStyleFor(current);
 
@@ -372,7 +392,11 @@ export function DeploymentPicker({
         aria-haspopup="menu"
         aria-expanded={open}
         data-testid="deployment-picker-pill"
-        title={current.status ? `Status: ${current.status}` : undefined}
+        title={
+          current.status
+            ? t("Status: {status}", { status: current.status })
+            : undefined
+        }
         className={[
           "flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition-colors",
           currentStyle.bg,
@@ -385,8 +409,8 @@ export function DeploymentPicker({
       >
         <span className={`h-2 w-2 rounded-full ${currentStyle.dot}`} />
         <span className="font-medium">
-          {currentStyle.label}
-          {current.adopted ? " (adopted)" : ""}
+          {typeLabel(currentStyle.label)}
+          {current.adopted ? t(" (adopted)") : ""}
         </span>
         <span className="text-neutral-400">·</span>
         <span className="font-mono text-xs text-neutral-200">
@@ -394,7 +418,7 @@ export function DeploymentPicker({
         </span>
         <span
           data-testid="deployment-picker-status"
-          aria-label={`Status: ${currentStatusStyle.label}`}
+          aria-label={t("Status: {status}", { status: currentStatusStyle.label })}
           className={[
             "ml-1 h-1.5 w-1.5 rounded-full ring-2",
             currentStatusStyle.dot,
@@ -427,15 +451,15 @@ export function DeploymentPicker({
                   setQuery(e.target.value);
                   setActiveIdx(0);
                 }}
-                placeholder="Filter by name, type, reference…"
-                aria-label="Filter deployments"
+                placeholder={t("Filter by name, type, reference…")}
+                aria-label={t("Filter deployments")}
                 data-testid="deployment-picker-search"
                 className="h-8 w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-100 placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
               />
             </div>
           )}
           <Section
-            title="Production"
+            title={t("Production")}
             items={filteredGroups.prod}
             currentName={current.name}
             shortcut={["Ctrl", "Alt", "1"]}
@@ -453,13 +477,13 @@ export function DeploymentPicker({
                   href={`/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(projectId)}`}
                   className="block px-3 py-2 text-xs text-neutral-500 hover:bg-neutral-900"
                 >
-                  Open the project page to create a Production deployment
+                  {t("Open the project page to create a Production deployment")}
                 </Link>
               )
             }
           />
           <Section
-            title="Development"
+            title={t("Development")}
             items={filteredGroups.dev}
             currentName={current.name}
             shortcut={["Ctrl", "Alt", "2"]}
@@ -474,7 +498,7 @@ export function DeploymentPicker({
           />
           {filteredGroups.preview.length > 0 && (
             <Section
-              title="Preview Deployments"
+              title={t("Preview Deployments")}
               items={filteredGroups.preview}
               currentName={current.name}
               onSelect={switchTo}
@@ -489,7 +513,7 @@ export function DeploymentPicker({
           )}
           {filteredGroups.custom.length > 0 && (
             <Section
-              title="Custom"
+              title={t("Custom")}
               items={filteredGroups.custom}
               currentName={current.name}
               onSelect={switchTo}
@@ -504,7 +528,7 @@ export function DeploymentPicker({
           )}
           {query.trim() && flatItems.length === 0 && (
             <p className="px-3 py-4 text-center text-xs text-neutral-500">
-              No deployments match{" "}
+              {t("No deployments match")}{" "}
               <code className="font-mono text-neutral-300">
                 {query.trim()}
               </code>
@@ -518,7 +542,7 @@ export function DeploymentPicker({
             >
               <span className="inline-flex items-center gap-2">
                 <GearIcon />
-                Project page
+                {t("Project page")}
               </span>
             </Link>
           </div>
@@ -549,6 +573,7 @@ function Section({
   indexByName: Map<string, number>;
   recencyFor: (d: Deployment) => string | null;
 }) {
+  const { t } = useT();
   if (items.length === 0 && !emptyHint) return null;
   return (
     <div className="border-b border-neutral-800 last:border-b-0">
@@ -594,12 +619,12 @@ function Section({
                         {d.name}
                       </span>
                       <span
-                        title={`Status: ${style.label}`}
+                        title={t("Status: {status}", { status: style.label })}
                         className={`h-1.5 w-1.5 rounded-full ${style.dot}`}
                       />
                       {d.isDefault && (
                         <span className="text-[10px] uppercase text-neutral-500">
-                          default
+                          {t("default")}
                         </span>
                       )}
                     </span>

@@ -8,6 +8,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ApiError, api, type EnvVar, type EnvSyncResult } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type Props = { projectId: string };
 
@@ -32,6 +33,7 @@ const TYPE_TONE: Record<DeploymentTypeOption, "cyan" | "amber" | "violet"> = {
 // to that deployment's Convex function runtime store; failures
 // surface inline.
 export function EnvVarsPanel({ projectId }: Props) {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<EnvVar[]>(
     ["/env-vars", projectId],
     () => api.projects.listEnvVars(projectId),
@@ -80,7 +82,7 @@ export function EnvVarsPanel({ projectId }: Props) {
     setFormError(null);
     if (!name.trim()) return;
     if (types.length === 0) {
-      setFormError("Pick at least one deployment type (DEV / PROD / PREVIEW).");
+      setFormError(t("Pick at least one deployment type (DEV / PROD / PREVIEW)."));
       return;
     }
     setPending(true);
@@ -101,7 +103,7 @@ export function EnvVarsPanel({ projectId }: Props) {
       await mutate();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not save env var",
+        err instanceof ApiError ? err.message : t("Could not save env var"),
       );
     } finally {
       setPending(false);
@@ -124,7 +126,7 @@ export function EnvVarsPanel({ projectId }: Props) {
       await mutate();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not delete env var",
+        err instanceof ApiError ? err.message : t("Could not delete env var"),
       );
     }
   };
@@ -148,7 +150,7 @@ export function EnvVarsPanel({ projectId }: Props) {
       await mutate();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not delete env var",
+        err instanceof ApiError ? err.message : t("Could not delete env var"),
       );
     }
   };
@@ -162,7 +164,7 @@ export function EnvVarsPanel({ projectId }: Props) {
       setSyncResult(r);
     } catch (err) {
       setSyncError(
-        err instanceof ApiError ? err.message : "Could not sync env vars",
+        err instanceof ApiError ? err.message : t("Could not sync env vars"),
       );
     } finally {
       setSyncing(false);
@@ -198,18 +200,17 @@ export function EnvVarsPanel({ projectId }: Props) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-neutral-200">
-            Environment variables
+            {t("Environment variables")}
           </h2>
           <p className="text-xs text-neutral-500">
-            Available inside every Convex function in this project via{" "}
-            <code className="text-neutral-300">process.env.NAME</code>. Same
-            store the Convex Dashboard env panel writes to. <strong>Same name
-            can carry different values per deployment type</strong> — e.g.{" "}
+            {t("Available inside every Convex function in this project via")}{" "}
+            <code className="text-neutral-300">process.env.NAME</code>.{" "}
+            {t("Same store the Convex Dashboard env panel writes to.")}{" "}
+            <strong>{t("Same name can carry different values per deployment type")}</strong> {t("— e.g.")}{" "}
             <code className="text-neutral-300">BETTER_AUTH_SECRET</code>{" "}
-            with one value for dev and another for prod. Saves push to
-            every running deployment automatically; use{" "}
-            <span className="text-neutral-300">Re-sync to deployments</span>{" "}
-            to retry if a push failed.
+            {t("with one value for dev and another for prod. Saves push to every running deployment automatically; use")}{" "}
+            <span className="text-neutral-300">{t("Re-sync to deployments")}</span>{" "}
+            {t("to retry if a push failed.")}
           </p>
         </div>
         {hasEnvVars && (
@@ -223,20 +224,20 @@ export function EnvVarsPanel({ projectId }: Props) {
             }}
             data-testid="env-vars-apply-existing-open"
           >
-            Re-sync to deployments
+            {t("Re-sync to deployments")}
           </Button>
         )}
       </div>
 
-      {isLoading && <p className="text-xs text-neutral-500">Loading…</p>}
+      {isLoading && <p className="text-xs text-neutral-500">{t("Loading…")}</p>}
       {error && (
         <p className="text-xs text-red-400">
-          Failed to load env vars: {(error as Error).message}
+          {t("Failed to load env vars: {message}", { message: (error as Error).message })}
         </p>
       )}
 
       {data && data.length === 0 && (
-        <p className="text-xs text-neutral-500">No env vars yet.</p>
+        <p className="text-xs text-neutral-500">{t("No env vars yet.")}</p>
       )}
 
       {hasEnvVars && (
@@ -250,34 +251,34 @@ export function EnvVarsPanel({ projectId }: Props) {
                     type="button"
                     onClick={() => removeAllForName(name)}
                     className="text-[11px] text-neutral-500 hover:text-red-400"
-                    aria-label={`Delete all values for ${name}`}
+                    aria-label={t("Delete all values for {name}", { name })}
                     data-testid={`env-var-delete-all-${name}`}
                   >
-                    Delete all
+                    {t("Delete all")}
                   </button>
                 </div>
                 <div className="space-y-1.5">
                   {rows.map((v) => {
-                    const t = (v.deploymentTypes[0] ?? "dev") as DeploymentTypeOption;
-                    const isRevealed = revealed.has(v.name + ":" + t);
+                    const dt = (v.deploymentTypes[0] ?? "dev") as DeploymentTypeOption;
+                    const isRevealed = revealed.has(v.name + ":" + dt);
                     return (
                       <div
-                        key={v.name + ":" + t}
+                        key={v.name + ":" + dt}
                         className="flex flex-wrap items-center gap-3 text-sm"
                         data-testid={`env-var-row-${v.name}`}
                       >
                         <Badge
-                          tone={TYPE_TONE[t] ?? "neutral"}
+                          tone={TYPE_TONE[dt] ?? "neutral"}
                           className="px-1.5 py-0 text-[10px]"
                         >
-                          {t.toUpperCase()}
+                          {dt.toUpperCase()}
                         </Badge>
                         <p
                           className="min-w-0 flex-1 truncate font-mono text-xs text-neutral-500"
                           data-testid={`env-var-value-${v.name}`}
                         >
                           {!v.value ? (
-                            <span className="italic">(empty)</span>
+                            <span className="italic">{t("(empty)")}</span>
                           ) : isRevealed ? (
                             v.value
                           ) : (
@@ -287,22 +288,22 @@ export function EnvVarsPanel({ projectId }: Props) {
                         {v.value && (
                           <button
                             type="button"
-                            onClick={() => toggleReveal(v.name + ":" + t)}
+                            onClick={() => toggleReveal(v.name + ":" + dt)}
                             className="text-[11px] text-neutral-500 hover:text-neutral-200"
-                            aria-label={isRevealed ? `Hide value for ${v.name} on ${t}` : `Reveal value for ${v.name} on ${t}`}
+                            aria-label={isRevealed ? t("Hide value for {name} on {type}", { name: v.name, type: dt }) : t("Reveal value for {name} on {type}", { name: v.name, type: dt })}
                             aria-pressed={isRevealed}
                             data-testid={`env-var-toggle-${v.name}`}
                           >
-                            {isRevealed ? "Hide" : "Reveal"}
+                            {isRevealed ? t("Hide") : t("Reveal")}
                           </button>
                         )}
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => removeOne(v.name, t)}
-                          aria-label={`Delete ${v.name} (${t})`}
+                          onClick={() => removeOne(v.name, dt)}
+                          aria-label={t("Delete {name} ({type})", { name: v.name, type: dt })}
                         >
-                          Delete
+                          {t("Delete")}
                         </Button>
                       </div>
                     );
@@ -318,7 +319,7 @@ export function EnvVarsPanel({ projectId }: Props) {
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex-1 min-w-[10rem] space-y-1">
             <label htmlFor="envvar-name" className="block text-xs text-neutral-400">
-              Name
+              {t("Name")}
             </label>
             <Input
               id="envvar-name"
@@ -330,7 +331,7 @@ export function EnvVarsPanel({ projectId }: Props) {
           </div>
           <div className="flex-1 min-w-[12rem] space-y-1">
             <label htmlFor="envvar-value" className="block text-xs text-neutral-400">
-              Value
+              {t("Value")}
             </label>
             <Input
               id="envvar-value"
@@ -343,12 +344,12 @@ export function EnvVarsPanel({ projectId }: Props) {
             />
           </div>
           <Button type="submit" disabled={pending || !name.trim() || types.length === 0}>
-            {pending ? "Saving…" : "Add"}
+            {pending ? t("Saving…") : t("Add")}
           </Button>
         </div>
         <fieldset className="space-y-1">
           <legend className="block text-xs text-neutral-400">
-            Apply to deployment types
+            {t("Apply to deployment types")}
           </legend>
           <div className="flex flex-wrap gap-3 text-xs">
             {ALL_TYPES.map((t) => (
@@ -368,9 +369,7 @@ export function EnvVarsPanel({ projectId }: Props) {
             ))}
           </div>
           <p className="text-[10px] text-neutral-600">
-            Select multiple types to apply the same value to each. Add the
-            same NAME again with different types to use a different value
-            per type (e.g. one secret for dev, another for prod).
+            {t("Select multiple types to apply the same value to each. Add the same NAME again with different types to use a different value per type (e.g. one secret for dev, another for prod).")}
           </p>
         </fieldset>
       </form>
@@ -384,19 +383,18 @@ export function EnvVarsPanel({ projectId }: Props) {
         >
           {lastAutoSync.synced > 0 && (
             <span className="text-emerald-300">
-              ✓ synced to <strong>{lastAutoSync.synced}</strong>{" "}
-              deployment{lastAutoSync.synced === 1 ? "" : "s"}
+              {t("✓ synced to")} <strong>{lastAutoSync.synced}</strong>{" "}
+              {lastAutoSync.synced === 1 ? t("deployment") : t("deployments")}
             </span>
           )}
           {lastAutoSync.skipped > 0 && (
             <span className="text-neutral-400">
-              <strong>{lastAutoSync.skipped}</strong> skipped (not running)
+              <strong>{lastAutoSync.skipped}</strong> {t("skipped (not running)")}
             </span>
           )}
           {lastAutoSync.failed && lastAutoSync.failed.length > 0 && (
             <span className="text-amber-400">
-              <strong>{lastAutoSync.failed.length}</strong> failed — click
-              Re-sync to retry
+              <strong>{lastAutoSync.failed.length}</strong> {t("failed — click Re-sync to retry")}
             </span>
           )}
           {lastAutoSync.notice && (
@@ -414,17 +412,13 @@ export function EnvVarsPanel({ projectId }: Props) {
         <div className="space-y-4 p-1" data-testid="env-vars-sync-dialog">
           <div>
             <h3 className="text-sm font-semibold text-neutral-100">
-              Re-sync env vars to deployments?
+              {t("Re-sync env vars to deployments?")}
             </h3>
             <p className="mt-1 text-xs text-neutral-400">
-              Pushes the current env vars to the Convex function runtime store
-              of every running deployment in this project. No container restart,
-              no downtime — just a single API call per deployment.
+              {t("Pushes the current env vars to the Convex function runtime store of every running deployment in this project. No container restart, no downtime — just a single API call per deployment.")}
             </p>
             <p className="mt-1 text-xs text-neutral-500">
-              Use this only if an automatic push failed (e.g. a deployment
-              was offline during the last save). Stopped / non-running
-              deployments are skipped.
+              {t("Use this only if an automatic push failed (e.g. a deployment was offline during the last save). Stopped / non-running deployments are skipped.")}
             </p>
           </div>
 
@@ -436,14 +430,14 @@ export function EnvVarsPanel({ projectId }: Props) {
                 disabled={syncing}
                 data-testid="env-vars-sync-confirm"
               >
-                {syncing ? "Syncing…" : "Re-sync now"}
+                {syncing ? t("Syncing…") : t("Re-sync now")}
               </Button>
               <Button
                 variant="ghost"
                 onClick={() => setSyncOpen(false)}
                 disabled={syncing}
               >
-                Cancel
+                {t("Cancel")}
               </Button>
             </div>
           )}
@@ -452,7 +446,7 @@ export function EnvVarsPanel({ projectId }: Props) {
             <div className="space-y-2">
               <p className="text-xs text-red-400">{syncError}</p>
               <Button variant="ghost" onClick={() => setSyncOpen(false)}>
-                Close
+                {t("Close")}
               </Button>
             </div>
           )}
@@ -463,14 +457,14 @@ export function EnvVarsPanel({ projectId }: Props) {
               data-testid="env-vars-sync-result"
             >
               <p className="text-neutral-200">
-                <strong>{syncResult.synced}</strong> synced ·{" "}
-                <strong>{syncResult.skipped}</strong> skipped ·{" "}
-                <strong>{syncResult.total}</strong> total
+                <strong>{syncResult.synced}</strong> {t("synced ·")}{" "}
+                <strong>{syncResult.skipped}</strong> {t("skipped ·")}{" "}
+                <strong>{syncResult.total}</strong> {t("total")}
                 {syncResult.failed && syncResult.failed.length > 0 && (
                   <>
                     {" "}·{" "}
                     <span className="text-amber-400">
-                      <strong>{syncResult.failed.length}</strong> failed
+                      <strong>{syncResult.failed.length}</strong> {t("failed")}
                     </span>
                   </>
                 )}
@@ -488,7 +482,7 @@ export function EnvVarsPanel({ projectId }: Props) {
               {syncResult.notice && (
                 <p className="text-neutral-500">{syncResult.notice}</p>
               )}
-              <Button onClick={() => setSyncOpen(false)}>Done</Button>
+              <Button onClick={() => setSyncOpen(false)}>{t("Done")}</Button>
             </div>
           )}
         </div>

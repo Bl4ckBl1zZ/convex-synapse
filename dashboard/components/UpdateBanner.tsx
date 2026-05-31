@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -27,6 +28,7 @@ import {
 // in 90s" mode, and forces a reload so the new version's banner
 // component takes over.
 export function UpdateBanner() {
+  const { t } = useT();
   const { data, error } = useSWR<VersionCheck>(
     "/v1/admin/version_check",
     () => api.admin.versionCheck(),
@@ -71,23 +73,27 @@ export function UpdateBanner() {
             ●
           </span>
           <span className="text-amber-100">
-            <span className="font-semibold">Synapse v{data.latest}</span> is
-            available — you&apos;re on v{data.current}.
+            <span className="font-semibold">
+              {t("Synapse v{latest}", { latest: data.latest })}
+            </span>{" "}
+            {t("is available — you're on v{current}.", {
+              current: data.current,
+            })}
           </span>
           <button
             type="button"
             onClick={() => setOpen(true)}
             className="rounded-md bg-amber-200/10 px-2 py-1 font-medium text-amber-100 transition hover:bg-amber-200/20"
           >
-            Review &amp; upgrade
+            {t("Review & upgrade")}
           </button>
           <button
             type="button"
             onClick={dismiss}
             className="ml-auto text-amber-300/70 transition hover:text-amber-200"
-            aria-label="Dismiss this update notification"
+            aria-label={t("Dismiss this update notification")}
           >
-            Dismiss
+            {t("Dismiss")}
           </button>
         </div>
       </div>
@@ -128,6 +134,7 @@ function UpgradeDialog({
   onClose: () => void;
   check: VersionCheck;
 }) {
+  const { t } = useT();
   const [state, setState] = useState<DialogState>("review");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<UpgradeStatus | null>(null);
@@ -267,7 +274,7 @@ function UpgradeDialog({
     } catch (err) {
       clearUpgradeInProgressMarker();
       setError(
-        err instanceof ApiError ? err.message : "Could not start the upgrade",
+        err instanceof ApiError ? err.message : t("Could not start the upgrade"),
       );
       setState("review");
     }
@@ -277,16 +284,16 @@ function UpgradeDialog({
     switch (state) {
       case "review":
       case "confirming":
-        return `Upgrade to Synapse v${check.latest}`;
+        return t("Upgrade to Synapse v{latest}", { latest: check.latest });
       case "starting":
       case "polling":
-        return "Upgrading Synapse…";
+        return t("Upgrading Synapse…");
       case "rebooting":
-        return "Almost there — reloading the page";
+        return t("Almost there — reloading the page");
       case "succeeded":
-        return "Upgrade complete";
+        return t("Upgrade complete");
       case "failed":
-        return "Upgrade failed";
+        return t("Upgrade failed");
     }
   })();
 
@@ -295,25 +302,25 @@ function UpgradeDialog({
       {state === "review" && (
         <div className="space-y-3">
           <p className="text-xs text-neutral-400">
-            Currently on{" "}
+            {t("Currently on")}{" "}
             <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-100">
               v{check.current}
             </code>
-            , latest is{" "}
+            {t(", latest is")}{" "}
             <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-100">
               v{check.latest}
             </code>
-            . The upgrade runs{" "}
+            {t(". The upgrade runs")}{" "}
             <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-100">
               setup.sh --upgrade
             </code>{" "}
-            on your VPS via the host-side daemon.
+            {t("on your VPS via the host-side daemon.")}
           </p>
 
           {check.releaseNotes && (
             <div className="space-y-1.5">
               <p className="text-xs font-semibold text-neutral-200">
-                Release notes
+                {t("Release notes")}
               </p>
               <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-neutral-800/80 bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-300">
                 {check.releaseNotes}
@@ -329,25 +336,27 @@ function UpgradeDialog({
                 rel="noopener noreferrer"
                 className="text-amber-200 hover:underline"
               >
-                View on GitHub →
+                {t("View on GitHub →")}
               </a>
             </p>
           )}
 
           <p className="rounded bg-amber-900/30 px-3 py-2 text-xs text-amber-200">
-            <span className="font-semibold">Heads up:</span> the dashboard will
-            briefly go offline while containers restart. This window will
-            keep polling status; if it loses contact for ~10s it&apos;ll
-            auto-reload after the upgrade window completes.
+            <span className="font-semibold">{t("Heads up:")}</span>{" "}
+            {t(
+              "the dashboard will briefly go offline while containers restart. This window will keep polling status; if it loses contact for ~10s it'll auto-reload after the upgrade window completes.",
+            )}
           </p>
 
           {error && <p className="text-xs text-red-400">{error}</p>}
 
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>
-              Cancel
+              {t("Cancel")}
             </Button>
-            <Button onClick={() => setState("confirming")}>Continue</Button>
+            <Button onClick={() => setState("confirming")}>
+              {t("Continue")}
+            </Button>
           </div>
         </div>
       )}
@@ -355,17 +364,16 @@ function UpgradeDialog({
       {state === "confirming" && (
         <div className="space-y-3">
           <p className="text-xs text-neutral-300">
-            Last check: ready to upgrade from v{check.current} to v
-            {check.latest}. This will restart the synapse-api,
-            synapse-dashboard and caddy containers. Existing Convex
-            deployments keep running uninterrupted (they&apos;re separate
-            containers Synapse manages, not part of the upgrade).
+            {t(
+              "Last check: ready to upgrade from v{current} to v{latest}. This will restart the synapse-api, synapse-dashboard and caddy containers. Existing Convex deployments keep running uninterrupted (they're separate containers Synapse manages, not part of the upgrade).",
+              { current: check.current, latest: check.latest },
+            )}
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setState("review")}>
-              Back
+              {t("Back")}
             </Button>
-            <Button onClick={startUpgrade}>Upgrade now</Button>
+            <Button onClick={startUpgrade}>{t("Upgrade now")}</Button>
           </div>
         </div>
       )}
@@ -377,13 +385,17 @@ function UpgradeDialog({
           <div className="flex items-center gap-2 text-xs text-neutral-300">
             <Spinner />
             <span>
-              {state === "starting" && "Asking the updater to start…"}
+              {state === "starting" && t("Asking the updater to start…")}
               {state === "polling" &&
                 (status?.state === "running"
-                  ? `Running (started ${formatTime(status.startedAt)})`
-                  : "Waiting for updater to start setup.sh…")}
+                  ? t("Running (started {time})", {
+                      time: formatTime(status.startedAt),
+                    })
+                  : t("Waiting for updater to start setup.sh…"))}
               {state === "rebooting" &&
-                "Synapse API is restarting; the page will reload automatically (~90s)."}
+                t(
+                  "Synapse API is restarting; the page will reload automatically (~90s).",
+                )}
             </span>
           </div>
           {status?.logTail && status.logTail.length > 0 && (
@@ -393,7 +405,7 @@ function UpgradeDialog({
           )}
           {state === "rebooting" && (
             <Button onClick={() => window.location.reload()}>
-              Reload now
+              {t("Reload now")}
             </Button>
           )}
         </div>
@@ -402,8 +414,8 @@ function UpgradeDialog({
       {state === "succeeded" && (
         <div className="space-y-3">
           <p className="rounded bg-emerald-900/40 px-3 py-2 text-xs text-emerald-200">
-            <span className="font-semibold">✓ Synapse upgraded.</span> Reload
-            the page to pick up the new dashboard build.
+            <span className="font-semibold">{t("✓ Synapse upgraded.")}</span>{" "}
+            {t("Reload the page to pick up the new dashboard build.")}
           </p>
           {status?.logTail && (
             <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-neutral-800/80 bg-neutral-950 p-3 font-mono text-[11px] text-neutral-400">
@@ -411,7 +423,9 @@ function UpgradeDialog({
             </pre>
           )}
           <div className="flex justify-end gap-2">
-            <Button onClick={() => window.location.reload()}>Reload</Button>
+            <Button onClick={() => window.location.reload()}>
+              {t("Reload")}
+            </Button>
           </div>
         </div>
       )}
@@ -419,13 +433,14 @@ function UpgradeDialog({
       {state === "failed" && (
         <div className="space-y-3">
           <p className="rounded bg-red-900/40 px-3 py-2 text-xs text-red-200">
-            <span className="font-semibold">Upgrade failed.</span> Synapse
-            attempted automatic rollback. SSH to your VPS and run{" "}
+            <span className="font-semibold">{t("Upgrade failed.")}</span>{" "}
+            {t("Synapse attempted automatic rollback. SSH to your VPS and run")}{" "}
             <code className="rounded bg-neutral-900 px-1 py-0.5 font-mono">
               ./setup.sh --doctor
             </code>{" "}
-            to confirm the running version, then retry from the dashboard or
-            via the CLI.
+            {t(
+              "to confirm the running version, then retry from the dashboard or via the CLI.",
+            )}
           </p>
           {status?.logTail && (
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-neutral-800/80 bg-neutral-950 p-3 font-mono text-[11px] text-neutral-300">
@@ -434,9 +449,9 @@ function UpgradeDialog({
           )}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>
-              Close
+              {t("Close")}
             </Button>
-            <Button onClick={() => setState("review")}>Try again</Button>
+            <Button onClick={() => setState("review")}>{t("Try again")}</Button>
           </div>
         </div>
       )}

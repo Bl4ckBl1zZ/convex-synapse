@@ -10,6 +10,7 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { Card, CardBody } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import { getAccessToken, type User } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 // Admin shell — host-wide configuration that's only meaningful when you
 // own the box Synapse runs on. Distinct from /teams/<ref>/settings,
@@ -26,6 +27,7 @@ import { getAccessToken, type User } from "@/lib/auth";
 // Without this, direct /admin entry would render edge-to-edge with no
 // top nav (which is the bug v1.4.1 → v1.4.2 first surfaced).
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  const { t } = useT();
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const [ready, setReady] = useState(false);
@@ -53,21 +55,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-neutral-500">
-        Loading...
+        {t("Loading...")}
       </div>
     );
   }
 
   const navItems = [
-    { href: "/admin/host-domain", label: "Host domain", testid: "admin-nav-host-domain" },
+    { href: "/admin/host-domain", label: t("Host domain"), testid: "admin-nav-host-domain" },
     {
       href: "/admin/dns-credentials",
-      label: "DNS credentials",
+      label: t("DNS credentials"),
       testid: "admin-nav-dns-credentials",
     },
     {
       href: "/admin/remote-hosts",
-      label: "Remote Hosts",
+      label: t("Remote Hosts"),
       testid: "admin-nav-remote-hosts",
     },
   ];
@@ -80,7 +82,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {isLoading ? (
           <Card>
             <CardBody>
-              <p className="text-xs text-neutral-500">Loading…</p>
+              <p className="text-xs text-neutral-500">{t("Loading…")}</p>
             </CardBody>
           </Card>
         ) : !me?.isInstanceAdmin ? (
@@ -91,16 +93,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <div className="space-y-6">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">
-                Admin
+                {t("Admin")}
               </h1>
               <p className="mt-1 text-sm text-neutral-400">
-                Host-wide configuration for the operator who owns this Synapse install.
+                {t("Host-wide configuration for the operator who owns this Synapse install.")}
               </p>
             </div>
 
             <div className="grid gap-8 md:grid-cols-[220px_minmax(0,1fr)]">
               <aside className="md:sticky md:top-20 md:self-start">
-                <nav className="space-y-1" aria-label="Admin sections">
+                <nav className="space-y-1" aria-label={t("Admin sections")}>
                   <ul className="space-y-0.5">
                     {navItems.map((it) => (
                       <li key={it.label}>

@@ -26,6 +26,7 @@ import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
 import { DeployKeysPanel } from "@/components/DeployKeysPanel";
 import { ApiError, api, type Cell, type Deployment, type Host, type Project } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string; project: string };
 
@@ -119,6 +120,7 @@ const URL_FORM_LABELS: Record<UrlForm, { label: string; tone: "green" | "neutral
 };
 
 export default function ProjectPage({ params }: { params: Promise<Params> }) {
+  const { t } = useT();
   const { team: teamRef, project: projectId } = use(params);
   const router = useRouter();
 
@@ -230,7 +232,7 @@ await Promise.all([
 ]);
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "Could not create deployment"
+        err instanceof ApiError ? err.message : t("Could not create deployment")
       );
     } finally {
       setPending(false);
@@ -263,7 +265,7 @@ await Promise.all([
 ]);
     } catch (err) {
       setAdoptError(
-        err instanceof ApiError ? err.message : "Could not adopt deployment"
+        err instanceof ApiError ? err.message : t("Could not adopt deployment")
       );
     } finally {
       setAdoptPending(false);
@@ -305,7 +307,7 @@ await Promise.all([
         setCopiedName((current) => (current === name ? null : current));
       }, 1500);
     } else {
-      setActionError("Could not copy URL — select it manually and Ctrl+C");
+      setActionError(t("Could not copy URL — select it manually and Ctrl+C"));
     }
   };
 
@@ -334,7 +336,7 @@ await Promise.all([
 ]);
     } catch (err) {
       setActionError(
-        err instanceof ApiError ? err.message : "Could not delete deployment"
+        err instanceof ApiError ? err.message : t("Could not delete deployment")
       );
       // Re-throw so the dialog stays open on failure — operator can see
       // the error in the page-level banner and retry without re-typing.
@@ -349,7 +351,7 @@ await Promise.all([
   const restartDeployment = async (name: string) => {
     if (
       !window.confirm(
-        `Restart ${name}? Its container bounces in place — brief downtime, no data loss.`,
+        t("Restart {name}? Its container bounces in place — brief downtime, no data loss.", { name }),
       )
     ) {
       return;
@@ -365,7 +367,7 @@ await Promise.all([
       ]);
     } catch (err) {
       setActionError(
-        err instanceof ApiError ? err.message : "Could not restart deployment",
+        err instanceof ApiError ? err.message : t("Could not restart deployment"),
       );
     } finally {
       setRestartingName(null);
@@ -409,15 +411,15 @@ await Promise.all([
     // same: go back to projects.
     return (
       <EmptyState
-        title="Project unavailable"
-        description="This project doesn't exist or you don't have access."
+        title={t("Project unavailable")}
+        description={t("This project doesn't exist or you don't have access.")}
         testId="project-unavailable"
         action={
           <Link
             href={`/teams/${encodeURIComponent(teamRef)}`}
             className="text-sm text-cyan-400 hover:text-cyan-300"
           >
-            ← Back to projects
+            {t("← Back to projects")}
           </Link>
         }
       />
@@ -429,7 +431,7 @@ await Promise.all([
       <div>
         <nav className="text-xs text-neutral-500">
           <Link href="/teams" className="hover:text-neutral-300">
-            Teams
+            {t("Teams")}
           </Link>{" "}
           /{" "}
           <Link
@@ -442,19 +444,19 @@ await Promise.all([
         </nav>
         <div className="mt-3 flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold">{project?.name ?? "Project"}</h1>
+            <h1 className="text-xl font-semibold">{project?.name ?? t("Project")}</h1>
             <p className="text-xs text-neutral-400">
-              Deployments are real Convex backend containers.
+              {t("Deployments are real Convex backend containers.")}
             </p>
           </div>
           <div className="flex gap-2">
-            <Button onClick={() => setOpen(true)}>New deployment</Button>
+            <Button onClick={() => setOpen(true)}>{t("New deployment")}</Button>
             <Button
               variant="secondary"
               onClick={() => setAdoptOpen(true)}
-              aria-label="Adopt existing deployment"
+              aria-label={t("Adopt existing deployment")}
             >
-              Adopt existing
+              {t("Adopt existing")}
             </Button>
             {/*
               v1.9.4: the project home no longer owns destructive
@@ -468,8 +470,8 @@ await Promise.all([
               href={`/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(projectId)}/settings/general`}
               data-testid="project-settings-link"
             >
-              <Button variant="secondary" aria-label="Project settings">
-                Settings
+              <Button variant="secondary" aria-label={t("Project settings")}>
+                {t("Settings")}
               </Button>
             </Link>
           </div>
@@ -502,19 +504,21 @@ await Promise.all([
       )}
       {error && (
         <p className="text-sm text-red-400">
-          Failed to load deployments: {(error as Error).message}
+          {t("Failed to load deployments: {message}", {
+            message: (error as Error).message,
+          })}
         </p>
       )}
 
       {deployments && deployments.length === 0 && (
         <Card>
           <CardBody className="text-center">
-            <p className="text-sm text-neutral-300">No deployments yet.</p>
+            <p className="text-sm text-neutral-300">{t("No deployments yet.")}</p>
             <p className="mt-1 text-xs text-neutral-500">
-              Provision a dev or prod backend to start running functions.
+              {t("Provision a dev or prod backend to start running functions.")}
             </p>
             <Button className="mt-4" onClick={() => setOpen(true)}>
-              Create deployment
+              {t("Create deployment")}
             </Button>
           </CardBody>
         </Card>
@@ -549,8 +553,8 @@ await Promise.all([
                       {d.status && (
                         <Badge tone={statusTone(d.status)}>{d.status}</Badge>
                       )}
-                      {d.isDefault && <Badge tone="neutral">default</Badge>}
-                      {d.adopted && <Badge tone="neutral">adopted</Badge>}
+                      {d.isDefault && <Badge tone="neutral">{t("default")}</Badge>}
+                      {d.adopted && <Badge tone="neutral">{t("adopted")}</Badge>}
                       {d.haEnabled && (
                         <Badge tone="green">
                           HA{d.replicaCount ? ` ×${d.replicaCount}` : ""}
@@ -559,18 +563,18 @@ await Promise.all([
                       {d.id && cellByDeploymentId.has(d.id) && (
                         <Badge
                           tone="violet"
-                          title="Cell this deployment belongs to"
+                          title={t("Cell this deployment belongs to")}
                         >
-                          Cell: {cellByDeploymentId.get(d.id)!.name}
+                          {t("Cell: {name}", { name: cellByDeploymentId.get(d.id)!.name })}
                         </Badge>
                       )}
                       {d.hostName && d.hostIsRemote && (
                         <Badge
                           tone="violet"
-                          title={`Runs on remote host ${d.hostName}`}
+                          title={t("Runs on remote host {hostName}", { hostName: d.hostName })}
                           data-testid={`deployment-host-${d.name}`}
                         >
-                          on {d.hostName}
+                          {t("on {hostName}", { hostName: d.hostName })}
                         </Badge>
                       )}
                     </div>
@@ -586,9 +590,9 @@ await Promise.all([
                               from the upstream backend. */}
                           <span
                             className="text-[10px] font-medium uppercase tracking-wider text-neutral-600"
-                            title="Equivalent to Convex Cloud's CONVEX_CLOUD_URL — your app's CONVEX_SELF_HOSTED_URL points here."
+                            title={t("Equivalent to Convex Cloud's CONVEX_CLOUD_URL — your app's CONVEX_SELF_HOSTED_URL points here.")}
                           >
-                            Cloud URL
+                            {t("Cloud URL")}
                           </span>
                           <p className="truncate text-xs text-neutral-500">
                             {d.deploymentUrl || d.url}
@@ -607,13 +611,13 @@ await Promise.all([
                                 className="shrink-0 normal-case tracking-normal"
                                 title={
                                   form === "host"
-                                    ? "Caddy doesn't TLS-front dynamic ports — the iframe will replace itself with a diagnostic banner. Add a custom domain or set SYNAPSE_BASE_DOMAIN to fix."
+                                    ? t("Caddy doesn't TLS-front dynamic ports — the iframe will replace itself with a diagnostic banner. Add a custom domain or set SYNAPSE_BASE_DOMAIN to fix.")
                                     : form === "path"
-                                      ? "Works in the browser but the Convex CLI strips paths from base URLs — not ideal for `npx convex` invocations."
-                                      : `URL form: ${meta.label}`
+                                      ? t("Works in the browser but the Convex CLI strips paths from base URLs — not ideal for `npx convex` invocations.")
+                                      : t("URL form: {label}", { label: t(meta.label) })
                                 }
                               >
-                                {meta.label}
+                                {t(meta.label)}
                               </Badge>
                             );
                           })()}
@@ -623,9 +627,9 @@ await Promise.all([
                             onClick={() =>
                               copyUrl(d.name, (d.deploymentUrl || d.url) as string)
                             }
-                            aria-label="Copy Cloud URL"
+                            aria-label={t("Copy Cloud URL")}
                           >
-                            {copiedName === d.name ? "Copied!" : "Copy"}
+                            {copiedName === d.name ? t("Copied!") : t("Copy")}
                           </Button>
                         </div>
                         {/* HTTP Actions URL = the deployment's site
@@ -640,7 +644,7 @@ await Promise.all([
                         {d.siteUrl ? (
                           <div className="mt-1 flex items-center gap-2">
                             <p className="truncate text-[10px] text-neutral-500">
-                              HTTP Actions URL:{" "}
+                              {t("HTTP Actions URL:")}{" "}
                               <span className="font-mono text-neutral-400">
                                 {d.siteUrl}
                               </span>
@@ -651,14 +655,14 @@ await Promise.all([
                               onClick={() =>
                                 copyUrl(`${d.name}::site`, d.siteUrl as string)
                               }
-                              aria-label="Copy HTTP Actions URL"
+                              aria-label={t("Copy HTTP Actions URL")}
                             >
-                              {copiedName === `${d.name}::site` ? "Copied!" : "Copy"}
+                              {copiedName === `${d.name}::site` ? t("Copied!") : t("Copy")}
                             </Button>
                           </div>
                         ) : (
                           <p className="text-[10px] text-neutral-600">
-                            HTTP Actions URL: same as Cloud URL in self-hosted.
+                            {t("HTTP Actions URL: same as Cloud URL in self-hosted.")}
                           </p>
                         )}
                       </div>
@@ -676,25 +680,25 @@ await Promise.all([
                       onClick={() => openDashboard(d.name)}
                       disabled={openingName === d.name}
                     >
-                      {openingName === d.name ? "Opening..." : "Open dashboard"}
+                      {openingName === d.name ? t("Opening...") : t("Open dashboard")}
                     </Button>
                     <Button
                       variant="secondary"
                       size="sm"
                       onClick={() => restartDeployment(d.name)}
                       disabled={restartingName === d.name}
-                      aria-label={`Restart deployment ${d.name}`}
+                      aria-label={t("Restart deployment {name}", { name: d.name })}
                     >
-                      {restartingName === d.name ? "Restarting..." : "Restart"}
+                      {restartingName === d.name ? t("Restarting...") : t("Restart")}
                     </Button>
                     <Button
                       variant="danger"
                       size="sm"
                       onClick={() => setPendingDelete(d)}
                       disabled={deletingName === d.name}
-                      aria-label={`Delete deployment ${d.name}`}
+                      aria-label={t("Delete deployment {name}", { name: d.name })}
                     >
-                      {deletingName === d.name ? "Deleting..." : "Delete"}
+                      {deletingName === d.name ? t("Deleting...") : t("Delete")}
                     </Button>
                   </div>
                 </CardBody>
@@ -758,10 +762,10 @@ await Promise.all([
       */}
       <ActivityFeed projectId={projectId} />
 
-      <Dialog open={open} onClose={() => setOpen(false)} title="Create deployment">
+      <Dialog open={open} onClose={() => setOpen(false)} title={t("Create deployment")}>
         <form onSubmit={create} className="space-y-4">
           <div className="space-y-2">
-            <label className="block text-xs text-neutral-400">Type</label>
+            <label className="block text-xs text-neutral-400">{t("Type")}</label>
             <div className="flex gap-2">
               {(["dev", "prod"] as const).map((t) => (
                 <button
@@ -779,7 +783,7 @@ await Promise.all([
               ))}
             </div>
             <p className="text-xs text-neutral-500">
-              Provisions a Convex backend container.
+              {t("Provisions a Convex backend container.")}
             </p>
           </div>
           <div className="space-y-2">
@@ -791,13 +795,12 @@ await Promise.all([
                 onChange={(e) => setHAMode(e.target.checked)}
                 className="h-4 w-4 rounded border-neutral-700 bg-neutral-900 text-violet-500 focus:ring-violet-500"
               />
-              <span>High availability (2 replicas + Postgres + S3)</span>
+              <span>{t("High availability (2 replicas + Postgres + S3)")}</span>
             </label>
             {haMode && (
               <p className="text-xs text-neutral-500">
-                Requires <code className="text-neutral-300">SYNAPSE_HA_ENABLED=true</code> on
-                the cluster plus <code className="text-neutral-300">SYNAPSE_BACKEND_*</code>
-                {" "}credentials. See <code className="text-neutral-300">docs/V0_5_PLAN.md</code>.
+                {t("Requires")} <code className="text-neutral-300">SYNAPSE_HA_ENABLED=true</code> {t("on the cluster plus")} <code className="text-neutral-300">SYNAPSE_BACKEND_*</code>
+                {" "}{t("credentials. See")} <code className="text-neutral-300">docs/V0_5_PLAN.md</code>.
               </p>
             )}
           </div>
@@ -808,7 +811,7 @@ await Promise.all([
               the self-host shows, which is filtered out below). */}
           <div className="space-y-2">
             <label htmlFor="create-deployment-host" className="block text-xs text-neutral-400">
-              Place on host
+              {t("Place on host")}
             </label>
             <select
               id="create-deployment-host"
@@ -817,7 +820,7 @@ await Promise.all([
               data-testid="deployment-place-on-host"
               className="block h-9 w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
             >
-              <option value="">Default (this control plane)</option>
+              <option value="">{t("Default (this control plane)")}</option>
               {(hostsForPlacement ?? [])
                 .filter(
                   (h) =>
@@ -826,13 +829,12 @@ await Promise.all([
                 .map((h) => (
                   <option key={h.id} value={h.id}>
                     {h.name}
-                    {h.isRemote ? " (remote)" : ""} — {h.effectiveStatus ?? h.status}
+                    {h.isRemote ? t(" (remote)") : ""} — {h.effectiveStatus ?? h.status}
                   </option>
                 ))}
             </select>
             <p className="text-[11px] text-neutral-500">
-              Defaults to the host running Synapse. Remote hosts appear
-              once an operator runs install-agent.sh on them.
+              {t("Defaults to the host running Synapse. Remote hosts appear once an operator runs install-agent.sh on them.")}
             </p>
           </div>
           {formError && <p className="text-xs text-red-400">{formError}</p>}
@@ -843,10 +845,10 @@ await Promise.all([
               onClick={() => setOpen(false)}
               disabled={pending}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button type="submit" disabled={pending}>
-              {pending ? "Creating..." : "Create"}
+              {pending ? t("Creating...") : t("Create")}
             </Button>
           </div>
         </form>
@@ -855,17 +857,15 @@ await Promise.all([
       <Dialog
         open={adoptOpen}
         onClose={() => setAdoptOpen(false)}
-        title="Adopt existing deployment"
+        title={t("Adopt existing deployment")}
       >
         <form onSubmit={adopt} className="space-y-4">
           <p className="text-xs text-neutral-400">
-            Register a Convex backend that&apos;s already running outside Synapse.
-            Synapse stores the URL + admin key and skips Docker for delete /
-            health on this row — the backend stays under your control.
+            {t("Register a Convex backend that's already running outside Synapse. Synapse stores the URL + admin key and skips Docker for delete / health on this row — the backend stays under your control.")}
           </p>
           <div className="space-y-2">
             <label htmlFor="adopt-url" className="block text-xs text-neutral-400">
-              Deployment URL
+              {t("Deployment URL")}
             </label>
             <Input
               id="adopt-url"
@@ -878,7 +878,7 @@ await Promise.all([
           </div>
           <div className="space-y-2">
             <label htmlFor="adopt-admin-key" className="block text-xs text-neutral-400">
-              Admin key
+              {t("Admin key")}
             </label>
             <Input
               id="adopt-admin-key"
@@ -889,7 +889,7 @@ await Promise.all([
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-xs text-neutral-400">Type</label>
+            <label className="block text-xs text-neutral-400">{t("Type")}</label>
             <div className="flex gap-2">
               {(["dev", "prod"] as const).map((t) => (
                 <button
@@ -909,7 +909,7 @@ await Promise.all([
           </div>
           <div className="space-y-2">
             <label htmlFor="adopt-name" className="block text-xs text-neutral-400">
-              Name <span className="text-neutral-600">(optional — auto-allocated if blank)</span>
+              {t("Name")} <span className="text-neutral-600">{t("(optional — auto-allocated if blank)")}</span>
             </label>
             <Input
               id="adopt-name"
@@ -926,10 +926,10 @@ await Promise.all([
               onClick={() => setAdoptOpen(false)}
               disabled={adoptPending}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button type="submit" disabled={adoptPending || !adoptUrl.trim() || !adoptAdminKey.trim()}>
-              {adoptPending ? "Verifying…" : "Adopt"}
+              {adoptPending ? t("Verifying…") : t("Adopt")}
             </Button>
           </div>
         </form>
@@ -975,6 +975,7 @@ function ConfirmDeleteDeploymentDialog({
   onClose: () => void;
   onConfirm: (force: boolean) => Promise<void>;
 }) {
+  const { t } = useT();
   const [typed, setTyped] = useState("");
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -997,7 +998,7 @@ function ConfirmDeleteDeploymentDialog({
     try {
       await onConfirm(force);
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "Could not delete deployment");
+      setErr(e instanceof ApiError ? e.message : t("Could not delete deployment"));
       if (e instanceof ApiError && e.code === "remote_teardown_failed") {
         setCanForce(true);
       }
@@ -1017,31 +1018,30 @@ function ConfirmDeleteDeploymentDialog({
     <Dialog
       open={open}
       onClose={pending ? () => {} : onClose}
-      title={isProd ? "Delete production deployment" : "Delete deployment"}
+      title={isProd ? t("Delete production deployment") : t("Delete deployment")}
     >
       <div className="space-y-4">
         <p className="text-sm text-neutral-300">
           {isProd ? (
             <>
-              You&apos;re about to permanently delete{" "}
+              {t("You're about to permanently delete")}{" "}
               <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs text-amber-300">
                 {deployment.name}
               </code>
-              . The container is removed, the data volume is wiped, and any
-              client pointing at this URL stops working.{" "}
-              <strong className="text-amber-300">This cannot be undone.</strong>
+              {t(". The container is removed, the data volume is wiped, and any client pointing at this URL stops working.")}{" "}
+              <strong className="text-amber-300">{t("This cannot be undone.")}</strong>
             </>
           ) : (
             <>
-              Delete the{" "}
+              {t("Delete the")}{" "}
               <Badge tone={envTone(type)} className="align-middle">
                 {type}
               </Badge>{" "}
-              deployment{" "}
+              {t("deployment")}{" "}
               <code className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-xs">
                 {deployment.name}
               </code>
-              ? The container and its data volume are removed.
+              {t("? The container and its data volume are removed.")}
             </>
           )}
         </p>
@@ -1052,9 +1052,9 @@ function ConfirmDeleteDeploymentDialog({
               htmlFor="confirm-delete-name"
               className="block text-xs text-neutral-400"
             >
-              Type{" "}
+              {t("Type")}{" "}
               <code className="font-mono text-amber-300">{deployment.name}</code>{" "}
-              to confirm
+              {t("to confirm")}
             </label>
             <Input
               id="confirm-delete-name"
@@ -1081,7 +1081,7 @@ function ConfirmDeleteDeploymentDialog({
             onClick={onClose}
             disabled={pending}
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="button"
@@ -1091,12 +1091,12 @@ function ConfirmDeleteDeploymentDialog({
             data-testid="confirm-delete-deployment"
           >
             {pending
-              ? "Deleting…"
+              ? t("Deleting…")
               : canForce
-                ? "Retry"
+                ? t("Retry")
                 : isProd
-                  ? "Delete production"
-                  : "Delete"}
+                  ? t("Delete production")
+                  : t("Delete")}
           </Button>
           {canForce && (
             <Button
@@ -1106,7 +1106,7 @@ function ConfirmDeleteDeploymentDialog({
               onClick={() => submit(true)}
               data-testid="force-delete-deployment"
             >
-              {pending ? "Forcing…" : "Force delete"}
+              {pending ? t("Forcing…") : t("Force delete")}
             </Button>
           )}
         </div>

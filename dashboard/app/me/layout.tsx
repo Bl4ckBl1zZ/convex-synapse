@@ -8,8 +8,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { getAccessToken } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 export default function MeLayout({ children }: { children: React.ReactNode }) {
+  const { t } = useT();
   const router = useRouter();
   const [ready, setReady] = useState(false);
 
@@ -24,7 +26,7 @@ export default function MeLayout({ children }: { children: React.ReactNode }) {
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-neutral-500">
-        Loading...
+        {t("Loading...")}
       </div>
     );
   }

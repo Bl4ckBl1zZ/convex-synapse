@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import clsx from "clsx";
 import { ApiError, api, type VersionCheck } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // Persistent version pill in the top nav. Three reasons it exists:
 //   1. Shows the running version at all times — operators stop guessing
@@ -18,6 +19,7 @@ import { ApiError, api, type VersionCheck } from "@/lib/api";
 // Renders nothing for unauth/forbidden users — same pattern as
 // UpdateBanner; the version_check endpoint is instance-admin gated.
 export function VersionStatusChip() {
+  const { t } = useT();
   const { data, error, mutate, isValidating } = useSWR<VersionCheck>(
     "/v1/admin/version_check",
     () => api.admin.versionCheck(),
@@ -110,10 +112,15 @@ export function VersionStatusChip() {
         )}
         title={
           updateAvailable
-            ? `v${data.latest} available — click for details`
+            ? t("v{latest} available — click for details", {
+                latest: data.latest,
+              })
             : stale
-            ? `Frontend out of sync (front=v${frontendVersion}, back=v${data.current}) — Ctrl+Shift+R to reload`
-            : "Up to date — click for cache status"
+            ? t(
+                "Frontend out of sync (front=v{frontendVersion}, back=v{current}) — Ctrl+Shift+R to reload",
+                { frontendVersion, current: data.current },
+              )
+            : t("Up to date — click for cache status")
         }
       >
         <span
@@ -134,7 +141,7 @@ export function VersionStatusChip() {
           </span>
         )}
         {stale && (
-          <span className="text-yellow-300/80" aria-label="frontend out of sync">
+          <span className="text-yellow-300/80" aria-label={t("frontend out of sync")}>
             ⚠
           </span>
         )}
@@ -143,23 +150,23 @@ export function VersionStatusChip() {
       {open && (
         <div
           role="dialog"
-          aria-label="Update status"
+          aria-label={t("Update status")}
           className="synapse-fade-in absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-lg border border-neutral-800 bg-[#141416] shadow-2xl"
         >
           <div className="border-b border-neutral-800 px-3 py-2">
             <p className="text-[11px] uppercase tracking-wider text-neutral-500">
-              Update status
+              {t("Update status")}
             </p>
           </div>
 
           <div className="space-y-2.5 px-3 py-3 text-xs">
             <div className="flex items-center justify-between">
-              <span className="text-neutral-500">Backend</span>
+              <span className="text-neutral-500">{t("Backend")}</span>
               <code className="font-mono text-neutral-100">v{data.current}</code>
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-neutral-500">Frontend</span>
+              <span className="text-neutral-500">{t("Frontend")}</span>
               <code
                 className={clsx(
                   "font-mono",
@@ -172,15 +179,15 @@ export function VersionStatusChip() {
 
             {stale && (
               <p className="rounded border border-yellow-500/30 bg-yellow-500/10 px-2 py-1.5 text-[11px] text-yellow-100">
-                Browser cache is from <code>v{frontendVersion}</code> but the
-                backend is on <code>v{data.current}</code>. Hard-refresh the
-                page (<kbd>Ctrl+Shift+R</kbd> / <kbd>Cmd+Shift+R</kbd>) to load
-                the new build.
+                {t("Browser cache is from")} <code>v{frontendVersion}</code>{" "}
+                {t("but the backend is on")} <code>v{data.current}</code>.{" "}
+                {t("Hard-refresh the page")} (<kbd>Ctrl+Shift+R</kbd> /{" "}
+                <kbd>Cmd+Shift+R</kbd>) {t("to load the new build.")}
               </p>
             )}
 
             <div className="flex items-center justify-between">
-              <span className="text-neutral-500">Latest</span>
+              <span className="text-neutral-500">{t("Latest")}</span>
               {data.latest ? (
                 <code
                   className={clsx(
@@ -191,7 +198,7 @@ export function VersionStatusChip() {
                   v{data.latest}
                 </code>
               ) : (
-                <span className="text-neutral-500">unknown</span>
+                <span className="text-neutral-500">{t("unknown")}</span>
               )}
             </div>
 
@@ -203,7 +210,7 @@ export function VersionStatusChip() {
 
             {data.error && (
               <p className="rounded bg-red-900/30 px-2 py-1.5 text-[11px] text-red-200">
-                GitHub unreachable: {data.error}
+                {t("GitHub unreachable: {error}", { error: data.error })}
               </p>
             )}
 
@@ -222,17 +229,17 @@ export function VersionStatusChip() {
               {refreshing ? (
                 <>
                   <Spinner />
-                  <span>Asking GitHub…</span>
+                  <span>{t("Asking GitHub…")}</span>
                 </>
               ) : (
-                <span>Check now</span>
+                <span>{t("Check now")}</span>
               )}
             </button>
 
             <p className="text-[10px] leading-relaxed text-neutral-500">
-              Synapse caches GitHub releases for 15 min to stay under the
-              unauthenticated rate limit. &ldquo;Check now&rdquo; busts
-              the cache; rate-limited to 30s between manual busts.
+              {t(
+                "Synapse caches GitHub releases for 15 min to stay under the unauthenticated rate limit. “Check now” busts the cache; rate-limited to 30s between manual busts.",
+              )}
             </p>
           </div>
         </div>
@@ -248,6 +255,7 @@ function FetchedAtRow({
   fetchedAt?: string;
   fromCache?: boolean;
 }) {
+  const { t } = useT();
   // Live "checked Xmin ago" — re-renders every 30s so the pill stays
   // honest without spamming setState. Falls back to "—" when GitHub
   // has never been reached.
@@ -260,7 +268,7 @@ function FetchedAtRow({
   if (!fetchedAt) {
     return (
       <div className="flex items-center justify-between">
-        <span className="text-neutral-500">Last check</span>
+        <span className="text-neutral-500">{t("Last check")}</span>
         <span className="text-neutral-500">—</span>
       </div>
     );
@@ -268,10 +276,10 @@ function FetchedAtRow({
   const ago = formatRelative(now, new Date(fetchedAt).getTime());
   return (
     <div className="flex items-center justify-between">
-      <span className="text-neutral-500">Last check</span>
+      <span className="text-neutral-500">{t("Last check")}</span>
       <span className="text-neutral-300" data-testid="version-status-last-check">
         {ago}
-        {fromCache ? "" : " (live)"}
+        {fromCache ? "" : t(" (live)")}
       </span>
     </div>
   );
@@ -284,6 +292,7 @@ function NextCheckRow({
   cacheExpiresAt?: string;
   fromCache?: boolean;
 }) {
+  const { t } = useT();
   // Live MM:SS countdown to next GitHub fetch. Updates once per second
   // while the popover is open; component unmount tears the interval
   // down. When the cache is already past its TTL the next request
@@ -297,7 +306,7 @@ function NextCheckRow({
   if (!cacheExpiresAt) {
     return (
       <div className="flex items-center justify-between">
-        <span className="text-neutral-500">Next auto-check</span>
+        <span className="text-neutral-500">{t("Next auto-check")}</span>
         <span className="text-neutral-500">—</span>
       </div>
     );
@@ -309,8 +318,8 @@ function NextCheckRow({
   if (remaining === 0) {
     return (
       <div className="flex items-center justify-between">
-        <span className="text-neutral-500">Next auto-check</span>
-        <span className="text-emerald-300/90">ready to refresh</span>
+        <span className="text-neutral-500">{t("Next auto-check")}</span>
+        <span className="text-emerald-300/90">{t("ready to refresh")}</span>
       </div>
     );
   }
@@ -321,7 +330,7 @@ function NextCheckRow({
   return (
     <div className="flex items-center justify-between">
       <span className="text-neutral-500">
-        {fromCache ? "Cache expires" : "Cached for"}
+        {fromCache ? t("Cache expires") : t("Cached for")}
       </span>
       <span
         className="font-mono text-neutral-300"

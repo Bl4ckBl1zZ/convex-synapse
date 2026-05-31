@@ -4,7 +4,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { ApiError, api } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // First-run wizard. Reachable only when /v1/install_status reports
 // firstRun=true (the users table is empty). Once the admin is
@@ -34,6 +36,7 @@ type Phase =
   | { kind: "redirect" };
 
 export default function SetupPage() {
+  const { t } = useT();
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [version, setVersion] = useState<string>("");
@@ -87,7 +90,7 @@ export default function SetupPage() {
       await api.register(email, password, name || undefined);
       setPhase({ kind: "demo" });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not create admin");
+      setError(err instanceof ApiError ? err.message : t("Could not create admin"));
     } finally {
       setPending(false);
     }
@@ -114,7 +117,7 @@ export default function SetupPage() {
         projectId: created.projectId,
       });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not bootstrap demo");
+      setError(err instanceof ApiError ? err.message : t("Could not bootstrap demo"));
       setPhase({ kind: "demo" });
     } finally {
       setPending(false);
@@ -138,18 +141,19 @@ export default function SetupPage() {
   if (phase.kind === "loading" || phase.kind === "redirect") {
     return (
       <main className="flex min-h-screen items-center justify-center px-4">
-        <div className="text-sm text-neutral-400">Loading...</div>
+        <div className="text-sm text-neutral-400">{t("Loading...")}</div>
       </main>
     );
   }
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
+      <LocaleSwitcher variant="pill" className="fixed right-4 top-4 z-50" />
       <div className="w-full max-w-md space-y-6 rounded-lg border border-neutral-800 bg-neutral-900/40 p-6">
         <div>
-          <h1 className="text-lg font-semibold">Welcome to Synapse</h1>
+          <h1 className="text-lg font-semibold">{t("Welcome to Synapse")}</h1>
           <p className="mt-1 text-xs text-neutral-400">
-            First-run setup{version ? ` · v${version}` : ""}.
+            {t("First-run setup")}{version ? ` · v${version}` : ""}.
           </p>
           <ProgressDots phase={phase.kind} />
         </div>
@@ -157,22 +161,22 @@ export default function SetupPage() {
         {phase.kind === "admin" && (
           <form id="setup-admin-form" onSubmit={submitAdmin} className="space-y-4">
             <div>
-              <h2 className="text-sm font-medium">Step 1 — Create the admin user</h2>
+              <h2 className="text-sm font-medium">{t("Step 1 — Create the admin user")}</h2>
               <p className="mt-1 text-xs text-neutral-400">
-                This account becomes the team owner. You can invite more members later.
+                {t("This account becomes the team owner. You can invite more members later.")}
               </p>
             </div>
-            <Field id="setup-name" label="Name (optional)" type="text" autoComplete="name"
+            <Field id="setup-name" label={t("Name (optional)")} type="text" autoComplete="name"
               value={name} onChange={setName} />
-            <Field id="setup-email" label="Email" type="email" autoComplete="email" required
+            <Field id="setup-email" label={t("Email")} type="email" autoComplete="email" required
               value={email} onChange={setEmail} />
-            <Field id="setup-password" label="Password" type="password" autoComplete="new-password" required
+            <Field id="setup-password" label={t("Password")} type="password" autoComplete="new-password" required
               value={password} onChange={setPassword} />
             {error && (
               <p className="text-xs text-red-400" role="alert">{error}</p>
             )}
             <Button id="setup-admin-submit" type="submit" disabled={pending} className="w-full">
-              {pending ? "Creating admin..." : "Create admin and continue"}
+              {pending ? t("Creating admin...") : t("Create admin and continue")}
             </Button>
           </form>
         )}
@@ -180,23 +184,23 @@ export default function SetupPage() {
         {phase.kind === "demo" && (
           <form id="setup-demo-form" onSubmit={submitDemo} className="space-y-4">
             <div>
-              <h2 className="text-sm font-medium">Step 2 — Bootstrap a demo project</h2>
+              <h2 className="text-sm font-medium">{t("Step 2 — Bootstrap a demo project")}</h2>
               <p className="mt-1 text-xs text-neutral-400">
-                We&apos;ll create a team, a project, and a dev deployment so you can run
+                {t("We'll create a team, a project, and a dev deployment so you can run")}
                 <code className="mx-1 rounded bg-neutral-800 px-1 py-0.5 text-[11px]">npx convex deploy</code>
-                immediately. Rename anything later from settings.
+                {t("immediately. Rename anything later from settings.")}
               </p>
             </div>
-            <Field id="setup-team-name" label="Team name" type="text" required
+            <Field id="setup-team-name" label={t("Team name")} type="text" required
               value={teamName} onChange={setTeamName} />
-            <Field id="setup-project-name" label="Project name" type="text" required
+            <Field id="setup-project-name" label={t("Project name")} type="text" required
               value={projectName} onChange={setProjectName} />
             {error && (
               <p className="text-xs text-red-400" role="alert">{error}</p>
             )}
             <div className="flex items-center gap-2">
               <Button id="setup-demo-submit" type="submit" disabled={pending} className="flex-1">
-                {pending ? "Provisioning..." : "Create demo project"}
+                {pending ? t("Provisioning...") : t("Create demo project")}
               </Button>
               <Button
                 id="setup-demo-skip"
@@ -206,7 +210,7 @@ export default function SetupPage() {
                 variant="ghost"
                 className="flex-1"
               >
-                Skip
+                {t("Skip")}
               </Button>
             </div>
           </form>
@@ -214,25 +218,24 @@ export default function SetupPage() {
 
         {phase.kind === "provisioning" && (
           <div className="space-y-3">
-            <h2 className="text-sm font-medium">Provisioning a Convex backend...</h2>
+            <h2 className="text-sm font-medium">{t("Provisioning a Convex backend...")}</h2>
             <p className="text-xs text-neutral-400">
-              This usually takes about a second on a warm host (the Convex backend image
-              is pre-pulled by the installer).
+              {t("This usually takes about a second on a warm host (the Convex backend image is pre-pulled by the installer).")}
             </p>
           </div>
         )}
 
         {phase.kind === "done" && (
           <div className="space-y-3">
-            <h2 className="text-sm font-medium">All set!</h2>
+            <h2 className="text-sm font-medium">{t("All set!")}</h2>
             <p className="text-xs text-neutral-400">
-              Your demo deployment is ready. The next page shows the
+              {t("Your demo deployment is ready. The next page shows the")}
               <code className="mx-1 rounded bg-neutral-800 px-1 py-0.5 text-[11px]">CONVEX_SELF_HOSTED_*</code>
-              snippet you can paste into a shell to run
+              {t("snippet you can paste into a shell to run")}
               <code className="mx-1 rounded bg-neutral-800 px-1 py-0.5 text-[11px]">npx convex deploy</code>.
             </p>
             <Button id="setup-finish" onClick={finish} className="w-full">
-              Open the project
+              {t("Open the project")}
             </Button>
           </div>
         )}

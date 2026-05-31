@@ -9,6 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, type Project, type Team } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type Props = {
   projectId: string;
@@ -82,6 +83,7 @@ function NameSlugCard({
   project: Project;
   onSaved: () => Promise<unknown>;
 }) {
+  const { t } = useT();
   const [name, setName] = useState(project.name);
   const [slug, setSlug] = useState(project.slug);
   const [pending, setPending] = useState(false);
@@ -108,11 +110,11 @@ function NameSlugCard({
       setTimeout(() => setSuccess(false), 2500);
     } catch (err) {
       if (err instanceof ApiError && err.code === "slug_taken") {
-        setError("Slug already in use by another project in this team.");
+        setError(t("Slug already in use by another project in this team."));
       } else if (err instanceof ApiError && err.code === "invalid_slug") {
-        setError("Slug must be lowercase letters, digits, and dashes only.");
+        setError(t("Slug must be lowercase letters, digits, and dashes only."));
       } else {
-        setError(err instanceof ApiError ? err.message : "Could not save");
+        setError(err instanceof ApiError ? err.message : t("Could not save"));
       }
     } finally {
       setPending(false);
@@ -122,10 +124,9 @@ function NameSlugCard({
   return (
     <Card data-testid="project-general-name-slug">
       <CardHeader>
-        <CardTitle>Project name and slug</CardTitle>
+        <CardTitle>{t("Project name and slug")}</CardTitle>
         <CardDescription>
-          The name appears in the dashboard; the slug appears in URLs and
-          must be unique within this team.
+          {t("The name appears in the dashboard; the slug appears in URLs and must be unique within this team.")}
         </CardDescription>
       </CardHeader>
       <CardBody>
@@ -133,7 +134,7 @@ function NameSlugCard({
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1.5">
               <label htmlFor="project-name-input" className="block text-xs text-neutral-400">
-                Name
+                {t("Name")}
               </label>
               <Input
                 id="project-name-input"
@@ -144,18 +145,18 @@ function NameSlugCard({
             </div>
             <div className="space-y-1.5">
               <label htmlFor="project-slug-input" className="block text-xs text-neutral-400">
-                Slug
+                {t("Slug")}
               </label>
               <Input
                 id="project-slug-input"
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
                 pattern="[a-z0-9-]+"
-                title="Lowercase letters, digits, and dashes only"
+                title={t("Lowercase letters, digits, and dashes only")}
                 data-testid="project-slug-input"
               />
               <p className="text-[11px] text-neutral-500">
-                Lowercase letters, digits, dashes.
+                {t("Lowercase letters, digits, dashes.")}
               </p>
             </div>
           </div>
@@ -169,7 +170,7 @@ function NameSlugCard({
           )}
           {success && (
             <p className="text-xs text-green-400" data-testid="project-general-name-slug-success">
-              Saved.
+              {t("Saved.")}
             </p>
           )}
           <div className="flex justify-end">
@@ -178,7 +179,7 @@ function NameSlugCard({
               disabled={!dirty || pending}
               data-testid="project-general-save"
             >
-              {pending ? "Saving…" : "Save"}
+              {pending ? t("Saving…") : t("Save")}
             </Button>
           </div>
         </form>
@@ -198,6 +199,7 @@ function TransferCard({
   teamRef: string;
   onTransferred: (newTeamSlug: string) => void;
 }) {
+  const { t } = useT();
   const [dest, setDest] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,7 +221,7 @@ function TransferCard({
     e.preventDefault();
     setError(null);
     if (!dest) {
-      setError("Pick a destination team");
+      setError(t("Pick a destination team"));
       return;
     }
     setPending(true);
@@ -229,11 +231,11 @@ function TransferCard({
       onTransferred(newTeam?.slug ?? dest);
     } catch (err) {
       if (err instanceof ApiError && err.code === "slug_taken") {
-        setError("A project with this slug already exists in the destination team.");
+        setError(t("A project with this slug already exists in the destination team."));
       } else if (err instanceof ApiError && err.code === "forbidden") {
-        setError("You must be admin of both teams to transfer a project.");
+        setError(t("You must be admin of both teams to transfer a project."));
       } else {
-        setError(err instanceof ApiError ? err.message : "Could not transfer");
+        setError(err instanceof ApiError ? err.message : t("Could not transfer"));
       }
       setPending(false);
     }
@@ -242,18 +244,16 @@ function TransferCard({
   return (
     <Card data-testid="project-general-transfer">
       <CardHeader>
-        <CardTitle>Transfer project</CardTitle>
+        <CardTitle>{t("Transfer project")}</CardTitle>
         <CardDescription>
-          Move this project and all its deployments to another team you
-          admin. Fails if a project with the same slug already lives
-          there.
+          {t("Move this project and all its deployments to another team you admin. Fails if a project with the same slug already lives there.")}
         </CardDescription>
       </CardHeader>
       <CardBody>
         <form onSubmit={submit} className="space-y-3">
           <div className="space-y-1.5">
             <label htmlFor="transfer-dest" className="block text-xs text-neutral-400">
-              Destination team
+              {t("Destination team")}
             </label>
             <select
               id="transfer-dest"
@@ -264,7 +264,7 @@ function TransferCard({
               className="h-9 w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
               data-testid="project-transfer-dest"
             >
-              <option value="">Pick a team…</option>
+              <option value="">{t("Pick a team…")}</option>
               {(myTeams ?? [])
                 .filter((t) => t.id !== currentTeam?.id)
                 .map((t) => (
@@ -285,7 +285,7 @@ function TransferCard({
               disabled={pending || !dest}
               data-testid="project-transfer-submit"
             >
-              {pending ? "Transferring…" : "Transfer"}
+              {pending ? t("Transferring…") : t("Transfer")}
             </Button>
           </div>
         </form>
@@ -303,6 +303,7 @@ function DangerZoneCard({
   project: Project;
   onDeleted: () => void;
 }) {
+  const { t } = useT();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
   const [pending, setPending] = useState(false);
@@ -318,7 +319,7 @@ function DangerZoneCard({
       await api.projects.delete(project.id);
       onDeleted();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not delete");
+      setError(err instanceof ApiError ? err.message : t("Could not delete"));
       setPending(false);
     }
   };
@@ -330,11 +331,9 @@ function DangerZoneCard({
         data-testid="project-general-danger-zone"
       >
         <CardHeader>
-          <CardTitle className="text-red-200">Danger zone</CardTitle>
+          <CardTitle className="text-red-200">{t("Danger zone")}</CardTitle>
           <CardDescription>
-            Deleting the project removes every deployment, every env var,
-            every saved DNS credential, every member assignment. Cannot
-            be undone.
+            {t("Deleting the project removes every deployment, every env var, every saved DNS credential, every member assignment. Cannot be undone.")}
           </CardDescription>
         </CardHeader>
         <CardBody>
@@ -348,7 +347,7 @@ function DangerZoneCard({
               }}
               data-testid="project-delete-open"
             >
-              Delete project
+              {t("Delete project")}
             </Button>
           </div>
         </CardBody>
@@ -357,12 +356,12 @@ function DangerZoneCard({
       <Dialog
         open={confirmOpen}
         onClose={() => !pending && setConfirmOpen(false)}
-        title="Delete project"
+        title={t("Delete project")}
       >
         <div className="space-y-3">
           <p className="text-sm text-neutral-300">
-            This will delete <span className="font-mono text-red-300">{project.name}</span> and
-            all its data permanently. Type the project name to confirm.
+            {t("This will delete")} <span className="font-mono text-red-300">{project.name}</span>{" "}
+            {t("and all its data permanently. Type the project name to confirm.")}
           </p>
           <Input
             value={typed}
@@ -382,7 +381,7 @@ function DangerZoneCard({
               onClick={() => setConfirmOpen(false)}
               disabled={pending}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               variant="danger"
@@ -390,7 +389,7 @@ function DangerZoneCard({
               disabled={!matches || pending}
               data-testid="project-delete-confirm"
             >
-              {pending ? "Deleting…" : "Delete project"}
+              {pending ? t("Deleting…") : t("Delete project")}
             </Button>
           </div>
         </div>

@@ -10,11 +10,13 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, type Team } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // Top-level teams listing — entry point after login. Surfaced through the
 // team picker's "All teams · Create new" footer too. Everything else lives
 // under /teams/<ref>/…
 export default function TeamsPage() {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<Team[]>("/teams", () =>
     api.teams.list()
   );
@@ -34,7 +36,7 @@ export default function TeamsPage() {
       setOpen(false);
       await mutate();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Could not create team");
+      setFormError(err instanceof ApiError ? err.message : t("Could not create team"));
     } finally {
       setPending(false);
     }
@@ -45,13 +47,13 @@ export default function TeamsPage() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-neutral-100">
-            Teams
+            {t("Teams")}
           </h1>
           <p className="mt-1 text-sm text-neutral-400">
-            A team owns projects, members, and deployments.
+            {t("A team owns projects, members, and deployments.")}
           </p>
         </div>
-        <Button onClick={() => setOpen(true)}>New team</Button>
+        <Button onClick={() => setOpen(true)}>{t("New team")}</Button>
       </div>
 
       {isLoading && (
@@ -71,7 +73,7 @@ export default function TeamsPage() {
       )}
       {error && (
         <p className="text-sm text-red-400">
-          Failed to load teams: {(error as Error).message}
+          {t("Failed to load teams: {message}", { message: (error as Error).message })}
         </p>
       )}
 
@@ -106,22 +108,22 @@ export default function TeamsPage() {
         </div>
       )}
 
-      <Dialog open={open} onClose={() => setOpen(false)} title="Create team">
+      <Dialog open={open} onClose={() => setOpen(false)} title={t("Create team")}>
         <form onSubmit={create} className="space-y-4">
           <div className="space-y-2">
             <label htmlFor="team-name" className="block text-xs font-medium text-neutral-400">
-              Team name
+              {t("Team name")}
             </label>
             <Input
               id="team-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Acme Inc."
+              placeholder={t("Acme Inc.")}
               required
               autoFocus
             />
             <p className="text-xs text-neutral-500">
-              You can rename it later — the slug is locked once created.
+              {t("You can rename it later — the slug is locked once created.")}
             </p>
           </div>
           {formError && <p className="text-xs text-red-400">{formError}</p>}
@@ -132,10 +134,10 @@ export default function TeamsPage() {
               onClick={() => setOpen(false)}
               disabled={pending}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button type="submit" disabled={pending || !name.trim()}>
-              {pending ? "Creating..." : "Create"}
+              {pending ? t("Creating...") : t("Create")}
             </Button>
           </div>
         </form>
@@ -145,6 +147,7 @@ export default function TeamsPage() {
 }
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
+  const { t } = useT();
   return (
     <Card className="overflow-hidden">
       <CardBody className="flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
@@ -156,13 +159,12 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
           <Constellation />
         </div>
         <div>
-          <p className="text-base font-semibold text-neutral-100">No teams yet.</p>
+          <p className="text-base font-semibold text-neutral-100">{t("No teams yet.")}</p>
           <p className="mt-1 max-w-sm text-sm text-neutral-400">
-            Teams are how you group projects, invite collaborators, and host
-            deployments. Create one to get started.
+            {t("Teams are how you group projects, invite collaborators, and host deployments. Create one to get started.")}
           </p>
         </div>
-        <Button onClick={onCreate}>Create team</Button>
+        <Button onClick={onCreate}>{t("Create team")}</Button>
       </CardBody>
     </Card>
   );

@@ -15,6 +15,7 @@ import {
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -67,6 +68,7 @@ function statusLabel(cfg: HeadscaleAdminConfig | undefined): string {
 }
 
 export function RemoteHostsAdminPanel() {
+  const { t } = useT();
   const { data, error, isLoading, mutate } = useSWR<HeadscaleAdminConfig>(
     "/v1/admin/headscale",
     () => api.admin.headscale.get(),
@@ -88,16 +90,17 @@ export function RemoteHostsAdminPanel() {
     <div className="space-y-6" data-testid="remote-hosts-admin-panel">
       <Card>
         <CardHeader>
-          <CardTitle>Remote Hosts</CardTitle>
+          <CardTitle>{t("Remote Hosts")}</CardTitle>
           <CardDescription>
-            Configure Headscale (the Tailscale control plane Synapse uses
-            to reach VPSes added via{" "}
+            {t(
+              "Configure Headscale (the Tailscale control plane Synapse uses to reach VPSes added via",
+            )}{" "}
             <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
-              Hosts → Setup remote install
+              {t("Hosts → Setup remote install")}
             </code>
-            ). Enabling Headscale joins this control plane to its own
-            tailnet so the central proxy can route to deployments on
-            other VPSes.
+            {t(
+              "). Enabling Headscale joins this control plane to its own tailnet so the central proxy can route to deployments on other VPSes.",
+            )}
           </CardDescription>
         </CardHeader>
         <CardBody className="space-y-4">
@@ -115,7 +118,7 @@ export function RemoteHostsAdminPanel() {
             >
               {error instanceof ApiError
                 ? error.message
-                : "Could not load Headscale configuration"}
+                : t("Could not load Headscale configuration")}
             </p>
           )}
           {data && <StatusSummary cfg={data} />}
@@ -130,15 +133,16 @@ export function RemoteHostsAdminPanel() {
           <CardBody className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-semibold text-amber-200">
-                Host domain required
+                {t("Host domain required")}
               </p>
               <p className="mt-1 max-w-xl text-xs text-neutral-300">
-                Headscale needs a TLS host like{" "}
+                {t("Headscale needs a TLS host like")}{" "}
                 <code className="rounded bg-neutral-950 px-1 py-0.5 text-[0.7rem] text-amber-200">
                   synapsepanel.com
                 </code>{" "}
-                so Tailscale clients can register over HTTPS. Configure
-                Admin → Host domain first, then come back.
+                {t(
+                  "so Tailscale clients can register over HTTPS. Configure Admin → Host domain first, then come back.",
+                )}
               </p>
             </div>
             <Link
@@ -146,7 +150,7 @@ export function RemoteHostsAdminPanel() {
               className="inline-flex h-9 items-center rounded-md border border-amber-500/40 bg-amber-500/10 px-3 text-sm text-amber-100 hover:bg-amber-500/20"
               data-testid="remote-hosts-host-domain-link"
             >
-              Open Host domain →
+              {t("Open Host domain →")}
             </Link>
           </CardBody>
         </Card>
@@ -159,13 +163,13 @@ export function RemoteHostsAdminPanel() {
         >
           <CardBody className="space-y-2">
             <p className="text-sm font-semibold text-yellow-200">
-              synapse-api restart pending
+              {t("synapse-api restart pending")}
             </p>
             <p className="text-xs text-neutral-300">
-              Headscale is configured in <code>.env</code> but the running
-              synapse-api process hasn&apos;t picked it up yet. Re-run
-              Configure to recreate the container, or restart it manually
-              with{" "}
+              {t("Headscale is configured in")} <code>.env</code>{" "}
+              {t(
+                "but the running synapse-api process hasn't picked it up yet. Re-run Configure to recreate the container, or restart it manually with",
+              )}{" "}
               <code className="rounded bg-neutral-950 px-1 py-0.5 text-[0.7rem] text-yellow-200">
                 docker compose up -d --force-recreate synapse
               </code>
@@ -182,16 +186,18 @@ export function RemoteHostsAdminPanel() {
         >
           <CardBody className="space-y-2">
             <p className="text-sm font-semibold text-amber-200">
-              Storage key required
+              {t("Storage key required")}
             </p>
             <p className="text-xs text-neutral-300">
-              Remote-host SSH keys are encrypted at rest with{" "}
+              {t("Remote-host SSH keys are encrypted at rest with")}{" "}
               <code className="rounded bg-neutral-950 px-1 py-0.5 text-[0.7rem] text-amber-200">
                 SYNAPSE_STORAGE_KEY
               </code>
-              . Set it in <code>.env</code> and restart synapse-api before
-              adding remote hosts — otherwise the agent-register endpoint
-              will refuse with <code>crypto_disabled</code>.
+              . {t("Set it in")} <code>.env</code>{" "}
+              {t(
+                "and restart synapse-api before adding remote hosts — otherwise the agent-register endpoint will refuse with",
+              )}{" "}
+              <code>crypto_disabled</code>.
             </p>
           </CardBody>
         </Card>
@@ -203,20 +209,24 @@ export function RemoteHostsAdminPanel() {
             <div>
               <p className="text-sm font-medium text-neutral-200">
                 {data.enabled
-                  ? "Re-configure Headscale"
-                  : "Enable Headscale"}
+                  ? t("Re-configure Headscale")
+                  : t("Enable Headscale")}
               </p>
               <p className="mt-1 text-xs text-neutral-500">
                 {data.enabled
-                  ? "Change the Headscale subdomain or re-apply the configure job. Existing remote hosts keep working as long as the subdomain doesn't move."
-                  : "Spin up the Headscale compose profile, mint an admin key, join this control plane to the tailnet, and recreate synapse-api so Remote Hosts go live."}
+                  ? t(
+                      "Change the Headscale subdomain or re-apply the configure job. Existing remote hosts keep working as long as the subdomain doesn't move.",
+                    )
+                  : t(
+                      "Spin up the Headscale compose profile, mint an admin key, join this control plane to the tailnet, and recreate synapse-api so Remote Hosts go live.",
+                    )}
               </p>
             </div>
             <Button
               onClick={() => setFormOpen(true)}
               data-testid="remote-hosts-configure-open"
             >
-              {data.enabled ? "Re-configure…" : "Configure…"}
+              {data.enabled ? t("Re-configure…") : t("Configure…")}
             </Button>
           </CardBody>
         </Card>
@@ -237,14 +247,14 @@ export function RemoteHostsAdminPanel() {
         <Card data-testid="remote-hosts-next-step">
           <CardBody className="space-y-2">
             <p className="text-sm font-medium text-neutral-200">
-              Next: add a remote host
+              {t("Next: add a remote host")}
             </p>
             <p className="text-xs text-neutral-400">
-              Open the Hosts panel and click{" "}
+              {t("Open the Hosts panel and click")}{" "}
               <code className="rounded bg-neutral-900 px-1 py-0.5 text-[0.7rem] text-neutral-200">
-                New host → Setup remote install
+                {t("New host → Setup remote install")}
               </code>{" "}
-              to mint a one-liner you paste into the new VPS.
+              {t("to mint a one-liner you paste into the new VPS.")}
             </p>
             <div>
               <Link
@@ -252,7 +262,7 @@ export function RemoteHostsAdminPanel() {
                 className="inline-flex h-8 items-center rounded-md border border-neutral-800 bg-neutral-900 px-3 text-xs text-neutral-200 hover:border-neutral-700 hover:bg-neutral-800"
                 data-testid="remote-hosts-open-hosts"
               >
-                Open Hosts →
+                {t("Open Hosts →")}
               </Link>
             </div>
           </CardBody>
@@ -263,30 +273,31 @@ export function RemoteHostsAdminPanel() {
 }
 
 function StatusSummary({ cfg }: { cfg: HeadscaleAdminConfig }) {
+  const { t } = useT();
   return (
     <dl
       className="grid grid-cols-[10rem_1fr] gap-y-3 text-sm"
       data-testid="remote-hosts-status"
     >
-      <dt className="text-neutral-500">Status</dt>
+      <dt className="text-neutral-500">{t("Status")}</dt>
       <dd>
         <Badge tone={statusTone(cfg)} data-testid="remote-hosts-status-badge">
-          {statusLabel(cfg)}
+          {t(statusLabel(cfg))}
         </Badge>
       </dd>
 
-      <dt className="text-neutral-500">Headscale URL</dt>
+      <dt className="text-neutral-500">{t("Headscale URL")}</dt>
       <dd className="text-neutral-100">
         {cfg.serverUrl ? (
           <code className="rounded bg-neutral-900 px-2 py-0.5 font-mono text-xs text-neutral-200">
             {cfg.serverUrl}
           </code>
         ) : (
-          <span className="text-neutral-500">Not configured yet</span>
+          <span className="text-neutral-500">{t("Not configured yet")}</span>
         )}
       </dd>
 
-      <dt className="text-neutral-500">Subdomain</dt>
+      <dt className="text-neutral-500">{t("Subdomain")}</dt>
       <dd className="text-neutral-100">
         {cfg.domain ? (
           <code className="rounded bg-neutral-900 px-2 py-0.5 font-mono text-xs text-neutral-200">
@@ -294,21 +305,21 @@ function StatusSummary({ cfg }: { cfg: HeadscaleAdminConfig }) {
           </code>
         ) : cfg.defaultDomain ? (
           <span className="text-xs text-neutral-500">
-            default:{" "}
+            {t("default:")}{" "}
             <code className="rounded bg-neutral-950 px-1 py-0.5 text-neutral-300">
               {cfg.defaultDomain}
             </code>
           </span>
         ) : (
-          <span className="text-neutral-500">Configure a host domain first</span>
+          <span className="text-neutral-500">{t("Configure a host domain first")}</span>
         )}
       </dd>
 
       {cfg.dnsCredentialAvailable && (
         <>
-          <dt className="text-neutral-500">DNS auto-config</dt>
+          <dt className="text-neutral-500">{t("DNS auto-config")}</dt>
           <dd>
-            <Badge tone="green">Cloudflare credential available</Badge>
+            <Badge tone="green">{t("Cloudflare credential available")}</Badge>
           </dd>
         </>
       )}
@@ -325,6 +336,7 @@ function ConfigureForm({
   onCancel: () => void;
   onApplied: () => Promise<void> | void;
 }) {
+  const { t } = useT();
   const initialDomain = current.domain || current.defaultDomain || "";
   const [headscaleDomain, setHeadscaleDomain] = useState(initialDomain);
   const [autoDns, setAutoDns] = useState(false);
@@ -359,7 +371,7 @@ function ConfigureForm({
       setSubmitError(
         err instanceof ApiError
           ? err.message
-          : "Could not enqueue the configure job",
+          : t("Could not enqueue the configure job"),
       );
     } finally {
       setSubmitting(false);
@@ -371,11 +383,13 @@ function ConfigureForm({
       <Card>
         <CardHeader>
           <CardTitle>
-            {current.enabled ? "Re-configure Headscale" : "Configure Headscale"}
+            {current.enabled
+              ? t("Re-configure Headscale")
+              : t("Configure Headscale")}
           </CardTitle>
           <CardDescription>
-            Headscale will live at <code>https://&lt;subdomain&gt;</code> and
-            require a matching A record pointing at this VPS
+            {t("Headscale will live at")} <code>https://&lt;subdomain&gt;</code>{" "}
+            {t("and require a matching A record pointing at this VPS")}
             {current.publicIp ? (
               <>
                 {" "}
@@ -391,7 +405,7 @@ function ConfigureForm({
         </CardHeader>
         <CardBody className="space-y-4">
           <label className="block space-y-1.5 text-sm">
-            <span className="text-neutral-300">Headscale subdomain</span>
+            <span className="text-neutral-300">{t("Headscale subdomain")}</span>
             <Input
               data-testid="remote-hosts-domain-input"
               value={headscaleDomain}
@@ -401,7 +415,7 @@ function ConfigureForm({
             />
             {!hostnameValid && (
               <p className="text-xs text-red-400">
-                Looks malformed — use a FQDN like{" "}
+                {t("Looks malformed — use a FQDN like")}{" "}
                 <code className="text-neutral-200">
                   headscale.example.com
                 </code>
@@ -411,16 +425,17 @@ function ConfigureForm({
             <p className="text-[11px] text-neutral-500">
               {current.hostDomain || current.baseDomain ? (
                 <>
-                  Default:{" "}
+                  {t("Default:")}{" "}
                   <code className="rounded bg-neutral-900 px-1 py-0.5 text-neutral-300">
                     {current.defaultDomain ||
                       `headscale.${current.hostDomain || current.baseDomain}`}
                   </code>{" "}
-                  — derived from your dashboard host so on-demand TLS for
-                  deployments doesn&apos;t fight Let&apos;s Encrypt for this name.
+                  {t(
+                    "— derived from your dashboard host so on-demand TLS for deployments doesn't fight Let's Encrypt for this name.",
+                  )}
                 </>
               ) : (
-                "Configure Admin → Host domain to get a sensible default."
+                t("Configure Admin → Host domain to get a sensible default.")
               )}
             </p>
           </label>
@@ -438,9 +453,9 @@ function ConfigureForm({
                 data-testid="remote-hosts-auto-dns"
               />
               <span>
-                Auto-configure the A record via the stored Cloudflare
-                credential before applying. Best-effort — if it fails we
-                show a manual fix-up reason and proceed anyway.
+                {t(
+                  "Auto-configure the A record via the stored Cloudflare credential before applying. Best-effort — if it fails we show a manual fix-up reason and proceed anyway.",
+                )}
               </span>
             </label>
           ) : (
@@ -448,23 +463,22 @@ function ConfigureForm({
               className="rounded border border-neutral-800/80 bg-neutral-900/40 px-3 py-2 text-xs text-neutral-400"
               data-testid="remote-hosts-manual-dns"
             >
-              <p className="font-medium text-neutral-300">Manual DNS step</p>
+              <p className="font-medium text-neutral-300">{t("Manual DNS step")}</p>
               <p className="mt-1">
-                Add an{" "}
+                {t("Add an")}{" "}
                 <code className="rounded bg-neutral-950 px-1 py-0.5 text-neutral-200">
                   A {trimmed || "<subdomain>"} →{" "}
                   {current.publicIp || "<this VPS IP>"}
                 </code>{" "}
-                record at your DNS provider, wait for propagation, then
-                apply.{" "}
+                {t("record at your DNS provider, wait for propagation, then apply.")}{" "}
                 <Link
                   href="/admin/dns-credentials"
                   className="text-violet-300 underline-offset-2 hover:underline"
                   data-testid="remote-hosts-dns-credentials-link"
                 >
-                  Save a Cloudflare credential
+                  {t("Save a Cloudflare credential")}
                 </Link>{" "}
-                to skip the manual step on future re-configures.
+                {t("to skip the manual step on future re-configures.")}
               </p>
             </div>
           )}
@@ -485,14 +499,14 @@ function ConfigureForm({
               disabled={submitting}
               data-testid="remote-hosts-cancel"
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               onClick={() => setConfirmOpen(true)}
               disabled={submitting || !hostnameValid}
               data-testid="remote-hosts-apply"
             >
-              {submitting ? "Working…" : "Apply…"}
+              {submitting ? t("Working…") : t("Apply…")}
             </Button>
           </div>
         </CardBody>
@@ -501,34 +515,36 @@ function ConfigureForm({
       <Dialog
         open={confirmOpen}
         onClose={() => !submitting && setConfirmOpen(false)}
-        title="Apply Headscale configuration"
+        title={t("Apply Headscale configuration")}
       >
         <div className="space-y-3" data-testid="remote-hosts-confirm-dialog">
           <p className="text-sm text-neutral-300">
-            Synapse will:
+            {t("Synapse will:")}
           </p>
           <ul className="list-disc space-y-1.5 pl-5 text-xs text-neutral-400">
             <li>
-              Render Headscale config + start the headscale compose
-              profile (idempotent if already running).
+              {t(
+                "Render Headscale config + start the headscale compose profile (idempotent if already running).",
+              )}
             </li>
             <li>
-              Stamp{" "}
+              {t("Stamp")}{" "}
               <code className="rounded bg-neutral-950 px-1 py-0.5 text-[0.7rem] text-neutral-200">
                 SYNAPSE_HEADSCALE_DOMAIN
               </code>{" "}
-              into <code>.env</code> and recreate synapse-api so the
-              new config is live.
+              {t("into")} <code>.env</code>{" "}
+              {t("and recreate synapse-api so the new config is live.")}
             </li>
             <li>
-              Join this control plane to its own tailnet under tag{" "}
+              {t("Join this control plane to its own tailnet under tag")}{" "}
               <code className="text-neutral-200">tag:synapse-control</code>{" "}
-              so the proxy can route to remote deployments.
+              {t("so the proxy can route to remote deployments.")}
             </li>
           </ul>
           <p className="text-xs text-neutral-500">
-            The synapse-api container restarts during this job. The
-            dashboard will reconnect automatically.
+            {t(
+              "The synapse-api container restarts during this job. The dashboard will reconnect automatically.",
+            )}
           </p>
           <div className="flex justify-end gap-2">
             <Button
@@ -536,14 +552,14 @@ function ConfigureForm({
               onClick={() => setConfirmOpen(false)}
               disabled={submitting}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               onClick={submit}
               disabled={submitting}
               data-testid="remote-hosts-confirm-apply"
             >
-              {submitting ? "Working…" : "Apply"}
+              {submitting ? t("Working…") : t("Apply")}
             </Button>
           </div>
         </div>
@@ -573,6 +589,7 @@ function ApplyDialog({
   dnsAuto?: HostDomainDNSAutoResult;
   onClose: () => void;
 }) {
+  const { t } = useT();
   const [job, setJob] = useState<HostDomainJobStatus | null>(null);
   const [pollErr, setPollErr] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -592,7 +609,7 @@ function ApplyDialog({
         // synapse-api recreate during the job can hand us a brief 502;
         // tolerate up to 3 polls before surfacing.
         setPollErr(
-          err instanceof ApiError ? err.message : "Could not load job status",
+          err instanceof ApiError ? err.message : t("Could not load job status"),
         );
       }
     }
@@ -626,7 +643,7 @@ function ApplyDialog({
     <Dialog
       open
       onClose={() => done && onClose()}
-      title="Applying Headscale configuration"
+      title={t("Applying Headscale configuration")}
     >
       <div className="space-y-3" data-testid="remote-hosts-apply-dialog">
         <div className="flex items-center gap-2 text-sm">
@@ -636,7 +653,9 @@ function ApplyDialog({
           >
             {job?.state ?? "queued"}
           </Badge>
-          <span className="text-neutral-500">job {jobId.slice(0, 8)}…</span>
+          <span className="text-neutral-500">
+            {t("job {id}…", { id: jobId.slice(0, 8) })}
+          </span>
         </div>
 
         {dnsAuto && (
@@ -650,15 +669,17 @@ function ApplyDialog({
           >
             {dnsAuto.success ? (
               <>
-                ✓ Created A record{" "}
+                {t("✓ Created A record")}{" "}
                 <code className="text-green-100">{dnsAuto.recordName}</code>{" "}
                 → <code className="text-green-100">{dnsAuto.ip}</code>{" "}
-                via Cloudflare.
+                {t("via Cloudflare.")}
               </>
             ) : (
               <>
-                DNS auto-config skipped: {dnsAuto.reason}. You may need to
-                add the A record manually.
+                {t(
+                  "DNS auto-config skipped: {reason}. You may need to add the A record manually.",
+                  { reason: dnsAuto.reason },
+                )}
               </>
             )}
           </div>
@@ -666,7 +687,9 @@ function ApplyDialog({
 
         {pollErr && !job && (
           <p className="text-xs text-amber-300">
-            Polling glitch (synapse-api may be restarting): {pollErr}
+            {t("Polling glitch (synapse-api may be restarting): {err}", {
+              err: pollErr,
+            })}
           </p>
         )}
 
@@ -691,7 +714,7 @@ function ApplyDialog({
             disabled={!done}
             data-testid="remote-hosts-apply-close"
           >
-            {done ? "Close" : "Working…"}
+            {done ? t("Close") : t("Working…")}
           </Button>
         </div>
       </div>

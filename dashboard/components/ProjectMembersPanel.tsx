@@ -24,6 +24,7 @@ import { Card, CardBody, CardHeader, CardTitle, CardDescription } from "@/compon
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, type ProjectMember } from "@/lib/api";
 import { getCurrentUser } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 const ROLES: ProjectMember["role"][] = ["admin", "member", "viewer"];
 
@@ -38,6 +39,7 @@ export function ProjectMembersPanel({
 }: {
   projectId: string;
 }) {
+  const { t } = useT();
   const me = getCurrentUser();
   const { data, error, isLoading, mutate } = useSWR<ProjectMember[]>(
     ["/project-members", projectId],
@@ -61,7 +63,7 @@ export function ProjectMembersPanel({
       await api.projects.updateMemberRole(projectId, m.id, role);
       await mutate();
     } catch (e) {
-      setActionErr(e instanceof ApiError ? e.message : "Could not update role");
+      setActionErr(e instanceof ApiError ? e.message : t("Could not update role"));
     } finally {
       setPendingId(null);
     }
@@ -72,8 +74,8 @@ export function ProjectMembersPanel({
     if (
       !confirm(
         self
-          ? `Drop your project-level override? You'll fall back to your team role.`
-          : `Drop ${m.email}'s project override? They'll fall back to their team role.`,
+          ? t("Drop your project-level override? You'll fall back to your team role.")
+          : t("Drop {email}'s project override? They'll fall back to their team role.", { email: m.email }),
       )
     ) {
       return;
@@ -85,7 +87,7 @@ export function ProjectMembersPanel({
       await mutate();
     } catch (e) {
       setActionErr(
-        e instanceof ApiError ? e.message : "Could not remove override",
+        e instanceof ApiError ? e.message : t("Could not remove override"),
       );
     } finally {
       setPendingId(null);
@@ -95,13 +97,13 @@ export function ProjectMembersPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Members</CardTitle>
+        <CardTitle>{t("Members")}</CardTitle>
         <CardDescription>
-          Everyone with access to this project. Project-level role overrides
-          team role for the row marked <code className="font-mono">project</code>.
+          {t("Everyone with access to this project. Project-level role overrides team role for the row marked")}{" "}
+          <code className="font-mono">project</code>.
           {isAdmin
-            ? " Set a per-project role to lock a teammate down to read-only, or promote them to admin."
-            : " Only project admins can change roles."}
+            ? t(" Set a per-project role to lock a teammate down to read-only, or promote them to admin.")
+            : t(" Only project admins can change roles.")}
         </CardDescription>
       </CardHeader>
       <CardBody className="p-0">
@@ -120,7 +122,7 @@ export function ProjectMembersPanel({
         )}
         {error && (
           <p className="px-5 py-4 text-xs text-red-400">
-            Failed to load members: {(error as Error).message}
+            {t("Failed to load members:")} {(error as Error).message}
           </p>
         )}
         {actionErr && (
@@ -144,7 +146,7 @@ export function ProjectMembersPanel({
                       {m.name || m.email.split("@")[0]}
                       {self && (
                         <span className="ml-2 text-xs text-neutral-500">
-                          (you)
+                          {t("(you)")}
                         </span>
                       )}
                     </p>
@@ -177,10 +179,10 @@ export function ProjectMembersPanel({
                           size="sm"
                           onClick={() => removeOverride(m)}
                           disabled={pendingId === m.id}
-                          aria-label={`Remove project override for ${m.email}`}
+                          aria-label={t("Remove project override for {email}", { email: m.email })}
                           data-testid={`project-member-remove-${m.email}`}
                         >
-                          Drop override
+                          {t("Drop override")}
                         </Button>
                       )}
                     </div>
@@ -192,7 +194,7 @@ export function ProjectMembersPanel({
                       onClick={() => removeOverride(m)}
                       disabled={pendingId === m.id}
                     >
-                      Drop my override
+                      {t("Drop my override")}
                     </Button>
                   )}
                 </li>

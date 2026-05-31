@@ -5,7 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { ApiError, api } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // safeReturnTo guards against open-redirect attacks: only accept
 // absolute paths on this origin (start with `/`, not `//`, no
@@ -33,6 +35,7 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
+  const { t } = useT();
   const router = useRouter();
   const search = useSearchParams();
   const returnTo = safeReturnTo(search.get("return_to"));
@@ -73,7 +76,7 @@ function LoginForm() {
       // custom dashboard domain bounced them through here).
       router.push(returnTo);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed");
+      setError(err instanceof ApiError ? err.message : t("Login failed"));
     } finally {
       setPending(false);
     }
@@ -81,19 +84,20 @@ function LoginForm() {
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
+      <LocaleSwitcher variant="pill" className="fixed right-4 top-4 z-50" />
       <form
         onSubmit={submit}
         className="w-full max-w-sm space-y-4 rounded-lg border border-neutral-800 bg-neutral-900/40 p-6"
       >
         <div>
-          <h1 className="text-lg font-semibold">Sign in to Synapse</h1>
+          <h1 className="text-lg font-semibold">{t("Sign in to Synapse")}</h1>
           <p className="mt-1 text-xs text-neutral-400">
-            Self-hosted control plane for Convex.
+            {t("Self-hosted control plane for Convex.")}
           </p>
         </div>
         <div className="space-y-2">
           <label htmlFor="login-email" className="block text-xs text-neutral-400">
-            Email
+            {t("Email")}
           </label>
           <Input
             id="login-email"
@@ -106,7 +110,7 @@ function LoginForm() {
         </div>
         <div className="space-y-2">
           <label htmlFor="login-password" className="block text-xs text-neutral-400">
-            Password
+            {t("Password")}
           </label>
           <Input
             id="login-password"
@@ -123,12 +127,12 @@ function LoginForm() {
           </p>
         )}
         <Button type="submit" disabled={pending} className="w-full">
-          {pending ? "Signing in..." : "Sign in"}
+          {pending ? t("Signing in...") : t("Sign in")}
         </Button>
         <p className="text-center text-xs text-neutral-500">
-          No account?{" "}
+          {t("No account?")}{" "}
           <Link href="/register" className="text-neutral-200 hover:underline">
-            Create one
+            {t("Create one")}
           </Link>
         </p>
       </form>

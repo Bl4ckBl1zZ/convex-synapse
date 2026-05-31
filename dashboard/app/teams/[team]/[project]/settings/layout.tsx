@@ -8,6 +8,7 @@ import useSWR from "swr";
 import { ApiError, api, type Project } from "@/lib/api";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string; project: string };
 
@@ -31,6 +32,7 @@ export default function ProjectSettingsLayout({
   children: React.ReactNode;
 }) {
   const { team: teamRef, project: projectId } = use(params);
+  const { t } = useT();
   const pathname = usePathname() ?? "";
   const base = `/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(projectId)}/settings`;
 
@@ -57,15 +59,15 @@ export default function ProjectSettingsLayout({
   ) {
     return (
       <EmptyState
-        title="Project unavailable"
-        description="This project doesn't exist or you don't have access."
+        title={t("Project unavailable")}
+        description={t("This project doesn't exist or you don't have access.")}
         testId="project-unavailable"
         action={
           <Link
             href={`/teams/${encodeURIComponent(teamRef)}`}
             className="text-sm text-cyan-400 hover:text-cyan-300"
           >
-            ← Back to projects
+            {t("← Back to projects")}
           </Link>
         }
       />
@@ -73,12 +75,12 @@ export default function ProjectSettingsLayout({
   }
 
   const items: { href: string; label: string; testid: string }[] = [
-    { href: `${base}/general`, label: "General", testid: "project-settings-nav-general" },
-    { href: `${base}/environment-variables`, label: "Environment Variables", testid: "project-settings-nav-env-vars" },
-    { href: `${base}/dns-credentials`, label: "DNS Credentials", testid: "project-settings-nav-dns" },
-    { href: `${base}/members`, label: "Members", testid: "project-settings-nav-members" },
-    { href: `${base}/access-tokens`, label: "Access Tokens", testid: "project-settings-nav-tokens" },
-    { href: `${base}/audit`, label: "Audit", testid: "project-settings-nav-audit" },
+    { href: `${base}/general`, label: t("General"), testid: "project-settings-nav-general" },
+    { href: `${base}/environment-variables`, label: t("Environment Variables"), testid: "project-settings-nav-env-vars" },
+    { href: `${base}/dns-credentials`, label: t("DNS Credentials"), testid: "project-settings-nav-dns" },
+    { href: `${base}/members`, label: t("Members"), testid: "project-settings-nav-members" },
+    { href: `${base}/access-tokens`, label: t("Access Tokens"), testid: "project-settings-nav-tokens" },
+    { href: `${base}/audit`, label: t("Audit"), testid: "project-settings-nav-audit" },
   ];
 
   return (
@@ -86,7 +88,7 @@ export default function ProjectSettingsLayout({
       <div>
         <nav className="text-xs text-neutral-500">
           <Link href="/teams" className="hover:text-neutral-300">
-            Teams
+            {t("Teams")}
           </Link>{" "}
           /{" "}
           <Link
@@ -102,19 +104,18 @@ export default function ProjectSettingsLayout({
           >
             {project?.name ?? projectId}
           </Link>{" "}
-          / <span className="text-neutral-300">Settings</span>
+          / <span className="text-neutral-300">{t("Settings")}</span>
         </nav>
         <h1 className="mt-3 text-xl font-semibold tracking-tight text-neutral-100">
-          {project?.name ?? "Project"} settings
+          {t("{name} settings", { name: project?.name ?? t("Project") })}
         </h1>
         <p className="mt-1 text-xs text-neutral-400">
-          Project-wide configuration. Deployments themselves are managed
-          from the{" "}
+          {t("Project-wide configuration. Deployments themselves are managed from the")}{" "}
           <Link
             href={`/teams/${encodeURIComponent(teamRef)}/${encodeURIComponent(projectId)}`}
             className="text-neutral-300 hover:text-neutral-100"
           >
-            project home
+            {t("project home")}
           </Link>
           .
         </p>
@@ -122,7 +123,7 @@ export default function ProjectSettingsLayout({
 
       <div className="grid gap-8 md:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="md:sticky md:top-20 md:self-start">
-          <nav className="space-y-0.5" aria-label="Project settings sections">
+          <nav className="space-y-0.5" aria-label={t("Project settings sections")}>
             {items.map((it) => (
               <Link
                 key={it.label}

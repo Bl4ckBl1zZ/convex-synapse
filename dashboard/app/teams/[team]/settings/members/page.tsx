@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InvitesPanel } from "@/components/InvitesPanel";
 import { ApiError, api, type Team, type TeamMember } from "@/lib/api";
 import { getCurrentUser } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 type Params = { team: string };
 
@@ -25,6 +26,7 @@ export default function TeamMembersPage({
 }: {
   params: Promise<Params>;
 }) {
+  const { t } = useT();
   const { team: teamRef } = use(params);
   const { data: team } = useSWR<Team>(["/team", teamRef], () =>
     api.teams.get(teamRef),
@@ -49,10 +51,10 @@ export default function TeamMembersPage({
     } catch (e) {
       if (e instanceof ApiError && e.code === "last_admin") {
         setActionErr(
-          "Cannot demote the last admin — promote another member first.",
+          t("Cannot demote the last admin — promote another member first."),
         );
       } else {
-        setActionErr(e instanceof Error ? e.message : "Could not update role");
+        setActionErr(e instanceof Error ? e.message : t("Could not update role"));
       }
     }
   };
@@ -63,8 +65,14 @@ export default function TeamMembersPage({
     if (
       !confirm(
         self
-          ? `Leave team "${team?.name ?? teamRef}"? You'll lose access to all of its projects.`
-          : `Remove ${m.name || m.email} from "${team?.name ?? teamRef}"?`,
+          ? t(
+              `Leave team "{team}"? You'll lose access to all of its projects.`,
+              { team: team?.name ?? teamRef },
+            )
+          : t(`Remove {member} from "{team}"?`, {
+              member: m.name || m.email,
+              team: team?.name ?? teamRef,
+            }),
       )
     ) {
       return;
@@ -82,10 +90,15 @@ export default function TeamMembersPage({
     } catch (e) {
       if (e instanceof ApiError && e.code === "last_admin") {
         setActionErr(
-          `Cannot ${verb} — would leave the team without an admin. Promote another admin first.`,
+          t(
+            "Cannot {verb} — would leave the team without an admin. Promote another admin first.",
+            { verb: t(verb) },
+          ),
         );
       } else {
-        setActionErr(e instanceof Error ? e.message : `Could not ${verb}`);
+        setActionErr(
+          e instanceof Error ? e.message : t("Could not {verb}", { verb: t(verb) }),
+        );
       }
     }
   };
@@ -94,12 +107,14 @@ export default function TeamMembersPage({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Members</CardTitle>
+          <CardTitle>{t("Members")}</CardTitle>
           <CardDescription>
-            Everyone with access to this team&apos;s projects and deployments.
+            {t(
+              "Everyone with access to this team's projects and deployments.",
+            )}
             {isAdmin
-              ? " Click a member's role to toggle admin/member."
-              : " Only admins can change roles or remove other members."}
+              ? t(" Click a member's role to toggle admin/member.")
+              : t(" Only admins can change roles or remove other members.")}
           </CardDescription>
         </CardHeader>
         <CardBody className="p-0">
@@ -119,7 +134,7 @@ export default function TeamMembersPage({
 
           {error && !(error instanceof ApiError && error.status === 403) && (
             <p className="px-5 py-4 text-xs text-red-400">
-              Failed to load members: {(error as Error).message}
+              {t("Failed to load members:")} {(error as Error).message}
             </p>
           )}
 
@@ -148,7 +163,7 @@ export default function TeamMembersPage({
                         {m.name || m.email.split("@")[0]}
                         {self && (
                           <span className="ml-2 text-xs text-neutral-500">
-                            (you)
+                            {t("(you)")}
                           </span>
                         )}
                       </p>
@@ -164,8 +179,10 @@ export default function TeamMembersPage({
                         disabled={isOnlyAdmin}
                         title={
                           isOnlyAdmin
-                            ? "Last admin — promote another member first"
-                            : `Switch to ${m.role === "admin" ? "member" : "admin"}`
+                            ? t("Last admin — promote another member first")
+                            : t("Switch to {role}", {
+                                role: m.role === "admin" ? "member" : "admin",
+                              })
                         }
                         data-testid={`member-role-toggle-${m.email}`}
                       >
@@ -181,11 +198,13 @@ export default function TeamMembersPage({
                         onClick={() => remove(m)}
                         disabled={m.role === "admin" && isOnlyAdmin}
                         aria-label={
-                          self ? "Leave team" : `Remove ${m.email}`
+                          self
+                            ? t("Leave team")
+                            : t("Remove {email}", { email: m.email })
                         }
                         data-testid={`member-remove-${m.email}`}
                       >
-                        {self ? "Leave" : "Remove"}
+                        {self ? t("Leave") : t("Remove")}
                       </Button>
                     )}
                   </li>
@@ -196,7 +215,7 @@ export default function TeamMembersPage({
 
           {data && data.length === 0 && (
             <p className="px-5 py-8 text-center text-sm text-neutral-500">
-              No members visible.
+              {t("No members visible.")}
             </p>
           )}
         </CardBody>
@@ -204,9 +223,9 @@ export default function TeamMembersPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Invite a teammate</CardTitle>
+          <CardTitle>{t("Invite a teammate")}</CardTitle>
           <CardDescription>
-            Send an invite link to add someone to this team.
+            {t("Send an invite link to add someone to this team.")}
           </CardDescription>
         </CardHeader>
         <CardBody>

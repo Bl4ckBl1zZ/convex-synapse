@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, type DNSCredential, type ProjectMember } from "@/lib/api";
 import { getCurrentUser } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 
 // Cloudflare API-token deep link — same one the admin panel uses. The
 // permission group key pre-fills the "Edit zone DNS" template so the
@@ -51,6 +52,7 @@ function relativeTime(iso?: string): string {
 // canManage controls whether the Add / Delete affordances render. The
 // backend re-checks (canAdminProject) — this is purely UX.
 export function ProjectDnsCredentialsPanel({ projectId }: Props) {
+  const { t } = useT();
   const [shown, setShown] = useState(false);
 
   const swrKey = shown ? `/v1/projects/${projectId}/dns_credentials` : null;
@@ -86,16 +88,17 @@ export function ProjectDnsCredentialsPanel({ projectId }: Props) {
           data-testid="project-dns-credentials-toggle"
         >
           <span className="text-sm font-semibold text-neutral-200">
-            DNS credentials
+            {t("DNS credentials")}
           </span>
           <span className="text-xs text-neutral-400">
-            {shown ? "Hide" : "Show"}
+            {shown ? t("Hide") : t("Show")}
           </span>
         </button>
         {!shown && (
           <p className="mt-1 text-xs text-neutral-500">
-            Cloudflare tokens scoped to this project. Used to auto-create
-            DNS records when you add a custom domain to a deployment.
+            {t(
+              "Cloudflare tokens scoped to this project. Used to auto-create DNS records when you add a custom domain to a deployment.",
+            )}
           </p>
         )}
 
@@ -105,10 +108,9 @@ export function ProjectDnsCredentialsPanel({ projectId }: Props) {
             data-testid="project-dns-credentials-body"
           >
             <p className="text-xs text-neutral-400">
-              Project-scoped tokens win over instance-wide credentials for
-              any domain whose apex they cover. Tokens never leave the
-              server — they're encrypted at rest and only used to push
-              records on your behalf.
+              {t(
+                "Project-scoped tokens win over instance-wide credentials for any domain whose apex they cover. Tokens never leave the server — they're encrypted at rest and only used to push records on your behalf.",
+              )}
             </p>
 
             {canManage && (
@@ -118,7 +120,7 @@ export function ProjectDnsCredentialsPanel({ projectId }: Props) {
                   onClick={() => setAddOpen(true)}
                   data-testid="project-dns-credentials-add"
                 >
-                  Add Cloudflare credential
+                  {t("Add Cloudflare credential")}
                 </Button>
               </div>
             )}
@@ -137,7 +139,7 @@ export function ProjectDnsCredentialsPanel({ projectId }: Props) {
               >
                 {error instanceof ApiError
                   ? error.message
-                  : "Could not load DNS credentials"}
+                  : t("Could not load DNS credentials")}
               </p>
             )}
 
@@ -146,17 +148,21 @@ export function ProjectDnsCredentialsPanel({ projectId }: Props) {
                 className="rounded-md border border-neutral-800/80 bg-neutral-950 px-3 py-3 text-xs text-neutral-400"
                 data-testid="project-dns-credentials-empty"
               >
-                No credentials saved for this project yet.{" "}
+                {t("No credentials saved for this project yet.")}{" "}
                 {canManage
-                  ? "Add a Cloudflare token above to enable DNS auto-configuration on this project's custom domains."
-                  : "A project admin can add a Cloudflare token to enable DNS auto-configuration."}
+                  ? t(
+                      "Add a Cloudflare token above to enable DNS auto-configuration on this project's custom domains.",
+                    )
+                  : t(
+                      "A project admin can add a Cloudflare token to enable DNS auto-configuration.",
+                    )}
               </p>
             )}
 
             {credentials.length > 0 && (
               <ul
                 className="space-y-2"
-                aria-label="Project DNS credentials"
+                aria-label={t("Project DNS credentials")}
                 data-testid="project-dns-credentials-list"
               >
                 {credentials.map((c) => (
@@ -205,6 +211,7 @@ function CredentialRow({
   canManage: boolean;
   onDelete: () => void;
 }) {
+  const { t } = useT();
   const [zonesOpen, setZonesOpen] = useState(false);
   const zoneCount = credential.zones?.length ?? 0;
   return (
@@ -218,10 +225,12 @@ function CredentialRow({
         </span>
         <Badge tone="neutral">Cloudflare</Badge>
         <Badge tone={zoneCount > 0 ? "green" : "yellow"}>
-          {zoneCount} {zoneCount === 1 ? "zone" : "zones"}
+          {zoneCount === 1
+            ? t("{n} zone", { n: zoneCount })
+            : t("{n} zones", { n: zoneCount })}
         </Badge>
         <span className="text-neutral-500">
-          last used {relativeTime(credential.lastUsedAt)}
+          {t("last used {time}", { time: relativeTime(credential.lastUsedAt) })}
         </span>
         <span className="ml-auto flex shrink-0 gap-2">
           {zoneCount > 0 && (
@@ -232,11 +241,11 @@ function CredentialRow({
               aria-expanded={zonesOpen}
               aria-label={
                 zonesOpen
-                  ? `Hide zones for ${credential.label}`
-                  : `Show zones for ${credential.label}`
+                  ? t("Hide zones for {label}", { label: credential.label })
+                  : t("Show zones for {label}", { label: credential.label })
               }
             >
-              {zonesOpen ? "Hide zones" : "Show zones"}
+              {zonesOpen ? t("Hide zones") : t("Show zones")}
             </Button>
           )}
           {canManage && (
@@ -244,10 +253,12 @@ function CredentialRow({
               variant="ghost"
               size="sm"
               onClick={onDelete}
-              aria-label={`Delete credential ${credential.label}`}
+              aria-label={t("Delete credential {label}", {
+                label: credential.label,
+              })}
               data-testid={`project-dns-credential-delete-${credential.id}`}
             >
-              Delete
+              {t("Delete")}
             </Button>
           )}
         </span>
@@ -303,6 +314,7 @@ function AddDialogInner({
   onClose: () => void;
   onAdded: () => Promise<void>;
 }) {
+  const { t } = useT();
   const [label, setLabel] = useState("");
   const [token, setToken] = useState("");
   const [reveal, setReveal] = useState(false);
@@ -313,11 +325,11 @@ function AddDialogInner({
     e.preventDefault();
     setError(null);
     if (!label.trim()) {
-      setError("Label is required");
+      setError(t("Label is required"));
       return;
     }
     if (!token.trim()) {
-      setError("API token is required");
+      setError(t("API token is required"));
       return;
     }
     setPending(true);
@@ -330,7 +342,7 @@ function AddDialogInner({
       await onAdded();
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : "Could not add credential",
+        err instanceof ApiError ? err.message : t("Could not add credential"),
       );
     } finally {
       setPending(false);
@@ -341,7 +353,7 @@ function AddDialogInner({
     <Dialog
       open
       onClose={() => !pending && onClose()}
-      title="Add Cloudflare credential"
+      title={t("Add Cloudflare credential")}
     >
       <form
         onSubmit={submit}
@@ -353,13 +365,13 @@ function AddDialogInner({
             htmlFor="proj-dns-label"
             className="block text-xs text-neutral-400"
           >
-            Label
+            {t("Label")}
           </label>
           <Input
             id="proj-dns-label"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            placeholder="Client A — flert.digital"
+            placeholder={t("Client A — flert.digital")}
             autoComplete="off"
             data-testid="project-dns-credential-label-input"
           />
@@ -369,7 +381,7 @@ function AddDialogInner({
             htmlFor="proj-dns-token"
             className="block text-xs text-neutral-400"
           >
-            API token
+            {t("API token")}
           </label>
           <div className="relative">
             <Input
@@ -387,24 +399,24 @@ function AddDialogInner({
               type="button"
               onClick={() => setReveal((v) => !v)}
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-[11px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
-              aria-label={reveal ? "Hide token" : "Show token"}
+              aria-label={reveal ? t("Hide token") : t("Show token")}
             >
-              {reveal ? "Hide" : "Show"}
+              {reveal ? t("Hide") : t("Show")}
             </button>
           </div>
           <p className="text-[11px] text-neutral-500">
-            Need a token?{" "}
+            {t("Need a token?")}{" "}
             <a
               href={CLOUDFLARE_TOKEN_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="text-violet-300 underline-offset-2 hover:underline"
             >
-              Create one on Cloudflare
+              {t("Create one on Cloudflare")}
             </a>{" "}
-            with <code className="font-mono">Zone:DNS:Edit</code> +{" "}
-            <code className="font-mono">Zone:Zone:Read</code> scoped to the
-            zone(s) this project's domains live in.
+            {t("with")} <code className="font-mono">Zone:DNS:Edit</code> +{" "}
+            <code className="font-mono">Zone:Zone:Read</code>{" "}
+            {t("scoped to the zone(s) this project's domains live in.")}
           </p>
         </div>
         {error && (
@@ -423,14 +435,14 @@ function AddDialogInner({
             onClick={onClose}
             disabled={pending}
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             type="submit"
             disabled={pending}
             data-testid="project-dns-credentials-add-submit"
           >
-            {pending ? "Adding…" : "Add credential"}
+            {pending ? t("Adding…") : t("Add credential")}
           </Button>
         </div>
       </form>
@@ -471,6 +483,7 @@ function DeleteDialogInner({
   onClose: () => void;
   onDeleted: () => Promise<void>;
 }) {
+  const { t } = useT();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | undefined>();
@@ -487,7 +500,7 @@ function DeleteDialogInner({
         setError(err.message);
         setErrorCode(err.code);
       } else {
-        setError("Could not delete credential");
+        setError(t("Could not delete credential"));
       }
     } finally {
       setPending(false);
@@ -500,16 +513,16 @@ function DeleteDialogInner({
     <Dialog
       open
       onClose={() => !pending && onClose()}
-      title={`Delete "${target.label}"?`}
+      title={t('Delete "{label}"?', { label: target.label })}
     >
       <div
         className="space-y-3"
         data-testid="project-dns-credentials-delete-dialog"
       >
         <p className="text-xs text-neutral-300">
-          Synapse will forget this token. Existing deployment domains that
-          were auto-configured with it keep working; only future
-          auto-configuration breaks.
+          {t(
+            "Synapse will forget this token. Existing deployment domains that were auto-configured with it keep working; only future auto-configuration breaks.",
+          )}
         </p>
         {error && (
           <div
@@ -518,8 +531,9 @@ function DeleteDialogInner({
           >
             {inUse && (
               <p className="font-semibold">
-                This credential is in use. Remove the dependent domains
-                first, then delete it.
+                {t(
+                  "This credential is in use. Remove the dependent domains first, then delete it.",
+                )}
               </p>
             )}
             <p className={inUse ? "text-red-200/80" : ""}>{error}</p>
@@ -527,7 +541,7 @@ function DeleteDialogInner({
         )}
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             variant="danger"
@@ -535,7 +549,7 @@ function DeleteDialogInner({
             disabled={pending}
             data-testid="project-dns-credentials-delete-confirm"
           >
-            {pending ? "Deleting…" : "Delete"}
+            {pending ? t("Deleting…") : t("Delete")}
           </Button>
         </div>
       </div>

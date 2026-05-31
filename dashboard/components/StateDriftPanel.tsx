@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { IconLayers } from "@/components/ui/icon";
 import { JsonDetails } from "@/components/JsonDetails";
+import { useT } from "@/lib/i18n";
 import {
   ApiError,
   api,
@@ -27,6 +28,7 @@ type Props = { projectId: string };
 //   • the dry-run plan is a recommendation (applyAllowed=false),
 //   • there is intentionally no Apply button.
 export function StateDriftPanel({ projectId }: Props) {
+  const { t } = useT();
   const { data: desired, mutate: mutateDesired } = useSWR<DesiredState[]>(
     ["/desired", projectId],
     () => api.desired.project(projectId),
@@ -63,7 +65,7 @@ export function StateDriftPanel({ projectId }: Props) {
       setError(
         e instanceof ApiError
           ? e.message
-          : "Action failed — please try again.",
+          : t("Action failed — please try again."),
       );
     } finally {
       setBusy(null);
@@ -75,7 +77,14 @@ export function StateDriftPanel({ projectId }: Props) {
       const res = await api.desired.projectSyncFromPlacements(projectId);
       await Promise.all([mutateDesired(), mutateDrift(), refreshRuns()]);
       setNotice(
-        `Desired state synced from placements (${res.created} created, ${res.updated} updated, ${res.superseded} superseded). Nothing was applied to hosts.`,
+        t(
+          "Desired state synced from placements ({created} created, {updated} updated, {superseded} superseded). Nothing was applied to hosts.",
+          {
+            created: res.created,
+            updated: res.updated,
+            superseded: res.superseded,
+          },
+        ),
       );
     });
 
@@ -84,7 +93,7 @@ export function StateDriftPanel({ projectId }: Props) {
       const res = await api.drift.project.recompute(projectId);
       await mutateDrift(res, { revalidate: false });
       await refreshRuns();
-      setNotice("Drift recomputed. This is a diagnosis only — no host was changed.");
+      setNotice(t("Drift recomputed. This is a diagnosis only — no host was changed."));
     });
 
   const onDryRun = () =>
@@ -92,7 +101,7 @@ export function StateDriftPanel({ projectId }: Props) {
       const res = await api.reconcile.projectDryRun(projectId);
       setDryRun(res);
       await refreshRuns();
-      setNotice("Dry-run plan built. Nothing was sent to the agent.");
+      setNotice(t("Dry-run plan built. Nothing was sent to the agent."));
     });
 
   const report = drift?.report ?? null;
@@ -105,32 +114,32 @@ export function StateDriftPanel({ projectId }: Props) {
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
             <IconLayers className="opacity-70" />
-            State &amp; Drift
+            {t("State & Drift")}
           </h3>
           <Badge tone="neutral" data-testid="drift-desired-count">
-            {desiredCount} desired
+            {t("{desiredCount} desired", { desiredCount })}
           </Badge>
           <Badge tone={reportStatusTone(report?.status)} data-testid="drift-status">
-            {report ? report.status : "no report"}
+            {report ? report.status : t("no report")}
           </Badge>
-          <Badge tone="violet">dry-run only</Badge>
+          <Badge tone="violet">{t("dry-run only")}</Badge>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" size="sm" onClick={onSync} disabled={busy !== null}>
-            {busy === "sync" ? "Syncing…" : "Sync desired from placements"}
+            {busy === "sync" ? t("Syncing…") : t("Sync desired from placements")}
           </Button>
           <Button size="sm" onClick={onRecompute} disabled={busy !== null}>
-            {busy === "recompute" ? "Recomputing…" : "Recompute drift"}
+            {busy === "recompute" ? t("Recomputing…") : t("Recompute drift")}
           </Button>
           <Button variant="outline" size="sm" onClick={onDryRun} disabled={busy !== null}>
-            {busy === "dryrun" ? "Planning…" : "Dry-run reconcile"}
+            {busy === "dryrun" ? t("Planning…") : t("Dry-run reconcile")}
           </Button>
         </div>
       </div>
 
       <div className="space-y-4 p-5">
         <p className="text-[11px] text-neutral-500">
-          The agent is observe-only. No changes will be applied to hosts; plans are recommendations.
+          {t("The agent is observe-only. No changes will be applied to hosts; plans are recommendations.")}
         </p>
 
         {notice && (
@@ -151,25 +160,25 @@ export function StateDriftPanel({ projectId }: Props) {
         )}
 
         {driftLoading && !drift && (
-          <p className="text-xs text-neutral-500">Loading drift…</p>
+          <p className="text-xs text-neutral-500">{t("Loading drift…")}</p>
         )}
         {driftError instanceof ApiError &&
           driftError.status !== 401 &&
           driftError.status !== 403 && (
             <p className="text-xs text-red-400">
-              Failed to load drift: {driftError.message}
+              {t("Failed to load drift: {message}", { message: driftError.message })}
             </p>
           )}
 
         {/* Empty states. */}
         {!driftLoading && desiredCount === 0 && (
           <p className="text-xs text-neutral-500" data-testid="drift-empty-desired">
-            No desired state yet. Click <span className="text-neutral-300">Sync desired from placements</span>.
+            {t("No desired state yet. Click")} <span className="text-neutral-300">{t("Sync desired from placements")}</span>.
           </p>
         )}
         {!driftLoading && !report && (
           <p className="text-xs text-neutral-500" data-testid="drift-empty-report">
-            No drift report yet. Click <span className="text-neutral-300">Recompute drift</span>.
+            {t("No drift report yet. Click")} <span className="text-neutral-300">{t("Recompute drift")}</span>.
           </p>
         )}
 
@@ -177,7 +186,7 @@ export function StateDriftPanel({ projectId }: Props) {
 
         {items.length > 0 && (
           <div className="space-y-2" data-testid="drift-items">
-            <p className="text-xs font-semibold text-neutral-300">Drift items ({items.length})</p>
+            <p className="text-xs font-semibold text-neutral-300">{t("Drift items ({count})", { count: items.length })}</p>
             {items.map((it) => (
               <DriftItemRow key={it.id} item={it} />
             ))}
@@ -193,6 +202,7 @@ export function StateDriftPanel({ projectId }: Props) {
 // ---- Drift summary ----
 
 function DriftSummaryView({ summary }: { summary: DriftSummary }) {
+  const { t } = useT();
   const n = (k: keyof DriftSummary) => summary[k] ?? 0;
   const cells: { label: string; value: number; tone: BadgeTone }[] = [
     { label: "In sync", value: n("inSync"), tone: "green" },
@@ -205,23 +215,23 @@ function DriftSummaryView({ summary }: { summary: DriftSummary }) {
   ];
   return (
     <div className="space-y-2" data-testid="drift-summary">
-      <p className="text-xs font-semibold text-neutral-300">Drift summary</p>
+      <p className="text-xs font-semibold text-neutral-300">{t("Drift summary")}</p>
       <div className="flex flex-wrap gap-2">
         {cells.map((c) => (
           <span
             key={c.label}
             className="inline-flex items-center gap-1.5 rounded border border-neutral-800/80 bg-neutral-900/40 px-2.5 py-1 text-[11px] text-neutral-300"
           >
-            <span className="text-neutral-500">{c.label}</span>
+            <span className="text-neutral-500">{t(c.label)}</span>
             <Badge tone={c.value > 0 ? c.tone : "neutral"}>{c.value}</Badge>
           </span>
         ))}
       </div>
       <div className="flex flex-wrap gap-2 text-[11px]">
-        <span className="text-neutral-500">Severity:</span>
-        <Badge tone={n("critical") > 0 ? "red" : "neutral"}>critical {n("critical")}</Badge>
-        <Badge tone={n("warning") > 0 ? "yellow" : "neutral"}>warning {n("warning")}</Badge>
-        <Badge tone="neutral">info {n("info")}</Badge>
+        <span className="text-neutral-500">{t("Severity:")}</span>
+        <Badge tone={n("critical") > 0 ? "red" : "neutral"}>{t("critical {n}", { n: n("critical") })}</Badge>
+        <Badge tone={n("warning") > 0 ? "yellow" : "neutral"}>{t("warning {n}", { n: n("warning") })}</Badge>
+        <Badge tone="neutral">{t("info {n}", { n: n("info") })}</Badge>
       </div>
     </div>
   );
@@ -230,7 +240,9 @@ function DriftSummaryView({ summary }: { summary: DriftSummary }) {
 // ---- Drift item ----
 
 function DriftItemRow({ item }: { item: DriftItem }) {
-  const note = itemNote(item);
+  const { t } = useT();
+  const { note: staticNote, reason } = itemNote(item);
+  const note = staticNote ? t(staticNote) : reason || null;
   const dangerous = item.recommendedAction === "remove";
   return (
     <div
@@ -245,52 +257,54 @@ function DriftItemRow({ item }: { item: DriftItem }) {
         <span className="text-[11px] text-neutral-500">{item.resourceType}</span>
         <span className="font-mono text-xs text-neutral-200">{item.resourceKey}</span>
         <Badge tone={actionTone(item.recommendedAction)}>{item.recommendedAction}</Badge>
-        {dangerous && <Badge tone="red">dangerous</Badge>}
+        {dangerous && <Badge tone="red">{t("dangerous")}</Badge>}
         {item.hostId && (
-          <span className="text-[10px] text-neutral-600">host {item.hostId.slice(0, 8)}</span>
+          <span className="text-[10px] text-neutral-600">{t("host {id}", { id: item.hostId.slice(0, 8) })}</span>
         )}
         {item.cellId && (
-          <span className="text-[10px] text-neutral-600">cell {item.cellId.slice(0, 8)}</span>
+          <span className="text-[10px] text-neutral-600">{t("cell {id}", { id: item.cellId.slice(0, 8) })}</span>
         )}
       </div>
       {note && <p className="mt-1 text-[11px] text-neutral-400">{note}</p>}
       <div className="mt-1">
-        <JsonDetails label="diff" value={item.diff} testId="drift-item-diff" />
+        <JsonDetails label={t("diff")} value={item.diff} testId="drift-item-diff" />
       </div>
     </div>
   );
 }
 
 // itemNote returns the plain-language explanation for an item, framed as
-// diagnosis/recommendation — never as an action that happened.
-function itemNote(item: DriftItem): string | null {
+// diagnosis/recommendation — never as an action that happened. The `note`
+// field, when set, is a stable English key to translate at the call site; the
+// `reason` fallback is free-text from the API and is shown verbatim.
+function itemNote(item: DriftItem): { note: string | null; reason: string } {
   if (item.driftStatus === "host_unreachable") {
-    return "Observation cannot be trusted. Investigate host / agent / docker scan.";
+    return { note: "Observation cannot be trusted. Investigate host / agent / docker scan.", reason: "" };
   }
   if (item.recommendedAction === "remove") {
-    return "Dry-run only. Removal is not implemented.";
+    return { note: "Dry-run only. Removal is not implemented.", reason: "" };
   }
   const diff = item.diff ?? {};
   const reason = typeof diff.reason === "string" ? (diff.reason as string) : "";
   if (reason.toLowerCase().includes("scan")) {
-    return "Container scan failed or incomplete.";
+    return { note: "Container scan failed or incomplete.", reason: "" };
   }
   if (diff.lifecycle === "draining") {
-    return "Host is draining; drift is still diagnosed because liveness is online.";
+    return { note: "Host is draining; drift is still diagnosed because liveness is online.", reason: "" };
   }
   if (item.driftStatus === "missing") {
-    return "Desired resource has no matching container. Recommended action: plan create.";
+    return { note: "Desired resource has no matching container. Recommended action: plan create.", reason: "" };
   }
   if (item.driftStatus === "drifted" && item.recommendedAction === "restart") {
-    return "Observed container is not running. Recommended action: plan restart.";
+    return { note: "Observed container is not running. Recommended action: plan restart.", reason: "" };
   }
   if (item.driftStatus === "drifted" && item.recommendedAction === "stop") {
-    return "Observed container is running but desired stopped. Recommended action: plan stop.";
+    return { note: "Observed container is running but desired stopped. Recommended action: plan stop.", reason: "" };
   }
   if (item.driftStatus === "unmanaged") {
-    return "Synapse-managed container with no active desired state. Recommended action: investigate.";
+    return { note: "Synapse-managed container with no active desired state. Recommended action: investigate.", reason: "" };
   }
-  return reason || null;
+  return { note: null, reason: reason || "" };
 }
 
 // ---- Dry-run plan ----
@@ -302,6 +316,7 @@ function DryRunPlanView({
   dryRun: DryRunResponse;
   onDismiss: () => void;
 }) {
+  const { t } = useT();
   const plan = (dryRun.operationRun.plan ?? {}) as {
     mode?: string;
     applyAllowed?: boolean;
@@ -318,31 +333,31 @@ function DryRunPlanView({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-xs font-semibold text-violet-200">Dry-run plan</p>
-          <Badge tone="violet">mode: {plan.mode ?? "dry-run"}</Badge>
+          <p className="text-xs font-semibold text-violet-200">{t("Dry-run plan")}</p>
+          <Badge tone="violet">{t("mode: {mode}", { mode: plan.mode ?? "dry-run" })}</Badge>
           <Badge tone="green" data-testid="dry-run-apply-allowed">
-            applyAllowed: {String(plan.applyAllowed ?? false)}
+            {t("applyAllowed: {value}", { value: String(plan.applyAllowed ?? false) })}
           </Badge>
         </div>
         <Button variant="ghost" size="sm" onClick={onDismiss}>
-          Dismiss
+          {t("Dismiss")}
         </Button>
       </div>
 
       <div className="flex flex-wrap gap-2 text-[11px]">
-        <Badge tone="neutral">planned {s.planned ?? 0}</Badge>
-        <Badge tone="neutral">no-op {s.noOp ?? 0}</Badge>
-        <Badge tone="neutral">skipped {s.skipped ?? 0}</Badge>
-        <Badge tone={(s.investigate ?? 0) > 0 ? "yellow" : "neutral"}>investigate {s.investigate ?? 0}</Badge>
-        <Badge tone={(s.dangerous ?? 0) > 0 ? "red" : "neutral"}>dangerous {s.dangerous ?? 0}</Badge>
+        <Badge tone="neutral">{t("planned {n}", { n: s.planned ?? 0 })}</Badge>
+        <Badge tone="neutral">{t("no-op {n}", { n: s.noOp ?? 0 })}</Badge>
+        <Badge tone="neutral">{t("skipped {n}", { n: s.skipped ?? 0 })}</Badge>
+        <Badge tone={(s.investigate ?? 0) > 0 ? "yellow" : "neutral"}>{t("investigate {n}", { n: s.investigate ?? 0 })}</Badge>
+        <Badge tone={(s.dangerous ?? 0) > 0 ? "red" : "neutral"}>{t("dangerous {n}", { n: s.dangerous ?? 0 })}</Badge>
       </div>
 
       <p className="text-[11px] text-violet-200/80">
-        This plan is a recommendation. Nothing was sent to the agent. Apply is intentionally not available.
+        {t("This plan is a recommendation. Nothing was sent to the agent. Apply is intentionally not available.")}
       </p>
 
       {dryRun.steps.length === 0 ? (
-        <p className="text-[11px] text-neutral-500">No steps — nothing to reconcile.</p>
+        <p className="text-[11px] text-neutral-500">{t("No steps — nothing to reconcile.")}</p>
       ) : (
         <div className="space-y-1">
           {dryRun.steps.map((st, i) => (
@@ -355,10 +370,10 @@ function DryRunPlanView({
               <span className="text-neutral-600">#{i}</span>
               <Badge tone={actionTone(st.action)}>{st.action}</Badge>
               <Badge tone="neutral">{st.status}</Badge>
-              {st.action === "remove" && <Badge tone="red">dangerous</Badge>}
+              {st.action === "remove" && <Badge tone="red">{t("dangerous")}</Badge>}
               <span className="text-neutral-500">{st.resourceType}</span>
               <span className="font-mono text-neutral-300">{st.resourceKey}</span>
-              <Badge tone="neutral">willApply: {String(st.willApply)}</Badge>
+              <Badge tone="neutral">{t("willApply: {value}", { value: String(st.willApply) })}</Badge>
               {st.reason && <span className="text-neutral-500">— {st.reason}</span>}
             </div>
           ))}
@@ -367,7 +382,7 @@ function DryRunPlanView({
 
       {hasAction && (
         <p className="text-[11px] text-neutral-500">
-          These are planned actions only. Nothing was sent to the agent.
+          {t("These are planned actions only. Nothing was sent to the agent.")}
         </p>
       )}
     </div>

@@ -6,6 +6,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { IconTerminal } from "@/components/ui/icon";
 import { ApiError, api, type CliCredentials } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useT } from "@/lib/i18n";
 
 type Props = {
   deploymentName: string;
@@ -22,6 +23,7 @@ type Format = "env" | "shell";
 // .env.local is the path of least resistance for `npx convex dev`. We
 // also expose the `export …` shell form for one-shot terminal sessions.
 export function CliCredentialsPanel({ deploymentName }: Props) {
+  const { t } = useT();
   const [creds, setCreds] = useState<CliCredentials | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function CliCredentialsPanel({ deploymentName }: Props) {
       setError(
         err instanceof ApiError
           ? err.message
-          : "Could not load CLI credentials",
+          : t("Could not load CLI credentials"),
       );
     } finally {
       setLoading(false);
@@ -64,7 +66,7 @@ export function CliCredentialsPanel({ deploymentName }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } else {
-      setError("Could not copy — select the snippet manually and Ctrl+C");
+      setError(t("Could not copy — select the snippet manually and Ctrl+C"));
     }
   };
 
@@ -76,10 +78,12 @@ export function CliCredentialsPanel({ deploymentName }: Props) {
           size="sm"
           onClick={reveal}
           disabled={loading}
-          aria-label={`Show CLI credentials for ${deploymentName}`}
+          aria-label={t("Show CLI credentials for {deploymentName}", {
+            deploymentName,
+          })}
         >
           <IconTerminal className="mr-1.5 inline-block opacity-70" />
-          {loading ? "Loading…" : "Show CLI credentials"}
+          {loading ? t("Loading…") : t("Show CLI credentials")}
         </Button>
         {error && <span className="text-red-400">{error}</span>}
       </div>
@@ -92,16 +96,16 @@ export function CliCredentialsPanel({ deploymentName }: Props) {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-semibold text-neutral-200">
-              Use with Convex CLI
+              {t("Use with Convex CLI")}
             </p>
             <p className="text-xs text-neutral-500">
               {format === "env" ? (
                 <>
-                  Paste into{" "}
+                  {t("Paste into")}{" "}
                   <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-200">
                     .env.local
                   </code>
-                  , then run{" "}
+                  {t(", then run")}{" "}
                   <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-200">
                     npx convex dev
                   </code>
@@ -109,7 +113,7 @@ export function CliCredentialsPanel({ deploymentName }: Props) {
                 </>
               ) : (
                 <>
-                  Paste into a shell, then run{" "}
+                  {t("Paste into a shell, then run")}{" "}
                   <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-200">
                     npx convex dev
                   </code>
@@ -123,24 +127,24 @@ export function CliCredentialsPanel({ deploymentName }: Props) {
               variant="ghost"
               size="sm"
               onClick={copy}
-              aria-label="Copy CLI credentials snippet"
+              aria-label={t("Copy CLI credentials snippet")}
             >
-              {copied ? "Copied!" : "Copy"}
+              {copied ? t("Copied!") : t("Copy")}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={hide}
-              aria-label="Hide CLI credentials"
+              aria-label={t("Hide CLI credentials")}
             >
-              Hide
+              {t("Hide")}
             </Button>
           </div>
         </div>
         <div
           className="inline-flex rounded-md border border-neutral-800/80 bg-neutral-950 p-0.5 text-[11px]"
           role="tablist"
-          aria-label="Snippet format"
+          aria-label={t("Snippet format")}
         >
           <button
             type="button"
