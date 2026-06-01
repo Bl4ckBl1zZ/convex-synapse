@@ -335,7 +335,10 @@ func NewRouter(d RouterDeps) http.Handler {
 		Crypto:            d.DNSEnvelope,
 		CloudflareFactory: d.CloudflareFactory,
 	}
-	teamsH := &TeamsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH, Email: d.Email, PublicURL: d.PublicURL}
+	// Email settings (v1.22+): shares the instance SecretBox (DNSEnvelope)
+	// to encrypt the Resend key, and d.Email as the .env fallback.
+	emailSettingsH := &EmailSettingsHandler{DB: d.DB, Crypto: d.DNSEnvelope, EnvFallback: d.Email}
+	teamsH := &TeamsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH, Email: d.Email, Crypto: d.DNSEnvelope, PublicURL: d.PublicURL}
 	projectsH := &ProjectsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH, DNSCredentials: dnsCredsH}
 	// v1.9.6: topology endpoint shares the projects handler's auth path
 	// (loadProjectForRequest). The geo cache is constructed once at boot
@@ -563,6 +566,7 @@ func NewRouter(d RouterDeps) http.Handler {
 			// handler instance is also mounted on ProjectsHandler
 			// for project-scoped credentials (v1.6.4+).
 			adminH.DNSCredentials = dnsCredsH
+			adminH.EmailSettings = emailSettingsH
 			r.Mount("/admin", adminH.Routes())
 			// Personal access tokens — flat verb-suffixed endpoints under /v1.
 			// Registered directly (not via Mount) because chi's Mount("/", ...)

@@ -130,6 +130,26 @@ Returns the same shape as `/v1/admin/host_domain/status/{jobID}`:
 row is filtered to `kind='configure_headscale'`, so a host-domain
 job id 404s here.
 
+### `GET /v1/admin/email_settings` 🔧 (v1.22+, instance admin)
+
+Returns the instance transactional-email (Resend) config:
+`{configured, source, provider, fromAddress, updatedAt}`. `source` is `db`
+(set via this endpoint, encrypted at rest), `env` (host `.env` fallback —
+`SYNAPSE_RESEND_API_KEY` + `SYNAPSE_EMAIL_FROM`), or `none`. The plaintext
+API key is **never** returned.
+
+### `POST /v1/admin/email_settings` 🔧 (v1.22+, instance admin)
+
+Body `{apiKey, fromAddress}`. Encrypts + stores the Resend key (singleton —
+one instance-wide config) and returns the same shape as GET. Requires
+`SYNAPSE_STORAGE_KEY` (503 `crypto_not_configured` otherwise — we won't
+persist the key in plaintext). The DB config wins over the `.env` fallback
+and takes effect on the next invite (no restart).
+
+### `DELETE /v1/admin/email_settings` 🔧 (v1.22+, instance admin)
+
+Clears the stored key; email reverts to the `.env` fallback (or `none`).
+
 ## Teams
 
 ### `POST /v1/teams/create_team` ✅
@@ -228,8 +248,10 @@ Body: `{email, role}`. Returns `{inviteId, inviteToken, email, role, emailed}`.
 The token is opaque; share it with the invitee out-of-band — or, when email
 is configured, let Synapse send it for you.
 
-**Email (v1.22+):** when `SYNAPSE_RESEND_API_KEY` **and** `SYNAPSE_EMAIL_FROM`
-are set (and `SYNAPSE_PUBLIC_URL` is set, to build the link), the invitee is
+**Email (v1.22+):** when Resend is configured — via **Admin → Email**
+(`/v1/admin/email_settings`, encrypted in the DB) or the `.env` fallback
+(`SYNAPSE_RESEND_API_KEY` + `SYNAPSE_EMAIL_FROM`) — and `SYNAPSE_PUBLIC_URL`
+is set (to build the link), the invitee is
 emailed a clickable accept link (`<PublicURL>/accept-invite?token=...`) via
 [Resend](https://resend.com). Sending is **best-effort**: the invite always
 succeeds and `inviteToken` is always returned, so a missing/failed email

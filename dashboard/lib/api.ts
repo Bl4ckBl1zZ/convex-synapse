@@ -474,6 +474,20 @@ export type HeadscaleConfigureResponse = {
   dnsAuto?: HostDomainDNSAutoResult;
 };
 
+// GET/POST/DELETE /v1/admin/email_settings (v1.22+). Instance transactional
+// email (Resend). The plaintext API key is never returned — only whether a
+// usable sender is configured and where it came from:
+//   db   → key set via this dashboard (encrypted at rest)
+//   env  → SYNAPSE_RESEND_API_KEY + SYNAPSE_EMAIL_FROM on the host
+//   none → not configured (invites stay link-only)
+export type EmailSettings = {
+  configured: boolean;
+  source: "db" | "env" | "none";
+  provider: string;
+  fromAddress: string;
+  updatedAt: string | null;
+};
+
 // Returned once at create time. `adminKey` is the freshly-minted value;
 // `envSnippet` and `exportSnippet` are paste-ready for `.env.local` and
 // shell respectively. The dashboard MUST surface this immediately and
@@ -2427,6 +2441,24 @@ export const api = {
           `/v1/admin/dns_credentials/${encodeURIComponent(id)}`,
           { method: "DELETE" },
         );
+      },
+    },
+    // Transactional email (Resend) settings (v1.22+). The key is write-only
+    // — get() never returns it, only whether/where email is configured.
+    emailSettings: {
+      get(): Promise<EmailSettings> {
+        return request<EmailSettings>("/v1/admin/email_settings");
+      },
+      set(apiKey: string, fromAddress: string): Promise<EmailSettings> {
+        return request<EmailSettings>("/v1/admin/email_settings", {
+          method: "POST",
+          body: { apiKey, fromAddress },
+        });
+      },
+      clear(): Promise<EmailSettings> {
+        return request<EmailSettings>("/v1/admin/email_settings", {
+          method: "DELETE",
+        });
       },
     },
   },

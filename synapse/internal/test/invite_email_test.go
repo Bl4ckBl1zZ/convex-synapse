@@ -139,3 +139,30 @@ func TestInvites_EmailFailureDoesNotBlockInvite(t *testing.T) {
 		t.Error("invite must still be created when the email send fails")
 	}
 }
+
+// resolveEmailSender: crypto wired but NO email_settings row → falls back
+// to the .env Sender. Proves the v1.22 DB path degrades to the v1.22.0
+// .env behaviour when the dashboard hasn't set a key.
+func TestInvites_FallbackToEnvWhenNoDBRow(t *testing.T) {
+	sender := &recordingSender{enabled: true}
+	h := SetupWithOpts(t, SetupOpts{
+		PublicURL:   "https://panel.example.com",
+		Email:       sender,
+		DNSEnvelope: freshCryptoBox(t), // crypto present, but no email_settings row
+	})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Fallback Co")
+
+	var got inviteEmailResp
+	h.DoJSON(http.MethodPost, "/v1/teams/"+team.Slug+"/invite_team_member",
+		owner.AccessToken,
+		map[string]string{"email": "f@example.test", "role": "member"},
+		http.StatusOK, &got)
+
+	if !got.Emailed {
+		t.Fatal("emailed=false; with crypto set but no DB row, resolveEmailSender must use the .env fallback")
+	}
+	if n := len(sender.sent()); n != 1 {
+		t.Fatalf("fallback sender got %d sends, want 1", n)
+	}
+}

@@ -131,6 +131,12 @@ const (
 	ActionAddProjectDNSCredential    = "project_dns_credential.added"
 	ActionRemoveProjectDNSCredential = "project_dns_credential.removed"
 
+	// Instance email settings (v1.22+, migration 000028). The Resend
+	// API key is set/cleared from the dashboard's admin area; metadata
+	// carries {provider, fromAddress} — never the key itself.
+	ActionUpdateEmailSettings = "email_settings.updated"
+	ActionClearEmailSettings  = "email_settings.cleared"
+
 	// Instance-level upgrade flow (v1.1.0+). Synapse-original — Cloud has
 	// no per-customer upgrade because Cloud is the platform.
 	ActionUpgradeStarted = "upgradeStarted"
@@ -205,6 +211,8 @@ const (
 	TargetSynapse = "synapse"
 	// TargetDNSCredential is a dns_credentials row.
 	TargetDNSCredential = "dnsCredential"
+	// TargetEmailSettings is the instance email_settings singleton row.
+	TargetEmailSettings = "emailSettings"
 	// Cell Control Plane (feat/cell-control-plane).
 	TargetHost         = "host"
 	TargetCell         = "cell"

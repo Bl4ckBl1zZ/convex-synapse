@@ -69,6 +69,10 @@ type AdminHandler struct {
 	// under /v1/admin. Wired by router.go so the credential handler
 	// inherits requireInstanceAdmin without duplicating the gate.
 	DNSCredentials *DNSCredentialsHandler
+	// EmailSettings, when non-nil, mounts /email_settings sub-routes under
+	// /v1/admin (v1.22+). Same requireInstanceAdmin gate; nil = router
+	// wired without email support (the dashboard probes via 404).
+	EmailSettings *EmailSettingsHandler
 	// HeadscaleEnabled mirrors RouterDeps: true when Synapse boot wired
 	// a non-nil headscale.Client AND a non-empty
 	// SYNAPSE_HEADSCALE_SERVER_URL. The headscale admin GET handler
@@ -151,6 +155,11 @@ func (h *AdminHandler) Routes() chi.Router {
 	// support; the dashboard probes feature availability via 404.
 	if h.DNSCredentials != nil {
 		r.Mount("/dns_credentials", h.DNSCredentials.Routes())
+	}
+	// Email settings (v1.22+, migration 000028). Same gate + nil-probe
+	// pattern as dns_credentials above.
+	if h.EmailSettings != nil {
+		r.Mount("/email_settings", h.EmailSettings.Routes())
 	}
 	return r
 }

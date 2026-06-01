@@ -72,6 +72,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       label: t("Remote Hosts"),
       testid: "admin-nav-remote-hosts",
     },
+    {
+      href: "/admin/email",
+      label: t("Email"),
+      testid: "admin-nav-email",
+    },
   ];
 
   return (

@@ -32,12 +32,14 @@ type TeamsHandler struct {
 	Deployments *DeploymentsHandler
 	Tokens      *AccessTokensHandler
 
-	// Email sends the invite email when configured (best-effort). PublicURL
-	// is the dashboard origin the accept link is built against
-	// ("<PublicURL>/accept-invite?token=..."). Both come from RouterDeps;
-	// when Email is nil or disabled, or PublicURL is empty, inviteMember
-	// silently skips the send and the invite stays link-only.
+	// Email is the .env-configured fallback Sender; Crypto decrypts the
+	// dashboard-set Resend key in email_settings (resolveEmailSender prefers
+	// the DB row, falling back to Email). PublicURL is the dashboard origin
+	// the accept link is built against ("<PublicURL>/accept-invite?token=").
+	// When no sender resolves, or PublicURL is empty, inviteMember silently
+	// skips the send and the invite stays link-only.
 	Email     email.Sender
+	Crypto    SecretEnvelope
 	PublicURL string
 }
 
@@ -1271,11 +1273,14 @@ func (h *TeamsHandler) inviteMember(w http.ResponseWriter, r *http.Request) {
 	})
 	// Best-effort invite email. Never fails the invite: the token is
 	// returned regardless, so the link works even when email is disabled or
-	// the provider errors. Needs PublicURL to build a clickable accept link.
+	// the provider errors. Resolves the active sender (dashboard-set Resend
+	// key in email_settings, else the .env fallback); needs PublicURL to
+	// build a clickable accept link.
 	emailed := false
-	if h.Email != nil && h.Email.Enabled() && h.PublicURL != "" {
+	sender := resolveEmailSender(r.Context(), h.DB, h.Crypto, h.Email)
+	if sender != nil && sender.Enabled() && h.PublicURL != "" {
 		acceptURL := h.PublicURL + "/accept-invite?token=" + url.QueryEscape(plain)
-		if err := h.Email.Send(r.Context(), buildInviteEmail(req.Email, t.Name, req.Role, acceptURL)); err != nil {
+		if err := sender.Send(r.Context(), buildInviteEmail(req.Email, t.Name, req.Role, acceptURL)); err != nil {
 			logErr("send invite email", err)
 		} else {
 			emailed = true
