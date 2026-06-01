@@ -139,6 +139,15 @@ type RouterDeps struct {
 	// Tests can inject canned NS responses.
 	DNSProviderLookup func(ctx context.Context, domain string) (string, []string, error)
 
+	// DomainVerifier is the background DNS verifier (constructed in main).
+	// When non-nil AND a Docker client is wired, NewRouter sets its
+	// OnActivated hook to rebake a deployment's container the moment one of
+	// its custom domains auto-verifies — the same refresh POST /verify does
+	// synchronously. Passed here (rather than wired in main) so the rebake
+	// reuses the fully-built DeploymentsHandler instead of duplicating its
+	// construction. nil in tests that don't exercise the auto-verify rebake.
+	DomainVerifier *synapsedns.Verifier
+
 	// BackendProbe powers GET /v1/deployments/{name}/backend_version.
 	// Production leaves it nil and the handler defaults to the HTTP
 	// probe against `convex-<name>:3210/version`. Tests inject a
@@ -297,6 +306,15 @@ func NewRouter(d RouterDeps) http.Handler {
 		Resolver:          d.DomainsResolver,
 	}
 	deploymentsH.Domains = domainsH
+	// Wire the DNS verifier's auto-verify rebake (v1.12.1). Without this a
+	// role='site' custom domain that lands via the background loop leaves the
+	// container's CONVEX_SITE_ORIGIN stale (cloud URL) — breaking HTTP-actions
+	// origins and the site URL `npx convex` reads back. Gated on a Docker
+	// client so the hook never fires in metadata-only / Docker-less installs.
+	// See dns.Verifier.OnActivated + DeploymentsHandler.rebakeAfterDomainActivation.
+	if d.DomainVerifier != nil && d.Docker != nil {
+		d.DomainVerifier.OnActivated = deploymentsH.rebakeAfterDomainActivation
+	}
 	// teamsH + projectsH carry a *DeploymentsHandler reference so their
 	// listDeployments handlers can call publicDeploymentURL — same
 	// rewrite as /auth and /cli_credentials so dashboards and CLIs see

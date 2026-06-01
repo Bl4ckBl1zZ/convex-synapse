@@ -109,6 +109,16 @@ End to end:
 - **Provisioner** (`internal/docker/provisioner.go`): bakes
   `CONVEX_SITE_ORIGIN = spec.SiteURL` (so Better Auth derives the right
   cookie/callback origin) and exposes `3211/tcp`.
+- **Domain activation → container rebake**: whenever a `role='site'` domain
+  becomes `active`, the container is recreated so `CONVEX_SITE_ORIGIN` picks
+  up the new host. Both paths do this now: the synchronous `POST /verify`
+  endpoint (`rebuildCORSAndRestart`) **and** the background DNS verifier
+  (`internal/dns/verifier.go` `OnActivated` → `rebakeAfterDomainActivation`,
+  v1.12.1). Before v1.12.1 the background loop flipped the row to `active`
+  but never rebaked, so an auto-verified site domain left
+  `CONVEX_SITE_ORIGIN` frozen at the cloud URL — and the manual `/verify`
+  rebake only fires on the pending→active transition, so there was no way to
+  fix an already-active row short of recreating the deployment.
 - **Proxy** (`internal/proxy/proxy.go`): `matchSiteSubdomain` + a
   `role='site'` check flag the request as a site request; `ResolveAllSite`
   re-ports the cloud address `convex-<name>:3210` → `convex-<name>:3211`.
@@ -119,9 +129,18 @@ End to end:
   multi-label reject, since `<name>.site` contains a dot).
 - **Caddy** (`installer/templates/caddy.wildcard`): a sibling
   `*.site.<base>` block forwards to Synapse, which routes by Host header.
-- **CLI** (`cli/lib/env-file.js`): writes the distinct site URL into
-  `NEXT_PUBLIC_CONVEX_SITE_URL`. `CONVEX_SELF_HOSTED_URL` and
+- **CLI** (`cli/lib/env-file.js`): `synapse select` writes the distinct
+  site URL (from `GET .../cli_credentials` → `siteUrl`) into
+  `NEXT_PUBLIC_CONVEX_SITE_URL`; `CONVEX_SELF_HOSTED_URL` and
   `NEXT_PUBLIC_CONVEX_URL` stay the cloud URL (deploy/admin/client hit 3210).
+  Because the upstream `npx convex dev|deploy` re-derives the site URL from
+  the backend container's `GET /get_canonical_urls` on every run and
+  overwrites `.env.local`, the wrapper (`runConvexCommand`) re-asserts the
+  authoritative value via `reassertPublicConvexUrls` after the run, and
+  `guardPublicConvexUrls` keeps it correct for the whole `dev` session
+  (v1.12.1). `cli_credentials.siteUrl` is the source of truth — it's
+  recomputed from `deployment_domains` per request, so it can't go stale the
+  way a container's baked origin can.
 - **Dashboard**: the deployment card shows the real "HTTP Actions URL".
 
 ## URL matrix
@@ -138,9 +157,16 @@ The wildcard path needs a **second** wildcard DNS record:
 The custom-domain path needs an A record for the chosen site host. Caddy
 issues TLS on demand once `tls_ask` approves the host.
 
-**Existing deployments** provisioned before this change froze
+**Existing deployments** provisioned before the site-origin release froze
 `CONVEX_SITE_ORIGIN` at the cloud URL — they must be recreated/restarted
-once to bake the new value.
+once to bake the new value. The same applies to any deployment whose
+`role='site'` domain went active via the **background** DNS verifier on a
+pre-v1.12.1 build (it flipped the row but skipped the rebake): recreate the
+deployment once, or delete + re-add the site domain, to refresh the
+container. v1.12.1's CLI re-assert keeps `.env.local` correct regardless, so
+the frontend gets the right `NEXT_PUBLIC_CONVEX_SITE_URL` even before the
+container is rebaked — but Better Auth's in-container origin still needs the
+rebake.
 
 ## Host-port mode (the documented gap)
 

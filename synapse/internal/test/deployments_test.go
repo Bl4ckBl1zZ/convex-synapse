@@ -369,6 +369,66 @@ func TestDeployments_CLICredentialsIgnoresDashboardRoleDomain(t *testing.T) {
 	}
 }
 
+// cli_credentials.siteUrl is what `synapse select` writes to
+// NEXT_PUBLIC_CONVEX_SITE_URL — the distinct HTTP-actions host. A
+// role='site' custom domain must surface here as https://<domain>, NOT the
+// cloud URL. This is the value the upstream `npx convex` would otherwise
+// clobber from a stale container; pinning it guards the select path + the
+// CLI's reassert source of truth. See docs/CONVEX_SITE_ORIGIN.md.
+func TestDeployments_CLICredentialsReturnsSiteDomain(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		PublicURL:    "http://synapse.example.com:8080",
+		ProxyEnabled: true,
+	})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "CLISite Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "P")
+	depID := h.SeedDeployment(proj.ID, "cli-mpi-3000", "dev", "running", true, owner.ID, 3313, "key-st")
+
+	// Mirror the user's setup: an api domain for the cloud listener and a
+	// distinct site domain for HTTP actions (port 3211).
+	insertDomain(t, h, depID, "mpi.amagejumpy.com", "api", "active")
+	insertDomain(t, h, depID, "site.mpi.amagejumpy.com", "site", "active")
+
+	var got cliCredentialsResp
+	h.DoJSON(http.MethodGet, "/v1/deployments/cli-mpi-3000/cli_credentials",
+		owner.AccessToken, nil, http.StatusOK, &got)
+
+	if got.ConvexURL != "https://mpi.amagejumpy.com" {
+		t.Errorf("convexUrl: got %q want https://mpi.amagejumpy.com", got.ConvexURL)
+	}
+	// The whole point: siteUrl must be the site host, never the cloud URL.
+	if got.SiteURL != "https://site.mpi.amagejumpy.com" {
+		t.Errorf("siteUrl: got %q want https://site.mpi.amagejumpy.com (the HTTP-actions host)", got.SiteURL)
+	}
+	if got.SiteURL == got.ConvexURL {
+		t.Errorf("siteUrl must differ from convexUrl (cloud vs site); both = %q", got.SiteURL)
+	}
+}
+
+// Host-port mode (no base domain, no role='site' domain): cli_credentials
+// omits siteUrl, and the CLI falls back to the cloud URL. Pins the
+// "no distinct site host" branch so a future change can't start emitting a
+// bogus site URL that the proxy would 501 on.
+func TestDeployments_CLICredentialsOmitsSiteWithoutSiteDomain(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		PublicURL:    "http://synapse.example.com:8080",
+		ProxyEnabled: true,
+	})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "CLINoSite Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "P")
+	h.SeedDeployment(proj.ID, "cli-hp-3001", "dev", "running", true, owner.ID, 3314, "key-hp")
+
+	var got cliCredentialsResp
+	h.DoJSON(http.MethodGet, "/v1/deployments/cli-hp-3001/cli_credentials",
+		owner.AccessToken, nil, http.StatusOK, &got)
+
+	if got.SiteURL != "" {
+		t.Errorf("siteUrl: got %q want empty (host-port mode has no external site host)", got.SiteURL)
+	}
+}
+
 // /auth feeds the embedded Convex Dashboard via postMessage. The dashboard
 // upstream uses `new URL("/api/...", deploymentUrl)` — host-anchored, same
 // trap as the CLI. With ProxyEnabled on, the legacy publicDeploymentURL

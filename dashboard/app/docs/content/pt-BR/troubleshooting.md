@@ -258,9 +258,16 @@ synapse select
 # 2. O modo base-domain precisa de um SEGUNDO registro A wildcard:
 #    *.site.<BASE_DOMAIN> -> <ip-do-vps>   (ao lado de *.<BASE_DOMAIN>)
 
-# 3. Deployments criados ANTES do release de site-origin congelaram o
-#    CONVEX_SITE_ORIGIN na URL cloud — reinicie uma vez pra reassar:
-#    dashboard → linha do deployment → Restart, ou recrie.
+# 3. Se o CONVEX_SITE_ORIGIN estiver desatualizado dentro do container
+#    (deployment criado antes do release de site-origin, OU um domínio
+#    role='site' que auto-verificou num build pré-v1.12.1), RECRIE — um
+#    Restart só dá bounce no mesmo container e mantém o env antigo, então
+#    NÃO reassa. Recrie via: deletar + re-adicionar o domínio site (a
+#    ativação reassa), ou rotacionar a deploy key (também recria). A CLI
+#    v1.12.1 re-afirma o NEXT_PUBLIC_CONVEX_SITE_URL depois de cada
+#    `synapse dev|deploy`, então o .env.local fica correto de qualquer
+#    forma — mas o origin do Better Auth dentro do container ainda precisa
+#    do rebake.
 ```
 
 Contexto + o modelo completo (duas portas 3210/3211):

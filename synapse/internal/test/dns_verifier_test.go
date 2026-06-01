@@ -481,3 +481,72 @@ func TestDNSVerifier_AutoConfiguredAfterStale_DeadlineResets(t *testing.T) {
 		t.Errorf("regression: row flipped on deadline despite recent updated_at (lastErr=%q)", lastErr)
 	}
 }
+
+// 9) v1.12.1: a row flipping pending→active fires OnActivated exactly once
+// with the deployment's id+name so the server can rebake the container's
+// CONVEX_*_ORIGIN. role='site' is the case that motivated the hook — without
+// the rebake the container keeps the cloud URL as CONVEX_SITE_ORIGIN and the
+// CLI/Better-Auth read the wrong site host. See dns.Verifier.OnActivated.
+func TestDNSVerifier_FlipFiresOnActivatedHook(t *testing.T) {
+	h := Setup(t)
+	f := newDomainsFixture(t, h, "verifier-hook-1212", 3611)
+	var id string
+	if err := h.DB.QueryRow(h.rootCtx, `
+		INSERT INTO deployment_domains (deployment_id, domain, role, status, auto_configured)
+		VALUES ($1, $2, 'site', 'pending', true)
+		RETURNING id
+	`, f.deploymentID, "site.hook.example.com").Scan(&id); err != nil {
+		t.Fatalf("seed site domain: %v", err)
+	}
+
+	type activation struct{ depID, name string }
+	var got []activation
+	v := &synapsedns.Verifier{
+		DB: h.DB,
+		Resolver: &stubLookupResolver{fn: func(string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("203.0.113.20")}, nil
+		}},
+		ExpectedIP: "203.0.113.20",
+		OnActivated: func(depID, name string) {
+			got = append(got, activation{depID, name})
+		},
+	}
+	v.Tick(context.Background())
+
+	if status, _, _ := readDomainStatus(t, h, id); status != "active" {
+		t.Fatalf("status: got %q want active", status)
+	}
+	if len(got) != 1 {
+		t.Fatalf("OnActivated calls: got %d want exactly 1", len(got))
+	}
+	if got[0].depID != f.deploymentID || got[0].name != f.deployment {
+		t.Errorf("OnActivated args: got (%q,%q) want (%q,%q)",
+			got[0].depID, got[0].name, f.deploymentID, f.deployment)
+	}
+}
+
+// 10) v1.12.1: the hook must NOT fire when nothing flips (DNS mismatch).
+// Otherwise we'd recreate a container for a domain that isn't live yet.
+func TestDNSVerifier_NoFlipNoHook(t *testing.T) {
+	h := Setup(t)
+	f := newDomainsFixture(t, h, "verifier-nohook-1213", 3612)
+	id := seedAutoConfiguredDomain(t, h, f.deploymentID, "nohook.example.com")
+
+	fired := false
+	v := &synapsedns.Verifier{
+		DB: h.DB,
+		Resolver: &stubLookupResolver{fn: func(string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("198.51.100.7")}, nil
+		}},
+		ExpectedIP:  "203.0.113.30", // resolver returns a DIFFERENT ip → no flip
+		OnActivated: func(string, string) { fired = true },
+	}
+	v.Tick(context.Background())
+
+	if status, _, _ := readDomainStatus(t, h, id); status != "pending" {
+		t.Fatalf("status: got %q want pending (mismatch must not flip)", status)
+	}
+	if fired {
+		t.Error("OnActivated fired on a non-flip — would rebake for a domain that isn't live")
+	}
+}

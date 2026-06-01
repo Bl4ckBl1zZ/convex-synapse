@@ -309,6 +309,16 @@ func run() error {
 		}
 	}
 
+	// Construct the DNS verifier here (it's started further below) so the
+	// router can wire its OnActivated hook to the deployments handler — that
+	// rebakes a deployment's container the instant a custom domain auto-
+	// verifies, keeping CONVEX_SITE_ORIGIN in sync. See dns.Verifier.OnActivated.
+	domainVerifier := &synapsedns.Verifier{
+		DB:         pool,
+		Logger:     logger,
+		ExpectedIP: cfg.PublicIP,
+	}
+
 	handler := api.NewRouter(api.RouterDeps{
 		Logger:                logger,
 		DB:                    pool,
@@ -355,6 +365,7 @@ func run() error {
 		HeadscaleDomain:    cfg.HeadscaleDomain,
 		HeadscaleAPIKey:    cfg.HeadscaleAPIKey,
 		HostDomain:         cfg.HostDomain,
+		DomainVerifier:     domainVerifier,
 	})
 
 	// Provisioning worker — dequeues 'provision' jobs inserted by the
@@ -448,16 +459,12 @@ func run() error {
 	// DNS verifier — polls deployment_domains rows that were just
 	// auto-configured (Cloudflare A record minted, status='pending')
 	// and flips them to 'active' once the record propagates globally.
-	// No-op when SYNAPSE_PUBLIC_IP is empty: the loop logs once and
-	// exits because there's no anchor IP to compare resolved A records
-	// against. Multi-node-safe via LockDNSVerifier advisory lock.
+	// Constructed above (so NewRouter could wire its OnActivated rebake);
+	// started here. No-op when SYNAPSE_PUBLIC_IP is empty: the loop logs
+	// once and exits because there's no anchor IP to compare resolved A
+	// records against. Multi-node-safe via LockDNSVerifier advisory lock.
 	go func() {
-		v := &synapsedns.Verifier{
-			DB:         pool,
-			Logger:     logger,
-			ExpectedIP: cfg.PublicIP,
-		}
-		_ = v.Start(rootCtx)
+		_ = domainVerifier.Start(rootCtx)
 	}()
 
 	// Top-level routing decision tree:

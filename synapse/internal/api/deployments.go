@@ -341,6 +341,23 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 	return true
 }
 
+// rebakeAfterDomainActivation refreshes a deployment's container after the
+// background DNS verifier auto-promotes one of its custom domains to active,
+// mirroring the synchronous POST /verify rebake. The DNS sweep must not block
+// on a ~15s (or, for HA, N×~15s) container recreate, so the work runs in a
+// detached goroutine with its own bounded context — never the verifier's.
+// Best-effort + idempotent: rebuildCORSAndRestart skips adopted/non-running
+// deployments and logs its own outcome. Wired via dns.Verifier.OnActivated in
+// NewRouter; that field + docs/CONVEX_SITE_ORIGIN.md explain why this is
+// load-bearing for role='site' domains (stale CONVEX_SITE_ORIGIN otherwise).
+func (h *DeploymentsHandler) rebakeAfterDomainActivation(deploymentID, deploymentName string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), provisionTimeout)
+		defer cancel()
+		h.rebuildCORSAndRestart(ctx, deploymentID, deploymentName, slog.Default())
+	}()
+}
+
 func loadProjectEnvVars(ctx context.Context, db *pgxpool.Pool, projectID, deploymentType string) (map[string]string, error) {
 	rows, err := db.Query(ctx, `
 		SELECT name, value

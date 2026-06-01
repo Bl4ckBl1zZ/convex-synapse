@@ -17,13 +17,17 @@
 //     MaxAge (5min) → flip to 'failed' with a "didn't propagate" hint.
 //     The operator can re-verify manually via POST /verify any time.
 //
-// The verifier is intentionally narrow: NO Cloudflare calls, NO
-// container restart, NO CORS rebuild. It's a DNS-only loop. The
-// operator's manual "Verify" button still triggers the existing
-// CORS-rebuild path; if a verified-by-loop row needs a CORS refresh
-// (because the deployment is running and the new origin needs to
-// reach it) the operator clicks Verify once. We keep the surface
-// area small so this loop can't accidentally restart a deployment.
+// The verifier makes NO Cloudflare calls and runs no DNS-provider logic —
+// it's a DNS-resolution loop. It does NOT rebake containers itself, but
+// when a row flips pending→active it fires the optional OnActivated hook
+// (see the struct field) so a higher layer can refresh the deployment's
+// CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN — the same rebake the
+// synchronous POST /verify endpoint does. That hook is REQUIRED for
+// correctness on role='site' domains: without it an auto-verified site
+// domain leaves the container's CONVEX_SITE_ORIGIN stale, and (unlike the
+// manual path) there's no operator action that can fix an already-active
+// row. The rebake runs in the background, so the sweep itself stays fast
+// and never holds the advisory lock across a container recreate.
 package dns
 
 import (
@@ -84,6 +88,30 @@ type Verifier struct {
 	// Clock is overridable in tests so MaxAge can fire without a
 	// real-time wait. nil → real time.Now().
 	Clock Clock
+
+	// OnActivated, when set, is invoked once per row that this loop flips
+	// from 'pending' to 'active' (after the flip commits and the audit
+	// event is written). The server wires it to the deployments handler's
+	// container rebake so a freshly auto-verified custom domain refreshes
+	// CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN in the running container —
+	// the SAME refresh the synchronous POST /verify endpoint performs.
+	//
+	// Why this matters (and why the loop is no longer "restart-free"): a
+	// role='site' domain that lands via this loop would otherwise leave the
+	// container's CONVEX_SITE_ORIGIN frozen at provision-time (the cloud
+	// URL), which (a) breaks Better Auth's cookie/callback origin and the
+	// site-proxy host inside the deployment, and (b) makes `npx convex`'s
+	// GET /get_canonical_urls hand the cloud URL back to the CLI, which
+	// then writes the wrong NEXT_PUBLIC_CONVEX_SITE_URL. The manual /verify
+	// escape hatch can't fix an already-active row (its rebake only fires
+	// on the pending→active transition), so this loop must own the rebake.
+	// See docs/CONVEX_SITE_ORIGIN.md.
+	//
+	// Best-effort and non-blocking by contract — the wiring runs the rebake
+	// in the background so a ~15s container recreate never stalls the DNS
+	// sweep (or holds the advisory lock). nil disables it (single-purpose
+	// DNS loop, e.g. in tests that only assert status flips).
+	OnActivated func(deploymentID, deploymentName string)
 }
 
 // pendingRow is the slice of deployment_domains a single tick acts
@@ -377,6 +405,14 @@ func (v *Verifier) flipToActive(ctx context.Context, row pendingRow) {
 		"domain", row.domain,
 		"deployment_id", row.deploymentID,
 		"deployment_name", row.deploymentName)
+
+	// Rebake the deployment's container so the just-activated domain takes
+	// effect in CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN. Fired only on a
+	// real flip (RowsAffected > 0 above), so exactly one node triggers it.
+	// The hook is non-blocking by contract (see the struct doc).
+	if v.OnActivated != nil {
+		v.OnActivated(row.deploymentID, row.deploymentName)
+	}
 }
 
 // markFailed flips an aged-out row to 'failed' with a "didn't
