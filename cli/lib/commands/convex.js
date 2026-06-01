@@ -8,6 +8,7 @@
 // prompt.
 
 const { runConvex } = require("../convex");
+const { guardPublicConvexUrls, reassertPublicConvexUrls } = require("../env-file");
 const { normalizeBaseUrl } = require("../config");
 const {
   deploymentNameForTarget,
@@ -117,19 +118,41 @@ async function runConvexCommand(args, ctx) {
     ctx.out.info(
       `Using Synapse ${resolved.target} deployment ${resolved.deploymentName}.`,
     );
-    // v1.8.6 (A5): the upstream Convex CLI emits "Can't safely modify
-    // .env.local for NEXT_PUBLIC_CONVEX_SITE_URL, please edit manually."
-    // because our value is a self-hosted URL that doesn't match its
-    // `.convex.site` pattern. The warning is benign (the file IS
-    // correct — we wrote it), but it's confusing without context.
-    // Pre-announce so the operator knows it's expected.
+    // Synapse owns NEXT_PUBLIC_CONVEX_URL / NEXT_PUBLIC_CONVEX_SITE_URL.
+    // The upstream `npx convex` re-derives them on every run from the
+    // backend container's GET /get_canonical_urls and overwrites
+    // .env.local (it may also print "Can't safely modify ... please edit
+    // manually" — benign). That container value can lag the
+    // deployment_domains table, so for a deployment with a role='site'
+    // custom domain it would clobber the distinct HTTP-actions host with
+    // the cloud URL. We re-assert the authoritative values (from
+    // cli_credentials) during + after the run — see
+    // env-file.reassertPublicConvexUrls and docs/CONVEX_SITE_ORIGIN.md.
     ctx.out.info(
-      "(npx convex may warn it can't modify NEXT_PUBLIC_CONVEX_SITE_URL — benign; Synapse owns those values.)",
+      "(npx convex may rewrite NEXT_PUBLIC_CONVEX_SITE_URL — Synapse re-asserts the correct value.)",
     );
   } else {
     resolved = await resolveConvexInvocation(args, { projectDir: ctx.cwd });
   }
-  const code = await runConvex(resolved.args, { credentials: resolved.credentials });
+  // Keep .env.local's public URLs correct for the whole run: a long-running
+  // `dev` lets upstream clobber NEXT_PUBLIC_CONVEX_SITE_URL mid-session, so
+  // guard the file while convex runs, then do a final authoritative
+  // re-assert on exit (covers one-shots like `deploy` and the case where
+  // upstream created .env.local during the run).
+  const stopEnvGuard = guardPublicConvexUrls(ctx.cwd, resolved.credentials);
+  let code;
+  try {
+    code = await runConvex(resolved.args, { credentials: resolved.credentials });
+  } finally {
+    stopEnvGuard();
+    if (resolved.credentials) {
+      try {
+        reassertPublicConvexUrls(ctx.cwd, resolved.credentials);
+      } catch {
+        // Best-effort — never fail the convex command over an env tidy-up.
+      }
+    }
+  }
   // v1.8.6 (A5): when npx convex exits non-zero, surface a hint about
   // where the failure came from — operators see a `[X]` from convex
   // and assume Synapse broke. Point them at the right `--help`.

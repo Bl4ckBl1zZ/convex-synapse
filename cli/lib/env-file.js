@@ -280,6 +280,123 @@ function writeProjectEnv(projectDir, credentials, opts = {}) {
   return file;
 }
 
+// reassertPublicConvexUrls forces .env.local's NEXT_PUBLIC_CONVEX_URL and
+// NEXT_PUBLIC_CONVEX_SITE_URL to Synapse's authoritative values, rewriting
+// ONLY those two lines and leaving the rest of the file byte-for-byte.
+//
+// Why this exists: `synapse select` writes the correct values, but the
+// upstream `npx convex dev|deploy` re-derives them on every run from the
+// backend container's GET /get_canonical_urls (its baked CONVEX_SITE_ORIGIN)
+// and overwrites .env.local. That container value can lag the
+// deployment_domains table — e.g. a role='site' custom domain that went
+// active after the container was last (re)created — so upstream silently
+// replaces the distinct site host with the cloud URL. `credentials.siteUrl`
+// (from GET /v1/deployments/{name}/cli_credentials) is recomputed from the
+// domains table on every request and is the source of truth; re-asserting
+// it after (and during) an upstream run keeps NEXT_PUBLIC_CONVEX_SITE_URL
+// pointing at the HTTP-actions host. See docs/CONVEX_SITE_ORIGIN.md.
+//
+// Deliberately surgical (two keys, in place) rather than a full
+// updateEnvContent rewrite: the dev-time guard below calls this on every
+// file change, and re-canonicalizing the whole file would churn/fight the
+// operator's own layout. Compares by parsed VALUE, so an already-correct
+// value in any quoting style is left untouched — which also makes this a
+// no-op (returns false) when nothing drifted, keeping the fs.watch guard
+// loop-safe. Returns false when the file is absent (`synapse select` owns
+// creation) or already correct; true when it rewrote a line.
+function reassertPublicConvexUrls(projectDir, credentials = {}) {
+  const { convexUrl, siteUrl } = credentials || {};
+  if (!convexUrl) {
+    return false;
+  }
+  const file = path.join(projectDir, ".env.local");
+  if (!fs.existsSync(file)) {
+    return false;
+  }
+  const existing = fs.readFileSync(file, "utf8");
+  const want = {
+    [NEXT_PUBLIC_CONVEX_URL]: convexUrl,
+    // Host-port mode hands back no siteUrl; fall back to the cloud URL so
+    // both vars stay populated (same rule updateEnvContent uses).
+    [NEXT_PUBLIC_CONVEX_SITE_URL]: siteUrl || convexUrl,
+  };
+  const current = parseEnvContent(existing);
+  if (Object.entries(want).every(([key, value]) => current[key] === value)) {
+    return false;
+  }
+
+  const out = [];
+  const seen = new Set();
+  for (const line of existing.split(/\r?\n/)) {
+    const key = keyFromLine(line);
+    if (key && want[key] !== undefined) {
+      if (seen.has(key)) {
+        continue; // collapse any duplicate managed line
+      }
+      seen.add(key);
+      out.push(envAssignment(key, want[key]));
+      continue;
+    }
+    out.push(line);
+  }
+  // Append any managed var the file never had. Rare — `synapse select` and
+  // upstream convex both write both keys — but keep the contract total.
+  const missing = [NEXT_PUBLIC_CONVEX_URL, NEXT_PUBLIC_CONVEX_SITE_URL].filter(
+    (key) => !seen.has(key),
+  );
+  if (missing.length > 0) {
+    while (out.length > 0 && out[out.length - 1] === "") out.pop();
+    for (const key of missing) out.push(envAssignment(key, want[key]));
+    out.push("");
+  }
+
+  fs.writeFileSync(file, out.join("\n"), { mode: 0o600 });
+  return true;
+}
+
+// guardPublicConvexUrls watches .env.local for the lifetime of a
+// long-running `npx convex` (e.g. `dev`) and re-asserts the authoritative
+// public URLs whenever upstream rewrites them — so the value is correct for
+// the whole dev session, not just after the process exits. Returns a stop()
+// that closes the watcher; the caller still does a final re-assert after the
+// child exits (it covers the case where .env.local didn't exist when the
+// guard installed — upstream creates it mid-run).
+//
+// Loop-safe: reassertPublicConvexUrls is a no-op once the values match, so
+// our own restore write can't ping-pong with the watcher. `watch` is
+// injectable for tests. Best-effort throughout — a platform without
+// fs.watch (or a transient error) just falls back to the post-run assert.
+function guardPublicConvexUrls(projectDir, credentials, { watch = fs.watch } = {}) {
+  const file = path.join(projectDir, ".env.local");
+  if (!credentials || !credentials.convexUrl || !fs.existsSync(file)) {
+    return () => {};
+  }
+  let watcher = null;
+  try {
+    watcher = watch(file, () => {
+      try {
+        reassertPublicConvexUrls(projectDir, credentials);
+      } catch {
+        // Transient read/write race — the next event or the caller's
+        // post-run re-assert is the backstop.
+      }
+    });
+    // Don't let the watcher keep the process alive on its own.
+    if (watcher && typeof watcher.unref === "function") watcher.unref();
+  } catch {
+    watcher = null;
+  }
+  return () => {
+    if (watcher) {
+      try {
+        watcher.close();
+      } catch {
+        // already closed
+      }
+    }
+  };
+}
+
 module.exports = {
   CONVEX_DEPLOYMENT,
   NEXT_PUBLIC_CONVEX_URL,
@@ -290,10 +407,12 @@ module.exports = {
   PUBLIC_HEADER,
   AUTH_HEADER,
   buildDeploymentLine,
+  guardPublicConvexUrls,
   isDeploymentLine,
   keyFromLine,
   parseEnvContent,
   quoteEnvValue,
+  reassertPublicConvexUrls,
   readProjectEnv,
   sanitizeForComment,
   updateEnvContent,

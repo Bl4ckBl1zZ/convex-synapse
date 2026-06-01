@@ -1,11 +1,16 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const {
   buildDeploymentLine,
+  guardPublicConvexUrls,
   isDeploymentLine,
   keyFromLine,
   parseEnvContent,
+  reassertPublicConvexUrls,
   sanitizeForComment,
   updateEnvContent,
 } = require("../lib/env-file");
@@ -344,4 +349,169 @@ test("siteUrl omitted falls back to convexUrl for SITE_URL (host-port mode)", ()
     deploymentName: "x",
   });
   assert.match(next, /NEXT_PUBLIC_CONVEX_SITE_URL="https:\/\/x\.app\.synapsepanel\.com"/);
+});
+
+// ---------------------------------------------------------------------------
+// reassertPublicConvexUrls — the v1.12.1 fix. The upstream `npx convex
+// dev|deploy` overwrites NEXT_PUBLIC_CONVEX_SITE_URL with the backend
+// container's (possibly stale) /get_canonical_urls value; this restores the
+// authoritative site host from cli_credentials. See docs/CONVEX_SITE_ORIGIN.md.
+// ---------------------------------------------------------------------------
+
+function withTmpEnv(content, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-reassert-"));
+  try {
+    if (content !== null) {
+      fs.writeFileSync(path.join(dir, ".env.local"), content);
+    }
+    return fn(dir, path.join(dir, ".env.local"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("reassert: fixes a clobbered (cloud) site URL back to the site host", () => {
+  // Exactly the user's report: upstream wrote the cloud URL (unquoted) into
+  // NEXT_PUBLIC_CONVEX_SITE_URL; the deployment actually has a role='site'
+  // custom domain so cli_credentials hands back the distinct site host.
+  const clobbered = [
+    'NEXT_PUBLIC_CONVEX_URL="https://mpi.amagejumpy.com"',
+    "NEXT_PUBLIC_SITE_URL=https://dev.amagejumpy.com:3000",
+    "NEXT_PUBLIC_CONVEX_SITE_URL=https://mpi.amagejumpy.com",
+    "",
+  ].join("\n");
+  withTmpEnv(clobbered, (dir, file) => {
+    const changed = reassertPublicConvexUrls(dir, {
+      convexUrl: "https://mpi.amagejumpy.com",
+      siteUrl: "https://site.mpi.amagejumpy.com",
+    });
+    assert.equal(changed, true);
+    const parsed = parseEnvContent(fs.readFileSync(file, "utf8"));
+    assert.equal(parsed.NEXT_PUBLIC_CONVEX_SITE_URL, "https://site.mpi.amagejumpy.com");
+    assert.equal(parsed.NEXT_PUBLIC_CONVEX_URL, "https://mpi.amagejumpy.com");
+    // The operator's own var must survive untouched.
+    assert.equal(parsed.NEXT_PUBLIC_SITE_URL, "https://dev.amagejumpy.com:3000");
+  });
+});
+
+test("reassert: no-op when the values are already correct (loop-safe)", () => {
+  const correct = [
+    'NEXT_PUBLIC_CONVEX_URL="https://mpi.amagejumpy.com"',
+    'NEXT_PUBLIC_CONVEX_SITE_URL="https://site.mpi.amagejumpy.com"',
+    "",
+  ].join("\n");
+  withTmpEnv(correct, (dir, file) => {
+    const before = fs.readFileSync(file, "utf8");
+    const changed = reassertPublicConvexUrls(dir, {
+      convexUrl: "https://mpi.amagejumpy.com",
+      siteUrl: "https://site.mpi.amagejumpy.com",
+    });
+    assert.equal(changed, false);
+    // Byte-for-byte unchanged — this is what keeps the fs.watch guard from
+    // ping-ponging with its own restore write.
+    assert.equal(fs.readFileSync(file, "utf8"), before);
+  });
+});
+
+test("reassert: a correct value in any quoting style is left as-is (no churn)", () => {
+  // Container NOT stale: upstream wrote the correct site host, just unquoted.
+  // Value matches → we don't rewrite (compare is value-based, not byte-based).
+  const correctUnquoted = [
+    "NEXT_PUBLIC_CONVEX_URL=https://mpi.amagejumpy.com",
+    "NEXT_PUBLIC_CONVEX_SITE_URL=https://site.mpi.amagejumpy.com",
+    "",
+  ].join("\n");
+  withTmpEnv(correctUnquoted, (dir) => {
+    const changed = reassertPublicConvexUrls(dir, {
+      convexUrl: "https://mpi.amagejumpy.com",
+      siteUrl: "https://site.mpi.amagejumpy.com",
+    });
+    assert.equal(changed, false);
+  });
+});
+
+test("reassert: host-port mode (no siteUrl) keeps SITE_URL = cloud URL", () => {
+  const file = [
+    "NEXT_PUBLIC_CONVEX_URL=http://127.0.0.1:3210",
+    "NEXT_PUBLIC_CONVEX_SITE_URL=http://127.0.0.1:3210",
+    "",
+  ].join("\n");
+  withTmpEnv(file, (dir, p) => {
+    const changed = reassertPublicConvexUrls(dir, { convexUrl: "http://127.0.0.1:3210" });
+    assert.equal(changed, false);
+    const parsed = parseEnvContent(fs.readFileSync(p, "utf8"));
+    assert.equal(parsed.NEXT_PUBLIC_CONVEX_SITE_URL, "http://127.0.0.1:3210");
+  });
+});
+
+test("reassert: missing file or missing convexUrl is a safe no-op", () => {
+  withTmpEnv(null, (dir) => {
+    assert.equal(reassertPublicConvexUrls(dir, { convexUrl: "https://x" }), false);
+  });
+  withTmpEnv("NEXT_PUBLIC_CONVEX_URL=https://x\n", (dir) => {
+    assert.equal(reassertPublicConvexUrls(dir, {}), false);
+    assert.equal(reassertPublicConvexUrls(dir, null), false);
+  });
+});
+
+test("reassert: adds the managed keys when upstream never wrote them", () => {
+  withTmpEnv("OTHER=keep-me\n", (dir, file) => {
+    const changed = reassertPublicConvexUrls(dir, {
+      convexUrl: "https://mpi.amagejumpy.com",
+      siteUrl: "https://site.mpi.amagejumpy.com",
+    });
+    assert.equal(changed, true);
+    const parsed = parseEnvContent(fs.readFileSync(file, "utf8"));
+    assert.equal(parsed.OTHER, "keep-me");
+    assert.equal(parsed.NEXT_PUBLIC_CONVEX_URL, "https://mpi.amagejumpy.com");
+    assert.equal(parsed.NEXT_PUBLIC_CONVEX_SITE_URL, "https://site.mpi.amagejumpy.com");
+  });
+});
+
+test("guard: restores the site URL when the file is rewritten mid-session", () => {
+  const correct = [
+    'NEXT_PUBLIC_CONVEX_URL="https://mpi.amagejumpy.com"',
+    'NEXT_PUBLIC_CONVEX_SITE_URL="https://site.mpi.amagejumpy.com"',
+    "",
+  ].join("\n");
+  withTmpEnv(correct, (dir, file) => {
+    let listener = null;
+    let closed = false;
+    const fakeWatch = (_file, cb) => {
+      listener = cb;
+      return { close() { closed = true; }, unref() {} };
+    };
+    const stop = guardPublicConvexUrls(
+      dir,
+      { convexUrl: "https://mpi.amagejumpy.com", siteUrl: "https://site.mpi.amagejumpy.com" },
+      { watch: fakeWatch },
+    );
+    assert.equal(typeof listener, "function");
+
+    // Simulate the upstream `npx convex dev` clobber, then fire the watcher.
+    fs.writeFileSync(file, "NEXT_PUBLIC_CONVEX_SITE_URL=https://mpi.amagejumpy.com\n");
+    listener("change", ".env.local");
+
+    const parsed = parseEnvContent(fs.readFileSync(file, "utf8"));
+    assert.equal(parsed.NEXT_PUBLIC_CONVEX_SITE_URL, "https://site.mpi.amagejumpy.com");
+
+    stop();
+    assert.equal(closed, true);
+  });
+});
+
+test("guard: no credentials or no file yields an inert stop()", () => {
+  withTmpEnv(null, (dir) => {
+    let watchCalled = false;
+    const fakeWatch = () => { watchCalled = true; return { close() {}, unref() {} }; };
+    // No file on disk.
+    const stop1 = guardPublicConvexUrls(dir, { convexUrl: "https://x" }, { watch: fakeWatch });
+    assert.equal(watchCalled, false);
+    assert.doesNotThrow(stop1);
+    // No credentials.
+    fs.writeFileSync(path.join(dir, ".env.local"), "X=1\n");
+    const stop2 = guardPublicConvexUrls(dir, null, { watch: fakeWatch });
+    assert.equal(watchCalled, false);
+    assert.doesNotThrow(stop2);
+  });
 });
