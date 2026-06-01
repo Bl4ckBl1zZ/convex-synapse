@@ -59,7 +59,7 @@
 
 set -Eeuo pipefail
 
-readonly INSTALL_AGENT_VERSION="1.21.1"
+readonly INSTALL_AGENT_VERSION="1.21.2"
 readonly INSTALL_DIR_DEFAULT="/etc/synapse-agent"
 readonly LOG_FILE="${SYNAPSE_AGENT_INSTALL_LOG:-/tmp/synapse-agent-install.log}"
 readonly LOCK_FILE="/run/install-agent.lock"
