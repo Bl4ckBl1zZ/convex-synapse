@@ -456,12 +456,16 @@ func (h *DeploymentsHandler) pushFunctionEnvForDeployment(
 		return nil
 	}
 
-	// Synthesize the minimum fields cliDeploymentURL inspects. We use
-	// the SAME URL shape `npx convex` would hit — same resolution rules
-	// (custom-domain > base-domain > host:port > stored deployment_url
-	// fallback) so the env API call lands at the same backend the CLI
-	// would.
+	// Synthesize the fields cliDeploymentURL inspects. ID is load-bearing:
+	// cliDeploymentURL → lookupActiveAPIDomain(d.ID), so WITHOUT it the active
+	// role='api' custom domain is never found and the URL falls back to
+	// https://<public>:<host_port> — https against the plaintext backend port,
+	// which fails the env push with "HTTP response to HTTPS client". We use the
+	// SAME URL shape `npx convex` would hit (custom-domain > base-domain >
+	// host:port > stored deployment_url) so the env API lands at the same
+	// backend the CLI would.
 	d := &models.Deployment{
+		ID:            deploymentID,
 		Name:          name,
 		HostPort:      ptrIntOrZero(hostPort),
 		Adopted:       adopted,

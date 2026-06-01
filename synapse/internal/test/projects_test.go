@@ -1035,3 +1035,87 @@ func (d *retargetDoer) Do(req *http.Request) (*http.Response, error) {
 	req.Host = base.Host
 	return http.DefaultClient.Do(req)
 }
+
+// captureRetargetDoer records the URL the env-sync computed (BEFORE
+// retargeting it to the stub), so a test can assert WHICH host the push
+// targeted — retargeting alone would mask a wrong-host bug.
+type captureRetargetDoer struct {
+	base string
+	mu   sync.Mutex
+	url  string
+}
+
+func (d *captureRetargetDoer) Do(req *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	d.url = req.URL.String()
+	d.mu.Unlock()
+	base, err := url.Parse(d.base)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.Scheme = base.Scheme
+	req.URL.Host = base.Host
+	req.Host = base.Host
+	return http.DefaultClient.Do(req)
+}
+
+func (d *captureRetargetDoer) got() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.url
+}
+
+// TestProjects_EnvSync_TargetsActiveAPIDomain guards the env-sync URL bug:
+// pushFunctionEnv synthesized a models.Deployment WITHOUT its ID, so
+// cliDeploymentURL → lookupActiveAPIDomain(d.ID="") found no active custom
+// domain and fell back to https://<public>:<host_port> (https against the
+// plaintext backend port) → the env push errored "HTTP response to HTTPS
+// client" on custom-domain deployments. With the ID set, the active
+// role='api' domain wins and the push targets https://<domain>.
+func TestProjects_EnvSync_TargetsActiveAPIDomain(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer stub.Close()
+
+	doer := &captureRetargetDoer{base: stub.URL}
+	h := SetupWithOpts(t, SetupOpts{
+		// host:port fallback would be https://synapse.example.com:<port> —
+		// distinct from the custom domain, so the assertion below bites.
+		PublicURL: "https://synapse.example.com",
+		ConvexEnv: convexenv.NewClientWith(doer),
+	})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "EnvSyncDomain Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "P")
+	depID := h.SeedDeployment(proj.ID, "env-sync-dom-1", "dev", "running", true, owner.ID, 3713, "key-es")
+	insertDomain(t, h, depID, "api.example.com", "api", "active")
+
+	var resp struct {
+		Applied    int `json:"applied"`
+		SyncResult struct {
+			Total   int `json:"total"`
+			Synced  int `json:"synced"`
+			Skipped int `json:"skipped"`
+			Failed  []struct {
+				DeploymentID   string `json:"deploymentId"`
+				DeploymentName string `json:"deploymentName"`
+				Reason         string `json:"reason"`
+			} `json:"failed"`
+			Notice string `json:"notice"`
+		} `json:"syncResult"`
+	}
+	h.DoJSON(http.MethodPost,
+		"/v1/projects/"+proj.ID+"/update_default_environment_variables",
+		owner.AccessToken,
+		map[string]any{"changes": []map[string]any{{"op": "set", "name": "FOO", "value": "bar"}}},
+		http.StatusOK, &resp)
+
+	if resp.SyncResult.Synced != 1 {
+		t.Fatalf("synced: want 1, got %d", resp.SyncResult.Synced)
+	}
+	want := "https://api.example.com/api/update_environment_variables"
+	if got := doer.got(); got != want {
+		t.Errorf("env-sync target: got %q, want %q (empty d.ID falls back to the host:port form)", got, want)
+	}
+}
