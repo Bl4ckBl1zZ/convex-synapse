@@ -378,6 +378,12 @@ export default function EmbedDashboardPage({
           src={CONVEX_DASHBOARD_URL}
           title={t("{name} — Convex Dashboard", { name })}
           className="h-full w-full flex-1 border-0"
+          // The dashboard's "copy" buttons call navigator.clipboard.writeText.
+          // Clipboard is a Permissions-Policy-gated feature whose default
+          // allowlist is 'self', so this cross-origin iframe (parent on :443,
+          // this on :6791) is denied unless the parent delegates it. `sandbox`
+          // doesn't cover this — it's a separate mechanism — hence both attrs.
+          allow="clipboard-read; clipboard-write"
           // The dashboard makes XHR calls to the deployment URL; allow
           // same-origin (within the iframe) plus scripts (it's a SPA).
           sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
