@@ -184,6 +184,7 @@ func TestTeams_InviteAdminHappyPath(t *testing.T) {
 		Email       string `json:"email"`
 		Role        string `json:"role"`
 		InviteToken string `json:"inviteToken"`
+		Emailed     bool   `json:"emailed"`
 	}
 	var got inviteResp
 	h.DoJSON(http.MethodPost, "/v1/teams/"+team.Slug+"/invite_team_member",

@@ -85,6 +85,16 @@ type Config struct {
 	// "<PublicURL>/d/<name>" form continues to work.
 	BaseDomain string
 
+	// ResendAPIKey enables transactional email (team invites today) via
+	// Resend. Empty (default) → email disabled; invites still work through
+	// the accept link the API returns. Paired with EmailFrom: New() treats
+	// either one missing as disabled (Resend rejects a send with no From).
+	ResendAPIKey string
+
+	// EmailFrom is the Resend-verified sender, e.g.
+	// "Synapse <no-reply@synapsepanel.com>". Required alongside ResendAPIKey.
+	EmailFrom string
+
 	// HealthAutoRestart, when true, has the health worker call docker
 	// `start` on a deployment whose status just flipped to "stopped". A
 	// missing container is promoted to "failed" instead — restart loops
@@ -288,6 +298,8 @@ func Load() (*Config, error) {
 		ProxyEnabled:          getEnvDefault("SYNAPSE_PROXY_ENABLED", "") == "true",
 		PublicURL:             strings.TrimRight(os.Getenv("SYNAPSE_PUBLIC_URL"), "/"),
 		BaseDomain:            strings.Trim(os.Getenv("SYNAPSE_BASE_DOMAIN"), ". "),
+		ResendAPIKey:          strings.TrimSpace(os.Getenv("SYNAPSE_RESEND_API_KEY")),
+		EmailFrom:             strings.TrimSpace(os.Getenv("SYNAPSE_EMAIL_FROM")),
 		HealthAutoRestart:     getEnvDefault("SYNAPSE_HEALTH_AUTO_RESTART", "") == "true",
 
 		HAEnabled:             getEnvDefault("SYNAPSE_HA_ENABLED", "") == "true",

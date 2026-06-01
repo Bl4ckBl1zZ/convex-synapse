@@ -26,6 +26,7 @@ import (
 	"github.com/Iann29/synapse/internal/db"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
+	"github.com/Iann29/synapse/internal/email"
 	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/health"
 	"github.com/Iann29/synapse/internal/hostssh"
@@ -333,6 +334,7 @@ func run() error {
 		PublicURL:             cfg.PublicURL,
 		ProxyEnabled:          cfg.ProxyEnabled,
 		BaseDomain:            cfg.BaseDomain,
+		Email:                 email.New(cfg.ResendAPIKey, cfg.EmailFrom),
 		HA: api.HAConfig{
 			Enabled:             cfg.HAEnabled,
 			BackendPostgresURL:  cfg.BackendPostgresURL,

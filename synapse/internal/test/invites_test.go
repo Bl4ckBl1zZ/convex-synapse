@@ -16,6 +16,7 @@ type inviteResp struct {
 	Email       string `json:"email"`
 	Role        string `json:"role"`
 	InviteToken string `json:"inviteToken"`
+	Emailed     bool   `json:"emailed"` // v1.22+: whether the invite email went out
 }
 
 // acceptInviteResp mirrors the success body of POST /v1/team_invites/accept.

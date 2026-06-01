@@ -106,6 +106,14 @@ services:
       # successful A-record match. Empty disables DNS preflight (rows
       # stay status='pending' with a helpful last_dns_error).
       SYNAPSE_PUBLIC_IP: ${SYNAPSE_PUBLIC_IP:-}
+      # Resend transactional email (v1.22+) — enables the team-invite email.
+      # SYNAPSE_RESEND_API_KEY is the Resend API key; SYNAPSE_EMAIL_FROM is the
+      # Resend-verified sender ("Synapse <no-reply@you.com>"). BOTH are required
+      # to send (email.New treats either-missing as disabled); empty (default)
+      # leaves invites link-only. MUST live in this environment block to reach
+      # the binary — same passthrough rule as SYNAPSE_PUBLIC_URL / BASE_DOMAIN.
+      SYNAPSE_RESEND_API_KEY: ${SYNAPSE_RESEND_API_KEY:-}
+      SYNAPSE_EMAIL_FROM: ${SYNAPSE_EMAIL_FROM:-}
       # CORS — locked to the dashboard origin in production. Defaults
       # to "*" for local dev so a browser opened against an arbitrary
       # IP/port can still call the API.

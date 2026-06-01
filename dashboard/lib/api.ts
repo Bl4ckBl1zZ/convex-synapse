@@ -1447,7 +1447,7 @@ export const api = {
       ref: string,
       email: string,
       role: "admin" | "member" = "member"
-    ): Promise<{ inviteId: string; inviteToken: string; email: string; role: string }> {
+    ): Promise<{ inviteId: string; inviteToken: string; email: string; role: string; emailed: boolean }> {
       return request(`/v1/teams/${encodeURIComponent(ref)}/invite_team_member`, {
         method: "POST",
         body: { email, role },

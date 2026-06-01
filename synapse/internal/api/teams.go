@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/Iann29/synapse/internal/audit"
 	"github.com/Iann29/synapse/internal/auth"
 	synapsedb "github.com/Iann29/synapse/internal/db"
+	"github.com/Iann29/synapse/internal/email"
 	"github.com/Iann29/synapse/internal/models"
 )
 
@@ -29,6 +31,14 @@ type TeamsHandler struct {
 	DB          *pgxpool.Pool
 	Deployments *DeploymentsHandler
 	Tokens      *AccessTokensHandler
+
+	// Email sends the invite email when configured (best-effort). PublicURL
+	// is the dashboard origin the accept link is built against
+	// ("<PublicURL>/accept-invite?token=..."). Both come from RouterDeps;
+	// when Email is nil or disabled, or PublicURL is empty, inviteMember
+	// silently skips the send and the invite stays link-only.
+	Email     email.Sender
+	PublicURL string
 }
 
 func (h *TeamsHandler) Routes() chi.Router {
@@ -1259,11 +1269,25 @@ func (h *TeamsHandler) inviteMember(w http.ResponseWriter, r *http.Request) {
 		TargetID:   inviteID,
 		Metadata:   map[string]any{"email": req.Email, "role": req.Role},
 	})
-	writeJSON(w, http.StatusOK, map[string]string{
+	// Best-effort invite email. Never fails the invite: the token is
+	// returned regardless, so the link works even when email is disabled or
+	// the provider errors. Needs PublicURL to build a clickable accept link.
+	emailed := false
+	if h.Email != nil && h.Email.Enabled() && h.PublicURL != "" {
+		acceptURL := h.PublicURL + "/accept-invite?token=" + url.QueryEscape(plain)
+		if err := h.Email.Send(r.Context(), buildInviteEmail(req.Email, t.Name, req.Role, acceptURL)); err != nil {
+			logErr("send invite email", err)
+		} else {
+			emailed = true
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
 		"inviteId":    inviteID,
 		"email":       req.Email,
 		"role":        req.Role,
 		"inviteToken": plain,
+		"emailed":     emailed,
 	})
 }
 

@@ -224,8 +224,17 @@ Returns `{projectId, projectSlug, project}`.
 
 ### `POST /v1/teams/{ref}/invite_team_member` ✅ (admins only)
 
-Body: `{email, role}`. Returns `{inviteId, inviteToken, email, role}`. The
-token is opaque; share it with the invitee out-of-band.
+Body: `{email, role}`. Returns `{inviteId, inviteToken, email, role, emailed}`.
+The token is opaque; share it with the invitee out-of-band — or, when email
+is configured, let Synapse send it for you.
+
+**Email (v1.22+):** when `SYNAPSE_RESEND_API_KEY` **and** `SYNAPSE_EMAIL_FROM`
+are set (and `SYNAPSE_PUBLIC_URL` is set, to build the link), the invitee is
+emailed a clickable accept link (`<PublicURL>/accept-invite?token=...`) via
+[Resend](https://resend.com). Sending is **best-effort**: the invite always
+succeeds and `inviteToken` is always returned, so a missing/failed email
+never blocks onboarding. `emailed` reports whether the email actually went
+out (`false` when email is disabled or the provider errored).
 
 ### `GET /v1/teams/{ref}/invites` 🔧 (admins only)
 

@@ -42,6 +42,7 @@ import (
 	"github.com/Iann29/synapse/internal/db"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
 	dockerprov "github.com/Iann29/synapse/internal/docker"
+	"github.com/Iann29/synapse/internal/email"
 	"github.com/Iann29/synapse/internal/geo"
 	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/provisioner"
@@ -204,6 +205,11 @@ type SetupOpts struct {
 	// non-empty, deployment URLs get rewritten to
 	// "https://<name>.<BaseDomain>" — wins over PublicURL+ProxyEnabled.
 	BaseDomain string
+	// Email mirrors api.RouterDeps.Email — inject a fake email.Sender to
+	// assert the team-invite email fires (see invite_email_test.go). nil
+	// (default) leaves invites link-only, exactly like an install without
+	// SYNAPSE_RESEND_API_KEY.
+	Email email.Sender
 	// UpdaterURL + UpdaterToken mirror api.RouterDeps. Tests that
 	// exercise /v1/admin/upgrade point UpdaterURL at an
 	// httptest.Server (see admin_test.go::stubUpdater) and pass the
@@ -452,6 +458,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		PublicURL:             opts.PublicURL,
 		ProxyEnabled:          opts.ProxyEnabled,
 		BaseDomain:            opts.BaseDomain,
+		Email:                 opts.Email,
 		UpdaterURL:            opts.UpdaterURL,
 		UpdaterToken:          opts.UpdaterToken,
 		GitHubRepo:            opts.GitHubRepo,

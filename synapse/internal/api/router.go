@@ -14,6 +14,7 @@ import (
 	"github.com/Iann29/synapse/internal/auth"
 	"github.com/Iann29/synapse/internal/convexenv"
 	synapsedns "github.com/Iann29/synapse/internal/dns"
+	"github.com/Iann29/synapse/internal/email"
 	"github.com/Iann29/synapse/internal/geo"
 	"github.com/Iann29/synapse/internal/headscale"
 	"github.com/Iann29/synapse/internal/middleware"
@@ -58,6 +59,11 @@ type RouterDeps struct {
 	// "https://<name>.<BaseDomain>". Wins over PublicURL+ProxyEnabled.
 	// Empty = custom domains disabled (path-based proxy still works).
 	BaseDomain string
+
+	// Email (v1.22+) sends transactional email — today the team-invite
+	// email. Built in main from config.ResendAPIKey + config.EmailFrom via
+	// email.New; nil/disabled keeps invites link-only.
+	Email email.Sender
 
 	// HA configuration (v0.5+). Zero value = HA disabled, behaves
 	// exactly like pre-v0.5. When HA.Enabled is true, create_deployment
@@ -329,7 +335,7 @@ func NewRouter(d RouterDeps) http.Handler {
 		Crypto:            d.DNSEnvelope,
 		CloudflareFactory: d.CloudflareFactory,
 	}
-	teamsH := &TeamsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH}
+	teamsH := &TeamsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH, Email: d.Email, PublicURL: d.PublicURL}
 	projectsH := &ProjectsHandler{DB: d.DB, Deployments: deploymentsH, Tokens: tokensH, DNSCredentials: dnsCredsH}
 	// v1.9.6: topology endpoint shares the projects handler's auth path
 	// (loadProjectForRequest). The geo cache is constructed once at boot

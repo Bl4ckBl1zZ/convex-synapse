@@ -25,7 +25,7 @@ export function InvitesPanel({ teamRef }: Props) {
   const [role, setRole] = useState<"member" | "admin">("member");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [lastIssued, setLastIssued] = useState<{ email: string; token: string } | null>(null);
+  const [lastIssued, setLastIssued] = useState<{ email: string; token: string; emailed: boolean } | null>(null);
 
   const sendInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +34,7 @@ export function InvitesPanel({ teamRef }: Props) {
     setPending(true);
     try {
       const res = await api.teams.invite(teamRef, email.trim(), role);
-      setLastIssued({ email: res.email, token: res.inviteToken });
+      setLastIssued({ email: res.email, token: res.inviteToken, emailed: res.emailed });
       setEmail("");
       await mutate();
     } catch (err) {
@@ -156,9 +156,15 @@ export function InvitesPanel({ teamRef }: Props) {
       {lastIssued && (
         <Card>
           <CardBody>
-            <p className="text-xs text-neutral-300">
-              {t("Invite issued for ")}<span className="font-medium">{lastIssued.email}</span>{t(". Share this URL with them:")}
-            </p>
+            {lastIssued.emailed ? (
+              <p className="text-xs text-emerald-300">
+                {t("Invite emailed to ")}<span className="font-medium">{lastIssued.email}</span>{t(". They can also use this link:")}
+              </p>
+            ) : (
+              <p className="text-xs text-neutral-300">
+                {t("Invite issued for ")}<span className="font-medium">{lastIssued.email}</span>{t(". Share this URL with them:")}
+              </p>
+            )}
             <p className="mt-2 break-all rounded bg-neutral-900 px-3 py-2 font-mono text-xs text-neutral-100">
               {typeof window !== "undefined" ? window.location.origin : ""}/accept-invite?token=
               {lastIssued.token}
