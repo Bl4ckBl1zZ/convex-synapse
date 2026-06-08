@@ -7,10 +7,10 @@ description: Build and maintain the Synapse auto-installer (v0.6) — pure-bash 
 
 The installer is v0.6's deliverable: a one-command flow that takes a
 fresh VPS to a running Synapse with TLS, secrets, and a registered
-admin user. Full design lives in
-[`docs/V0_6_INSTALLER_PLAN.md`](../../../docs/V0_6_INSTALLER_PLAN.md).
-**Read that first** before touching any installer file — it has the
-phased roadmap, file layout, anti-features, and decision rationale.
+admin user. The phased history is captured in the v0.6 section of
+[`docs/ROADMAP.md`](../../../docs/ROADMAP.md); the installer code itself
+(`setup.sh` + `installer/`) is the source of truth for file layout and
+behaviour.
 
 ## When to use this skill (vs. synapse-feature)
 
@@ -447,8 +447,8 @@ free resets for exactly this reason.
 
 ## When you're stuck
 
-1. Read `docs/V0_6_INSTALLER_PLAN.md` again — most "where do I put X?"
-   questions are answered there.
+1. Re-read the `installer/` layout table in this skill + `CLAUDE.md` —
+   most "where do I put X?" questions are answered there.
 2. Check what Coolify did for the equivalent feature:
    https://github.com/coollabsio/coolify/blob/main/scripts/install.sh
 3. Run `shellcheck` early and often — it catches half the bugs before
@@ -467,6 +467,5 @@ A v0.6 ticket is done when:
 - [ ] bats tests cover the new logic
 - [ ] CI's installer job is green (lint + bats)
 - [ ] **Real-VPS smoke** passes for any setup.sh / compose / handler-URL change (`ssh synapse-vps` workflow above)
-- [ ] `docs/V0_6_INSTALLER_PLAN.md` updated if the design changed
 - [ ] README's Quickstart still reflects reality after each phase
 - [ ] Commit message body lists the test fixture(s) you ran against

@@ -294,8 +294,7 @@ export default function EmbedDashboardPage({
   // right below — operators effectively see two headers stacked,
   // ours for "which deployment?" and theirs for "which page within
   // the deployment". A cleaner integration would require forking
-  // the upstream image (see CONVEX_DASHBOARD_PICKER_PLAN.md); this
-  // is the pragmatic v1.
+  // the upstream image; this is the pragmatic v1.
   return (
     <div className="flex h-screen flex-col bg-neutral-950">
       <header className="flex h-10 shrink-0 items-center gap-3 border-b border-neutral-900 px-3 text-sm">

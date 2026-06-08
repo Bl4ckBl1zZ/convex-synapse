@@ -583,8 +583,7 @@ func loadStorage(ctx context.Context, tx pgx.Tx, dec SecretDecrypter, deployment
 // at create-time. v1.17+ this is *only* system/CORS vars — user
 // project_env_vars no longer flow here (they're pushed into the Convex
 // FUNCTION runtime env store via the convexenv API after the container
-// is up). See docs/ENV_PIPELINE_PLAN.md §3 for the three categories;
-// in short: container ENV is read by the Convex backend's startup
+// is up). In short, container ENV is read by the Convex backend's startup
 // (Rust) process, NOT the function isolate, so user vars set here
 // were always dead-letter.
 //

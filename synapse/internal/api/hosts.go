@@ -29,10 +29,9 @@ import (
 // rather than living under /v1/admin).
 //
 // Scope of this block: CRUD + drain + adoption-token. The agent-facing
-// register / heartbeat / desired-state endpoints (consumed by the future Go
-// synapse-agent) are intentionally NOT implemented yet — see the TODOs at the
-// bottom of this file. The host_agents / host_adoption_tokens tables exist so
-// the API is agent-ready.
+// register / heartbeat / desired-state endpoints (consumed by the Go
+// synapse-agent) live in agents.go (/v1/agents/{register,heartbeat,
+// desired_state}); the host_agents / host_adoption_tokens tables back them.
 type HostsHandler struct {
 	DB *pgxpool.Pool
 	// PublicURL is the control-plane origin baked into the agent join command
@@ -919,15 +918,3 @@ func marshalLabels(labels map[string]string) []byte {
 	}
 	return raw
 }
-
-// TODO(Bloco 6 — synapse-agent, Go @ synapse/cmd/synapse-agent):
-//   - POST /v1/agent/register     — agent presents an adoption token, we
-//     create/attach the host_agents row + mint a long-lived agent token,
-//     mark the adoption token used_at.
-//   - POST /v1/agent/heartbeat    — agent token auth; updates hosts.status,
-//     agent_version, docker_version, cpu/mem/disk, last_heartbeat_at, and
-//     host_agents.last_seen_at + last_heartbeat_payload.
-//   - GET  /v1/agent/desired_state — returns the desired_states rows for the
-//     agent's host (desired_states table arrives in a later block).
-// These are deliberately out of scope for this block; the tables + the
-// operator-facing adoption-token mint above are ready for them.

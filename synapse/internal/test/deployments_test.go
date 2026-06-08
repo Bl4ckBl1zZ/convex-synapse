@@ -721,8 +721,7 @@ func TestDeployments_Create_DoesNotInjectProjectEnvVarsIntoContainer(t *testing.
 
 	// Regression guards: every project_env_var name from the seed must
 	// be ABSENT from container env. Functions read these via the Convex
-	// backend's runtime env store, not process.env — see
-	// docs/ENV_PIPELINE_PLAN.md §3 for the three env categories.
+	// backend's runtime env store, not process.env.
 	for _, name := range []string{"SHARED", "PROD_ONLY", "DEV_ONLY", "CUSTOM_ONLY"} {
 		if _, present := env[name]; present {
 			t.Errorf("%s leaked into container spec.EnvVars (%+v) — must go through convexenv only", name, env)

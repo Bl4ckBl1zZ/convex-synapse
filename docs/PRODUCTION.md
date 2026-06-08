@@ -186,8 +186,7 @@ the upgraded stack fails its health check.
 
 - Automated `upgrade_to_ha` for existing SQLite deployments. HA works at
   create time; safe upgrade still needs a snapshot export/import worker.
-- Multi-region replication (out of scope; lease design forbids it upstream —
-  see V0_5_PLAN.md).
+- Multi-region replication (out of scope; lease design forbids it upstream).
 - Scheduled backup retention. `setup.sh --backup [--to-s3=...]` exists;
   operators still provide cron/systemd timers and retention policy.
 - A K8s / Helm install path.

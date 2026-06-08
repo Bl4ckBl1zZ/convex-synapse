@@ -34,7 +34,6 @@ engine. **Observe + diagnose + plan only — it never applies changes.**
 | [ROADMAP.md](ROADMAP.md) | General roadmap. |
 | [HA_TESTING.md](HA_TESTING.md) | HA-per-deployment testing. |
 | [HOST_DOMAIN_WILDCARD.md](HOST_DOMAIN_WILDCARD.md) | Custom domains / wildcard TLS. |
-| [V0_5_PLAN.md](V0_5_PLAN.md) · [V0_6_INSTALLER_PLAN.md](V0_6_INSTALLER_PLAN.md) | Version plans. |
 | [REMOTE_HOSTS.md](REMOTE_HOSTS.md) | v1.18+ multi-host deployment via Headscale + SSH. |
 | [SECURITY_REMOTE_HOSTS.md](SECURITY_REMOTE_HOSTS.md) | v1.18+ Remote Hosts threat model + key rotation. |
 | [SCREENSHOTS.md](SCREENSHOTS.md) | Visual tour of the dashboard. |

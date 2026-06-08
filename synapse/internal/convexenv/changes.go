@@ -3,8 +3,6 @@
 // it to push the project's "Default environment variables" panel into
 // the Convex FUNCTION runtime env store (the one functions actually
 // read), not the container process env (which functions never see).
-//
-// Background: docs/ENV_PIPELINE_PLAN.md §2 + §3.
 package convexenv
 
 import "encoding/json"

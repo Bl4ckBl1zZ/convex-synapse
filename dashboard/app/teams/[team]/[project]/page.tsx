@@ -378,9 +378,8 @@ await Promise.all([
   // because it doesn't exist (404) or the operator lost access (403),
   // render a single EmptyState INSTEAD of the full chrome + panels.
   // Without this every child panel would fire its own fetch and cascade
-  // 5+ "Failed to load X: Project not found" red banners — see
-  // docs/V1_8_1_STALE_LINK_FIXES.md Bug 2. Loading state needs to
-  // differentiate "first paint" from "have stale data, revalidating",
+  // 5+ "Failed to load X: Project not found" red banners. Loading state
+  // needs to differentiate "first paint" from "have stale data, revalidating",
   // hence the `&& !project` guard on isLoading.
   if (projectLoading && !project) {
     return (
@@ -800,7 +799,7 @@ await Promise.all([
             {haMode && (
               <p className="text-xs text-neutral-500">
                 {t("Requires")} <code className="text-neutral-300">SYNAPSE_HA_ENABLED=true</code> {t("on the cluster plus")} <code className="text-neutral-300">SYNAPSE_BACKEND_*</code>
-                {" "}{t("credentials. See")} <code className="text-neutral-300">docs/V0_5_PLAN.md</code>.
+                {" "}{t("credentials. See")} <code className="text-neutral-300">docs/HA_TESTING.md</code>.
               </p>
             )}
           </div>
