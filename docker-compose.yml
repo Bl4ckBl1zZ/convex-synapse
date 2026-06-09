@@ -165,7 +165,7 @@ services:
       # so a fresh install behaves identically to the v1.11.x baseline;
       # operators can override per-host (e.g. SYNAPSE_REGION=eu-west-1)
       # via .env. SYNAPSE_AGENT_APPLY is hard-coded to false here too
-      # — apply is not implemented; the var exists so the surface is
+      # — the AGENT never applies; the var exists so the surface is
       # explicit and audit-grep-able.
       SYNAPSE_ENABLE_CELLS: ${SYNAPSE_ENABLE_CELLS:-true}
       SYNAPSE_REGION: ${SYNAPSE_REGION:-}
@@ -175,6 +175,10 @@ services:
       SYNAPSE_ENABLE_OBSERVED_STATE: ${SYNAPSE_ENABLE_OBSERVED_STATE:-true}
       SYNAPSE_ENABLE_RECONCILE_DRY_RUN: ${SYNAPSE_ENABLE_RECONCILE_DRY_RUN:-true}
       SYNAPSE_AGENT_APPLY: ${SYNAPSE_AGENT_APPLY:-false}
+      # Bloco 10 — central-driven apply (create/restart). OFF by default.
+      # SYNAPSE_APPLY_DANGEROUS gates the Phase-2 stop/remove actions.
+      SYNAPSE_APPLY_ENABLED: ${SYNAPSE_APPLY_ENABLED:-false}
+      SYNAPSE_APPLY_DANGEROUS: ${SYNAPSE_APPLY_DANGEROUS:-false}
       # ---- Auto-restart + meta + dashboard upstream ----
       # SYNAPSE_HEALTH_AUTO_RESTART: empty = disabled. The health worker
       # only promotes 'stopped' → restart attempt when this is "true".

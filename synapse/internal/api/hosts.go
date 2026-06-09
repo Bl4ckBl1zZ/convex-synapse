@@ -95,7 +95,12 @@ func (h *HostsHandler) deregisterHeadscaleNode(ctx context.Context, tailnetAddr 
 	if h.Headscale == nil || tailnetAddr == "" {
 		return "skipped"
 	}
-	nodes, err := h.Headscale.ListNodes(ctx, "synapse")
+	// List ALL nodes (empty user) and match by tailnet IP, rather than
+	// filtering by the "synapse" user namespace: resolving that user by name
+	// can fail ("user not found") on some Headscale versions even though the
+	// node exists, which would strand the tailnet node. Matching by IP is
+	// both robust and sufficient (tailnet IPs are unique).
+	nodes, err := h.Headscale.ListNodes(ctx, "")
 	if err != nil {
 		logErr("headscale list nodes", err)
 		return "failed"

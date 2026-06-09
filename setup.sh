@@ -769,6 +769,22 @@ phase_secrets() {
         # who type ".synapse.example.com" by accident don't end up
         # with double dots in URLs.
         export SYNAPSE_BASE_DOMAIN="${BASE_DOMAIN#.}"
+        # The .env template was rendered ABOVE (before these domain values
+        # were computed), so it stamped empty {{SYNAPSE_DOMAIN}} /
+        # {{SYNAPSE_BASE_DOMAIN}} placeholders. phase_install_headscale and
+        # the custom-domain flow hydrate from .env, so force-write the real
+        # values now — otherwise --enable-headscale dies "needs SYNAPSE_DOMAIN"
+        # on a fresh non-interactive install. if-blocks (not `&&`) to avoid the
+        # set -e footgun when a value is empty.
+        if [[ -n "${DOMAIN#.}" ]]; then
+            secrets::set_env_var "$env_file" SYNAPSE_DOMAIN "${DOMAIN#.}"
+        fi
+        if [[ -n "${BASE_DOMAIN#.}" ]]; then
+            secrets::set_env_var "$env_file" SYNAPSE_BASE_DOMAIN "${BASE_DOMAIN#.}"
+        fi
+        if [[ -n "${HEADSCALE_DOMAIN:-}" ]]; then
+            secrets::set_env_var "$env_file" SYNAPSE_HEADSCALE_DOMAIN "$HEADSCALE_DOMAIN"
+        fi
         # SYNAPSE_PUBLIC_IP (v1.6.6+) — required for the per-deployment
         # custom-domain DNS verification + auto-config flow. Reuse the
         # IP we already detected above when --no-tls; otherwise probe

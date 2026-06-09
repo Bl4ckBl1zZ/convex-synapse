@@ -73,6 +73,11 @@ type agentRegisterReq struct {
 	SSHPubkey   string `json:"sshPubkey,omitempty"`
 	SSHUser     string `json:"sshUser,omitempty"` // default "synapse-deployer"
 	SSHPort     *int   `json:"sshPort,omitempty"` // default 22
+	// PublicIP (the box's public IPv4) lets the control plane resolve the
+	// host's geo (flag / city / region) for the topology. install-agent.sh
+	// detects it at register time. Empty → geo stays unresolved (the card
+	// falls back to the free-form region label).
+	PublicIP string `json:"publicIp,omitempty"`
 	// v1.18 Phase 3: PEM-encoded ed25519 private key the agent generated
 	// on the VPS. Sent ONCE here over HTTPS; Synapse encrypts via
 	// crypto.SecretBox + persists in hosts.ssh_privkey_encrypted. Never
@@ -198,9 +203,11 @@ func (h *AgentsHandler) register(w http.ResponseWriter, r *http.Request) {
 			       ssh_pubkey   = NULLIF($3, ''),
 			       ssh_user     = $4,
 			       ssh_port     = $5,
-			       is_remote    = TRUE
+			       is_remote    = TRUE,
+			       public_ip    = COALESCE(NULLIF($6, ''), public_ip)
 			 WHERE id = $1
-		`, hostID, strings.TrimSpace(req.TailnetAddr), strings.TrimSpace(req.SSHPubkey), sshUser, sshPort); err != nil {
+		`, hostID, strings.TrimSpace(req.TailnetAddr), strings.TrimSpace(req.SSHPubkey), sshUser, sshPort,
+			strings.TrimSpace(req.PublicIP)); err != nil {
 			logErr("apply remote host fields on register", err)
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to register agent")
 			return

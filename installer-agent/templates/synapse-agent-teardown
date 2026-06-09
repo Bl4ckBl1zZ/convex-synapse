@@ -50,8 +50,14 @@ log "ssh plumbing removed"
 # shellcheck disable=SC2016  # $1 is the INNER bash's positional arg, not ours
 nohup setsid bash -c '
   sleep 5
-  userdel -r synapse-agent >/dev/null 2>&1 || true
-  userdel -r "$1"          >/dev/null 2>&1 || true
+  # Kill any lingering processes first, then force-remove. -f is required for
+  # the SSH user ($1 = synapse-deployer): the teardown ran AS that user via
+  # the wrapper, so a plain `userdel` refuses ("currently used by process").
+  pkill -KILL -u synapse-agent  >/dev/null 2>&1 || true
+  pkill -KILL -u "$1"           >/dev/null 2>&1 || true
+  sleep 1
+  userdel -rf synapse-agent >/dev/null 2>&1 || true
+  userdel -rf "$1"          >/dev/null 2>&1 || true
 ' _ "$SSH_USER" >/dev/null 2>&1 &
 log "user removal scheduled"
 

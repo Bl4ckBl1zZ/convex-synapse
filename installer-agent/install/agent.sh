@@ -142,6 +142,11 @@ agent::register() {
     docker_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
     local host_name
     host_name="$(hostname 2>/dev/null || echo unknown)"
+    # Public IPv4 — lets the control plane resolve the host's geo (flag /
+    # city / region) for the topology. Best-effort: empty if offline.
+    local public_ip
+    public_ip="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null \
+        || curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null || echo '')"
 
     # v1.18 Phase 3: capture the per-host SSH private key ONCE for the
     # register payload. Synapse encrypts it via crypto.SecretBox and
@@ -163,6 +168,7 @@ agent::register() {
         --arg sshPubkey     "$pubkey" \
         --arg sshPrivkey    "$privkey_content" \
         --arg sshUser       "$ssh_user" \
+        --arg publicIp      "$public_ip" \
         '{token: $token,
           hostname: $hostname,
           os: $os,
@@ -172,7 +178,8 @@ agent::register() {
           tailnetAddr: $tailnetAddr,
           sshPubkey: $sshPubkey,
           sshPrivkey: $sshPrivkey,
-          sshUser: $sshUser}')"
+          sshUser: $sshUser,
+          publicIp: $publicIp}')"
 
     # Drop the plaintext from the shell env as soon as jq has consumed
     # it. jq's --arg embeds the value into $payload (JSON-escaped) — we

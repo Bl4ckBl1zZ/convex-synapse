@@ -123,20 +123,20 @@ func (h *TopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		replicaCounts = map[string]int{}
 	}
 
-	// Single-host today: derive the host metadata from SYNAPSE_PUBLIC_*
-	// env values. Future multi-VPS will produce N rows here.
-	host := h.buildPrimaryHost(r.Context())
-
-	// Wire deployments into the host. Adopted deployments don't live on
-	// the Synapse VPS, so they'd go under a separate "Adopted" pseudo-
-	// host if the project has any — kept inline below for clarity.
+	// Host-aware since Remote Hosts (v1.18): build one column per distinct
+	// host the project's deployments live on. The self-host's card is
+	// env/geo-derived; a remote host comes from its registry row (with geo
+	// from the public IP the agent reported, when present). Adopted
+	// deployments go under a separate "External" pseudo-host.
 	//
-	// Why we rewrite DeploymentURL before mapping: the DB stores the
-	// internal loopback form ("http://127.0.0.1:<port>") so the host
-	// healthcheck worker can reach the container. The topology card
-	// must show the PUBLIC form (wildcard / custom-domain / etc) so
-	// it's consistent with the deployments list above. Same rewrite
-	// list_deployments does — we just borrow the helper.
+	// DeploymentURL is rewritten to its PUBLIC form before mapping (the DB
+	// stores the internal loopback form for the healthcheck worker) — same
+	// rewrite list_deployments does.
+	primary := h.buildPrimaryHost(r.Context())
+	remoteMeta := h.loadHostMeta(r.Context(), deployments)
+	remoteCols := map[string]*topologyHost{} // keyed by deployments.host_id
+	var remoteOrder []string
+
 	var adopted []topologyDeployment
 	for _, d := range deployments {
 		if h.Projects != nil && h.Projects.Deployments != nil {
@@ -147,13 +147,32 @@ func (h *TopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			adopted = append(adopted, td)
 			continue
 		}
-		bumpStats(&host, td.Status)
-		host.Deployments = append(host.Deployments, td)
+		// A remote host (non-self) gets its own column; the self-host — or an
+		// unknown/missing host_id — falls back to the primary card.
+		if meta, ok := remoteMeta[d.HostID]; ok && !meta.isSelf {
+			col := remoteCols[d.HostID]
+			if col == nil {
+				hc := h.buildRemoteHost(r.Context(), meta)
+				col = &hc
+				remoteCols[d.HostID] = col
+				remoteOrder = append(remoteOrder, d.HostID)
+			}
+			bumpStats(col, td.Status)
+			col.Deployments = append(col.Deployments, td)
+			continue
+		}
+		bumpStats(&primary, td.Status)
+		primary.Deployments = append(primary.Deployments, td)
 	}
 
 	resp := topologyResp{}
-	if len(host.Deployments) > 0 || len(adopted) == 0 {
-		resp.Hosts = append(resp.Hosts, host)
+	// Primary first — shown when it has deployments, or when there's nothing
+	// else to show (keeps the empty-state "add another host" hint).
+	if len(primary.Deployments) > 0 || (len(remoteCols) == 0 && len(adopted) == 0) {
+		resp.Hosts = append(resp.Hosts, primary)
+	}
+	for _, id := range remoteOrder {
+		resp.Hosts = append(resp.Hosts, *remoteCols[id])
 	}
 	if len(adopted) > 0 {
 		adoptedHost := topologyHost{
@@ -169,6 +188,92 @@ func (h *TopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// hostMeta is the registry metadata the topology needs to build a remote
+// host's column.
+type hostMeta struct {
+	id       string
+	name     string
+	isSelf   bool
+	publicIP string
+	region   string
+	provider string
+	tailnet  string
+}
+
+// loadHostMeta loads registry metadata for every distinct host referenced by
+// the project's non-adopted deployments, so each host can get its own column.
+func (h *TopologyHandler) loadHostMeta(ctx context.Context, deployments []models.Deployment) map[string]hostMeta {
+	ids := map[string]struct{}{}
+	for _, d := range deployments {
+		if !d.Adopted && d.HostID != "" {
+			ids[d.HostID] = struct{}{}
+		}
+	}
+	out := map[string]hostMeta{}
+	if len(ids) == 0 {
+		return out
+	}
+	list := make([]string, 0, len(ids))
+	for id := range ids {
+		list = append(list, id)
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id::text, name, is_synapse_host,
+		       COALESCE(public_ip::text, ''), COALESCE(region, ''),
+		       COALESCE(provider, ''), COALESCE(tailnet_addr, '')
+		  FROM hosts WHERE id::text = ANY($1)
+	`, list)
+	if err != nil {
+		logErr("topology: load host meta", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m hostMeta
+		if err := rows.Scan(&m.id, &m.name, &m.isSelf, &m.publicIP, &m.region, &m.provider, &m.tailnet); err != nil {
+			logErr("topology: scan host meta", err)
+			return out
+		}
+		out[m.id] = m
+	}
+	return out
+}
+
+// buildRemoteHost builds a topology column for a remote host from its registry
+// row, resolving geo from the public IP the agent reported (when present —
+// until then the card shows the host name + free-form region label).
+func (h *TopologyHandler) buildRemoteHost(ctx context.Context, m hostMeta) topologyHost {
+	ip := m.publicIP
+	if ip == "" {
+		ip = m.tailnet
+	}
+	host := topologyHost{
+		ID:          m.id,
+		Name:        m.name,
+		IP:          ip,
+		Region:      m.region,
+		Provider:    m.provider,
+		IsPrimary:   false,
+		Deployments: []topologyDeployment{},
+	}
+	if h.Geo != nil && m.publicIP != "" {
+		gctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if info, err := h.Geo.Lookup(gctx, m.publicIP); err == nil {
+			host.Country = info.Country
+			host.CountryFlag = info.CountryFlag
+			host.City = info.City
+			if info.Region != "" {
+				host.Region = info.Region
+			}
+			if info.Provider != "" {
+				host.Provider = info.Provider
+			}
+		}
+	}
+	return host
 }
 
 func bumpStats(host *topologyHost, status string) {
@@ -191,7 +296,8 @@ func (h *TopologyHandler) loadDeployments(ctx context.Context, projectID string)
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, project_id, name, deployment_type, status,
 		       deployment_url, is_default, reference, creator_user_id, created_at,
-		       adopted, ha_enabled, replica_count, host_port, last_deploy_at
+		       adopted, ha_enabled, replica_count, host_port, last_deploy_at,
+		       host_id::text
 		  FROM deployments
 		 WHERE project_id = $1 AND status <> 'deleted'
 		 ORDER BY created_at ASC
@@ -203,13 +309,16 @@ func (h *TopologyHandler) loadDeployments(ctx context.Context, projectID string)
 	var out []models.Deployment
 	for rows.Next() {
 		var d models.Deployment
-		var url, ref, creator *string
+		var url, ref, creator, hostID *string
 		var hostPort *int
 		var lastDeploy *time.Time
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Name, &d.DeploymentType, &d.Status,
 			&url, &d.IsDefault, &ref, &creator, &d.CreatedAt, &d.Adopted, &d.HAEnabled, &d.ReplicaCount,
-			&hostPort, &lastDeploy); err != nil {
+			&hostPort, &lastDeploy, &hostID); err != nil {
 			return nil, err
+		}
+		if hostID != nil {
+			d.HostID = *hostID
 		}
 		if url != nil {
 			d.DeploymentURL = *url
