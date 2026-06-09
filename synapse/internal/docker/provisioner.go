@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -238,8 +239,14 @@ func (c *Client) MigrateSnapshot(ctx context.Context, spec SnapshotMigrationSpec
 		return errors.New("snapshot migration: no target URLs")
 	}
 
+	// The convex CLI refuses to run outside "a Convex app" (package.json
+	// with convex in dependencies, in the cwd) — a minimal stub satisfies
+	// it. Same prologue as the backup export script; without it newer
+	// CLI versions exit 1 before ever contacting the backend.
 	script := `
 set -eu
+mkdir -p /work && cd /work
+printf '{"dependencies":{"convex":"*"}}' > package.json
 mkdir -p /backup
 CONVEX_SELF_HOSTED_URL="$SOURCE_CONVEX_SELF_HOSTED_URL" \
 CONVEX_SELF_HOSTED_ADMIN_KEY="$SOURCE_CONVEX_SELF_HOSTED_ADMIN_KEY" \
@@ -324,11 +331,17 @@ func (c *Client) migrationLogs(ctx context.Context, containerID string, spec Sna
 		return "could not read migration logs: " + err.Error()
 	}
 	defer rc.Close()
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, rc)
-	out := buf.String()
+	// Demux the stdcopy-multiplexed stream — raw copies carry binary
+	// frame headers (NUL bytes) that Postgres TEXT columns reject.
+	var stdout, stderr bytes.Buffer
+	_, _ = stdcopy.StdCopy(&stdout, &stderr, rc)
+	out := stdout.String()
+	if stderr.Len() > 0 {
+		out += "\n" + stderr.String()
+	}
 	out = strings.ReplaceAll(out, spec.SourceAdminKey, "[redacted]")
 	out = strings.ReplaceAll(out, spec.TargetAdminKey, "[redacted]")
+	out = strings.ToValidUTF8(strings.ReplaceAll(out, "\x00", ""), "")
 	if len(out) > 4000 {
 		out = out[len(out)-4000:]
 	}

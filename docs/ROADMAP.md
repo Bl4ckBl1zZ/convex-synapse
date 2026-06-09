@@ -1,7 +1,7 @@
 # Roadmap
 
-Current test inventory as of 2026-06-09: 729 Go test functions (582
-integration in `internal/test`), 143 Playwright e2e tests across 43 specs,
+Current test inventory as of 2026-06-09: 737 Go test functions (590
+integration in `internal/test`), 144 Playwright e2e tests across 44 specs,
 and 396 bats cases. Historical milestone counts below are left as per-PR
 deltas, not the current totals.
 
@@ -157,6 +157,24 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
 
 ### ✅ Shipped this milestone
 
+- [x] **Per-deployment snapshot backups (v1.25)** — the self-hosted answer
+  to Cloud's Pro-paywalled Backups page (gap 4 of 4 from the Convex Cloud
+  comparison; closes the wave). A backup is a REAL `npx convex export`
+  zip, produced by a transient node container on the deployments network
+  (same machinery as upgrade_to_ha) and landed on the shared
+  `synapse-backups` volume; restore is `convex import --replace`
+  (destructive, admin-gated, confirmed in the UI). Export/restore ride
+  the provisioning job queue (kinds `backup`/`restore`, migration 000035);
+  daily scheduling + retention pruning run in an advisory-locked sweeper.
+  Surface: list/create/download(stream)/restore/delete +
+  `backup_settings` under `/v1/deployments/{name}`, BackupsPanel on the
+  deployment row. Fixed along the way: the convex CLI now requires a
+  package.json-with-convex cwd (MigrateSnapshot had the same latent bug —
+  patched there too), and Docker's multiplexed log stream needs stdcopy
+  demuxing before its NUL-laden bytes hit a Postgres TEXT column. Tests:
+  +8 Go integration, +1 Playwright that runs the REAL export+restore
+  end-to-end. Compose: new fixed-name `synapse-backups` volume mounted at
+  /backups.
 - [x] **Per-deployment resource limits (v1.25)** — the self-hosted answer
   to Cloud's deployment classes. `create_deployment` accepts optional
   `cpus` (0.1–64, fractions) + `memoryMb` (128–1 TiB) that land in
@@ -287,9 +305,11 @@ focus on RBAC + API stability + picker polish:
 - **OAuth / SSO via OIDC** (M-L) — was on the list. Picked up in a
   later milestone. Synapse stays email+password JWT until then;
   enterprise SSO is the next big request once RBAC lands.
-- **Backup follow-ups** (S each) — cron-style scheduled backups,
-  retention policy. Operators wrap `setup.sh --backup --to-s3=...`
-  in their own cron until then.
+- **Backup follow-ups** — ~~cron-style scheduled backups, retention
+  policy~~ shipped per-deployment in v1.25 (daily schedule + retention
+  via the dashboard). Remaining: instance-level scheduled `setup.sh
+  --backup --to-s3=...` (operators wrap it in their own cron until then)
+  and S3 offload for per-deployment archives.
 - **Kubernetes provisioner** (L) — alternative to Docker; Helm
   chart depends on it. Both deferred until there's a documented
   k8s-only operator asking.

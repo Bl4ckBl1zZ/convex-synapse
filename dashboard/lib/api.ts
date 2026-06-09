@@ -140,6 +140,24 @@ export type Deployment = {
   // Resource limits (v1.25+). Absent = unlimited.
   cpus?: number;
   memoryMb?: number;
+  // Backup policy (v1.25+). Present on GET-by-name responses.
+  backupSchedule?: "none" | "daily";
+  backupRetention?: number;
+};
+
+// One snapshot archive of a deployment (v1.25+). A real `npx convex
+// export` zip stored server-side; restore = `convex import --replace`
+// (destructive). requestedBy is empty for scheduler-minted backups.
+export type DeploymentBackup = {
+  id: string;
+  deploymentId: string;
+  status: "pending" | "running" | "complete" | "failed";
+  sizeBytes?: number;
+  error?: string;
+  requestedBy?: string;
+  createTime: string;
+  completedAt?: string;
+  restoredAt?: string;
 };
 
 // RemoteSetupBundle is the one-click "Setup remote install" payload
@@ -1945,6 +1963,58 @@ export const api = {
         `/v1/deployments/${encodeURIComponent(name)}/update_resources`,
         { method: "POST", body },
       );
+    },
+    // Per-deployment snapshot backups (v1.25+). Export/restore run async
+    // on the server's job queue — poll list() until the row settles.
+    backups: {
+      list(name: string): Promise<DeploymentBackup[]> {
+        return request<DeploymentBackup[]>(
+          `/v1/deployments/${encodeURIComponent(name)}/backups`,
+        );
+      },
+      create(name: string): Promise<DeploymentBackup> {
+        return request<DeploymentBackup>(
+          `/v1/deployments/${encodeURIComponent(name)}/backups`,
+          { method: "POST", body: {} },
+        );
+      },
+      restore(name: string, id: string): Promise<{ ok: boolean; backupId: string }> {
+        return request<{ ok: boolean; backupId: string }>(
+          `/v1/deployments/${encodeURIComponent(name)}/backups/${encodeURIComponent(id)}/restore`,
+          { method: "POST", body: {} },
+        );
+      },
+      delete(name: string, id: string): Promise<{ ok: boolean }> {
+        return request<{ ok: boolean }>(
+          `/v1/deployments/${encodeURIComponent(name)}/backups/${encodeURIComponent(id)}/delete`,
+          { method: "POST", body: {} },
+        );
+      },
+      // The download needs the Authorization header, which a plain <a>
+      // can't carry — fetch the zip as a Blob and let the caller anchor it.
+      async download(name: string, id: string): Promise<Blob> {
+        const headers: Record<string, string> = {};
+        const token = getAccessToken();
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await fetch(
+          `${resolveBaseURL()}/v1/deployments/${encodeURIComponent(name)}/backups/${encodeURIComponent(id)}/download`,
+          { headers, cache: "no-store" },
+        );
+        if (!res.ok) {
+          throw new ApiError(res.status, "download_failed", "Could not download the backup archive");
+        }
+        return res.blob();
+      },
+      updateSettings(
+        name: string,
+        schedule: "none" | "daily",
+        retention: number,
+      ): Promise<{ backupSchedule: string; backupRetention: number }> {
+        return request<{ backupSchedule: string; backupRetention: number }>(
+          `/v1/deployments/${encodeURIComponent(name)}/backup_settings`,
+          { method: "POST", body: { schedule, retention } },
+        );
+      },
     },
     // Deployment-scoped tokens (scope=deployment). Strictest scope —
     // bearer can only act on this exact deployment.

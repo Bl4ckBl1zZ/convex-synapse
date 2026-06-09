@@ -233,6 +233,12 @@ services:
       # installer, so the relative ./install-agent.sh resolves next to
       # this compose file.
       - ./install-agent.sh:/install-agent.sh:ro
+      # Per-deployment snapshot backups (v1.25+). The transient CLI
+      # containers the backend spawns bind the SAME named volume (fixed
+      # name, no compose project prefix) and write the zips; the api
+      # streams downloads + prunes retention through this mount. Path
+      # must agree with SYNAPSE_BACKUP_DIR (default /backups).
+      - synapse-backups:/backups
     extra_hosts:
       # host-gateway is a docker 20.10+ magic alias the daemon expands
       # at container-create time to the host's bridge IP. Lets the
@@ -504,6 +510,10 @@ volumes:
   synapse-caddy-data:
   synapse-caddy-config:
   synapse-headscale-data:
+  # Fixed name (no project prefix): the backend's transient backup/restore
+  # containers bind this volume by literal name via the Docker SDK.
+  synapse-backups:
+    name: synapse-backups
 
 networks:
   synapse-network:

@@ -53,6 +53,17 @@ export function IconKey(props: Props) {
   );
 }
 
+// Archive box — backups panel.
+export function IconArchive(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+      <line x1="10" y1="12" x2="14" y2="12" />
+    </Svg>
+  );
+}
+
 // Globe — custom domains panel.
 export function IconGlobe(props: Props) {
   return (

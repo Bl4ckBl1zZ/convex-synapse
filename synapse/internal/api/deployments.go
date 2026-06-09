@@ -131,6 +131,11 @@ type DeploymentsHandler struct {
 	PublicURL    string
 	ProxyEnabled bool
 
+	// BackupDir is this process's mount of the synapse-backups volume
+	// (v1.25+). Download streams + delete pruning read it; empty
+	// disables the backups surface (503 backups_not_configured).
+	BackupDir string
+
 	// BaseDomain (v1.0+) is the wildcard subdomain Synapse provisions
 	// per-deployment URLs under: when set, deployment URLs become
 	// "https://<name>.<BaseDomain>" instead of "<PublicURL>/d/<name>".
@@ -920,6 +925,13 @@ func (h *DeploymentsHandler) Routes() chi.Router {
 		r.Post("/delete", h.deleteDeployment)
 		r.Post("/restart", h.restartDeployment)
 		r.Post("/update_resources", h.updateResources)
+		// Per-deployment snapshot backups (v1.25+, handlers in backups.go).
+		r.Get("/backups", h.listBackups)
+		r.Post("/backups", h.createBackup)
+		r.Get("/backups/{backupID}/download", h.downloadBackup)
+		r.Post("/backups/{backupID}/restore", h.restoreBackup)
+		r.Post("/backups/{backupID}/delete", h.deleteBackup)
+		r.Post("/backup_settings", h.updateBackupSettings)
 		r.Get("/auth", h.deploymentAuth)
 		r.Get("/cli_credentials", h.deploymentCLICredentials)
 		r.Get("/backend_version", h.getBackendVersion)
@@ -1073,7 +1085,7 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 		       d.ha_enabled, d.replica_count, d.last_deploy_at,
 		       d.host_id::text, h.name, h.tailnet_addr, h.is_remote,
 		       COALESCE(h.ssh_user, ''), COALESCE(h.ssh_port, 22),
-		       d.cpus, d.memory_mb,
+		       d.cpus, d.memory_mb, d.backup_schedule, d.backup_retention,
 		       p.id, p.team_id, p.name, p.slug, p.is_demo, p.created_at,
 		       t.id, t.name, t.slug, t.creator_user_id, t.default_region, t.suspended, t.created_at
 		  FROM deployments d
@@ -1089,7 +1101,7 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 		&d.HAEnabled, &d.ReplicaCount, &d.LastDeployAt,
 		&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote,
 		&d.HostSSHUser, &d.HostSSHPort,
-		&d.CPUs, &d.MemoryMB,
+		&d.CPUs, &d.MemoryMB, &d.BackupSchedule, &d.BackupRetention,
 		&p.ID, &p.TeamID, &p.Name, &p.Slug, &p.IsDemo, &p.CreatedAt,
 		&t.ID, &t.Name, &t.Slug, &t.CreatorUserID, &t.DefaultRegion, &t.Suspended, &t.CreatedAt,
 	)

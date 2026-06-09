@@ -132,6 +132,25 @@ type Deployment struct {
 	// HostConfig.Resources. nil = unlimited (every pre-v1.25 deployment).
 	CPUs     *float64 `json:"cpus,omitempty"`
 	MemoryMB *int     `json:"memoryMb,omitempty"`
+	// Backup policy (v1.25+, migration 000035). Schedule is 'none' or
+	// 'daily'; Retention bounds how many complete backups the sweeper
+	// keeps. Populated by loadDeployment (GET by name) only.
+	BackupSchedule  string `json:"backupSchedule,omitempty"`
+	BackupRetention int    `json:"backupRetention,omitempty"`
+}
+
+// DeploymentBackup is one snapshot archive of a deployment (v1.25+).
+// file_path never leaves the server — downloads stream through the API.
+type DeploymentBackup struct {
+	ID           string     `json:"id"`
+	DeploymentID string     `json:"deploymentId"`
+	Status       string     `json:"status"` // pending | running | complete | failed
+	SizeBytes    *int64     `json:"sizeBytes,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	RequestedBy  string     `json:"requestedBy,omitempty"` // empty = the daily scheduler
+	CreatedAt    time.Time  `json:"createTime"`
+	CompletedAt  *time.Time `json:"completedAt,omitempty"`
+	RestoredAt   *time.Time `json:"restoredAt,omitempty"`
 }
 
 // DeploymentReplicaStatus enumerates the per-replica lifecycle states.

@@ -226,6 +226,10 @@ type SetupOpts struct {
 	// fallback (SYNAPSE_ALERT_WEBHOOK_URL) the alert_settings handler
 	// reports as source="env" when no DB row exists.
 	AlertWebhookURL string
+	// BackupDir mirrors api.RouterDeps.BackupDir + provisioner.Config.
+	// BackupDir. Empty (default) → a fresh t.TempDir(), so backup tests
+	// just work and everything is cleaned with the test.
+	BackupDir string
 	// Docker overrides the default FakeDocker in both the API router and
 	// provisioner worker. Gated real-backend e2e tests pass a
 	// *dockerprov.Client here; normal tests leave it nil.
@@ -445,6 +449,9 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 	}
 
 	jwt := auth.NewJWTIssuer([]byte(jwtSecret), 15*time.Minute, 24*time.Hour)
+	if opts.BackupDir == "" {
+		opts.BackupDir = t.TempDir()
+	}
 	fake := NewFakeDocker()
 	var dockerForRouter api.Provisioner = fake
 	var dockerForWorker provisioner.Provisioner = fake
@@ -479,6 +486,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		GitHubRepo:            opts.GitHubRepo,
 		GitHubAPIBase:         opts.GitHubAPIBase,
 		AlertWebhookURL:       opts.AlertWebhookURL,
+		BackupDir:             opts.BackupDir,
 		PublicIP:              opts.PublicIP,
 		HostDomainResolver:    opts.HostDomainResolver,
 		DomainsResolver:       opts.DomainsResolver,
@@ -571,10 +579,15 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 	if sm, ok := dockerForWorker.(provisioner.SnapshotMigrator); ok {
 		snapshotMigrator = sm
 	}
+	var backupRunner provisioner.BackupRunner = fake
+	if br, ok := dockerForWorker.(provisioner.BackupRunner); ok {
+		backupRunner = br
+	}
 	pworker := &provisioner.Worker{
 		DB:               pool,
 		Docker:           dockerForWorker,
 		SnapshotMigrator: snapshotMigrator,
+		Backups:          backupRunner,
 		Config: provisioner.Config{
 			PollInterval:          50 * time.Millisecond,
 			JobTimeout:            jobTimeout,
@@ -585,6 +598,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 			PublicURL:             opts.PublicURL,
 			ProxyEnabled:          opts.ProxyEnabled,
 			BaseDomain:            opts.BaseDomain,
+			BackupDir:             opts.BackupDir,
 			// Mirror the api-side apply gate default. runReconcile re-reads
 			// apply_settings (DB wins); with no row, tests that pass
 			// ApplyEnabled:true via env must still let reconcile execute.
@@ -819,6 +833,8 @@ func randHex(n int) string {
 // test override behavior (e.g. force Provision to fail).
 type FakeDocker struct {
 	ProvisionFn        func(ctx context.Context, spec dockerprov.DeploymentSpec) (*dockerprov.DeploymentInfo, error)
+	ExportBackupFn     func(ctx context.Context, spec dockerprov.BackupExportSpec) error
+	ImportBackupFn     func(ctx context.Context, spec dockerprov.BackupImportSpec) error
 	DestroyFn          func(ctx context.Context, name string) error
 	DestroyReplicaFn   func(ctx context.Context, name string, replicaIndex int, keepVolume bool) error
 	StopFn             func(ctx context.Context, name string) error
@@ -841,6 +857,12 @@ type FakeDocker struct {
 	}
 	Stopped    []string
 	Migrations []dockerprov.SnapshotMigrationSpec
+	// Exported / Imported record the backup runner calls (v1.25+). The
+	// default ExportBackup is record-only — it writes NO archive, so the
+	// worker's stat check fails the backup; happy-path tests set
+	// ExportBackupFn to drop a file at the spec's RelPath.
+	Exported []dockerprov.BackupExportSpec
+	Imported []dockerprov.BackupImportSpec
 	// Recreated is the ordered list of specs the handler asked us to
 	// recreate. Tests assert on this for the custom-domains restart-on-
 	// add/delete/verify flow. Reads + writes are mutex-guarded so tests
@@ -919,6 +941,44 @@ func (f *FakeDocker) RestartedNames() []string {
 	defer f.mu.Unlock()
 	out := make([]string, len(f.Restarted))
 	copy(out, f.Restarted)
+	return out
+}
+
+func (f *FakeDocker) ExportBackup(ctx context.Context, spec dockerprov.BackupExportSpec) error {
+	f.mu.Lock()
+	f.Exported = append(f.Exported, spec)
+	f.mu.Unlock()
+	if f.ExportBackupFn != nil {
+		return f.ExportBackupFn(ctx, spec)
+	}
+	return nil
+}
+
+func (f *FakeDocker) ImportBackup(ctx context.Context, spec dockerprov.BackupImportSpec) error {
+	f.mu.Lock()
+	f.Imported = append(f.Imported, spec)
+	f.mu.Unlock()
+	if f.ImportBackupFn != nil {
+		return f.ImportBackupFn(ctx, spec)
+	}
+	return nil
+}
+
+// ExportedSpecs / ImportedSpecs are mutex-guarded snapshots — the worker
+// goroutine may still be appending while a test polls.
+func (f *FakeDocker) ExportedSpecs() []dockerprov.BackupExportSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]dockerprov.BackupExportSpec, len(f.Exported))
+	copy(out, f.Exported)
+	return out
+}
+
+func (f *FakeDocker) ImportedSpecs() []dockerprov.BackupImportSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]dockerprov.BackupImportSpec, len(f.Imported))
+	copy(out, f.Imported)
 	return out
 }
 

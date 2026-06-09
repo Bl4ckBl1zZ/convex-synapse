@@ -101,6 +101,12 @@ type Config struct {
 	ProxyEnabled bool
 	BaseDomain   string
 
+	// BackupDir is where the synapse-backups volume is mounted in THIS
+	// process (compose default /backups; tests use a temp dir). The
+	// worker stats freshly-exported archives here to record size_bytes
+	// and to refuse "successful" exports that produced no file.
+	BackupDir string
+
 	// ApplyEnabled is the .env default for the Cell Control Plane reconcile
 	// gate (SYNAPSE_APPLY_ENABLED). It is ONLY a fallback: the runReconcile
 	// executor re-reads the apply_settings table at execution time (DB wins
@@ -174,8 +180,12 @@ type Worker struct {
 	DB               *pgxpool.Pool
 	Docker           Provisioner
 	SnapshotMigrator SnapshotMigrator
-	Config           Config
-	Logger           *slog.Logger
+	// Backups runs snapshot export/import in transient CLI containers
+	// (kind='backup'/'restore' jobs, v1.25+). *dockerprov.Client
+	// implements it; nil fails those jobs with a clear error.
+	Backups BackupRunner
+	Config  Config
+	Logger  *slog.Logger
 
 	// Crypto, when non-nil, decrypts the per-deployment Postgres + S3
 	// secrets in deployment_storage. Required for HA deployments;
@@ -229,6 +239,8 @@ const (
 	jobKindProvision   = "provision"
 	jobKindUpgradeToHA = "upgrade_to_ha"
 	jobKindReconcile   = "reconcile"
+	jobKindBackup      = "backup"
+	jobKindRestore     = "restore"
 )
 
 // Enqueue inserts a 'provision' job for deploymentID. The caller is expected
@@ -292,6 +304,27 @@ func EnqueueReconcile(ctx context.Context, db queryRower, deploymentID, action, 
 		return 0, false, err
 	}
 	return id, true, nil
+}
+
+// EnqueueBackup inserts a snapshot-export job for an existing
+// deployment_backups row (v1.25+). The caller creates the row (status
+// 'pending', file_path set) in the same transaction.
+func EnqueueBackup(ctx context.Context, db Execer, deploymentID, backupID string) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO provisioning_jobs (deployment_id, kind, status, healthcheck_via_network, backup_id)
+		VALUES ($1, 'backup', 'pending', false, $2)
+	`, deploymentID, backupID)
+	return err
+}
+
+// EnqueueRestore inserts a snapshot-import job feeding the stored archive
+// back into the deployment (`convex import --replace` — destructive).
+func EnqueueRestore(ctx context.Context, db Execer, deploymentID, backupID string) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO provisioning_jobs (deployment_id, kind, status, healthcheck_via_network, backup_id)
+		VALUES ($1, 'restore', 'pending', false, $2)
+	`, deploymentID, backupID)
+	return err
 }
 
 // EnqueueUpgradeToHA inserts the long-running upgrade job. The caller stores
@@ -565,6 +598,10 @@ func (w *Worker) processOne(ctx context.Context, logger *slog.Logger, cfg Config
 		w.runUpgradeToHA(jobCtx, logger, cfg, job)
 	case jobKindReconcile:
 		w.runReconcile(jobCtx, logger, job)
+	case jobKindBackup:
+		w.runBackup(jobCtx, logger, job)
+	case jobKindRestore:
+		w.runRestore(jobCtx, logger, job)
 	default:
 		logger.Error("provisioner: unknown job kind",
 			"job_id", job.JobID, "deployment_id", job.DeploymentID, "kind", job.Kind)
@@ -624,6 +661,10 @@ type claimedJob struct {
 	// Resource limits (v1.25+, migration 000034). nil = unlimited.
 	CPUs     *float64
 	MemoryMB *int64
+
+	// BackupID links kind='backup'/'restore' jobs to their
+	// deployment_backups row. Empty for every other kind.
+	BackupID string
 }
 
 // Storage carries the per-deployment Postgres + S3 connection info that
@@ -669,6 +710,7 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 	var deploymentHostPort *int
 	var deploymentContainerID *string
 	var operationRunID, operationStepID *string
+	var backupID *string
 	err = tx.QueryRow(ctx, `
 		SELECT j.id, j.kind, j.deployment_id, j.replica_id::text,
 		       d.project_id::text, d.name, d.deployment_type,
@@ -677,7 +719,7 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 		       j.healthcheck_via_network,
 		       d.host_id::text, h.is_remote, COALESCE(h.tailnet_addr, ''), h.ssh_user, h.ssh_port,
 		       COALESCE(j.reconcile_action, ''), j.operation_run_id::text, j.operation_step_id::text,
-		       d.status, d.adopted, d.cpus, d.memory_mb
+		       d.status, d.adopted, d.cpus, d.memory_mb, j.backup_id::text
 		  FROM provisioning_jobs j
 		  JOIN deployments d ON d.id = j.deployment_id
 		  JOIN hosts       h ON h.id = d.host_id
@@ -693,13 +735,16 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 		&j.HealthcheckViaNetwork,
 		&j.HostID, &j.HostIsRemote, &j.HostTailnetAddr, &j.HostSSHUser, &j.HostSSHPort,
 		&j.ReconcileAction, &operationRunID, &operationStepID,
-		&j.DeploymentStatus, &j.Adopted, &j.CPUs, &j.MemoryMB)
+		&j.DeploymentStatus, &j.Adopted, &j.CPUs, &j.MemoryMB, &backupID)
 	_ = replicaID
 	if operationRunID != nil {
 		j.OperationRunID = *operationRunID
 	}
 	if operationStepID != nil {
 		j.OperationStepID = *operationStepID
+	}
+	if backupID != nil {
+		j.BackupID = *backupID
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return claimedJob{}, false

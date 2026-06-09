@@ -108,6 +108,12 @@ type Config struct {
 	// configured from the dashboard.
 	AlertWebhookURL string
 
+	// BackupDir is where the synapse-backups volume is mounted INSIDE the
+	// synapse-api container (compose default /backups). The API streams
+	// downloads and prunes retention from here; the transient CLI
+	// containers write archives to the same volume under their own mount.
+	BackupDir string
+
 	// HA configuration (v0.5+). Off by default — Synapse continues to
 	// behave exactly like v0.4 when SYNAPSE_HA_ENABLED is unset. When
 	// enabled, create_deployment accepts a `ha:true` flag in the body
@@ -320,6 +326,7 @@ func Load() (*Config, error) {
 		EmailFrom:             strings.TrimSpace(os.Getenv("SYNAPSE_EMAIL_FROM")),
 		HealthAutoRestart:     getEnvDefault("SYNAPSE_HEALTH_AUTO_RESTART", "") == "true",
 		AlertWebhookURL:       strings.TrimSpace(os.Getenv("SYNAPSE_ALERT_WEBHOOK_URL")),
+		BackupDir:             getEnvDefault("SYNAPSE_BACKUP_DIR", "/backups"),
 
 		HAEnabled:             getEnvDefault("SYNAPSE_HA_ENABLED", "") == "true",
 		BackendPostgresURL:    os.Getenv("SYNAPSE_BACKEND_POSTGRES_URL"),

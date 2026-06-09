@@ -105,6 +105,11 @@ type RouterDeps struct {
 	// wired in main.go (it hangs off the health worker, not the router).
 	AlertWebhookURL string
 
+	// BackupDir is this process's mount of the synapse-backups volume
+	// (SYNAPSE_BACKUP_DIR, v1.25+). The backups handlers stream downloads
+	// and prune archives through it; empty 503s the surface.
+	BackupDir string
+
 	// GitHubAPIBase is a test seam — defaults to https://api.github.com.
 	// Setting it (httptest.Server URL) lets integration tests stub the
 	// GitHub fetch without network.
@@ -316,6 +321,7 @@ func NewRouter(d RouterDeps) http.Handler {
 		Crypto:                d.Crypto,
 		BackendProbe:          d.BackendProbe,
 		ConvexEnv:             d.ConvexEnv,
+		BackupDir:             d.BackupDir,
 	}
 	// Per-deployment custom domains (v1.1+). Sub-routes mount under
 	// /v1/deployments/{name}/domains; the handler reuses the

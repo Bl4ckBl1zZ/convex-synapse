@@ -50,6 +50,11 @@ const (
 	// this catches the same wedges within a long-lived process. One node
 	// per tick; followers skip.
 	LockReconcileReaper int64 = 0xC0DE0005
+
+	// LockBackupSweeper guards the periodic backups.Sweeper tick (v1.25+):
+	// enqueue scheduled daily backups, prune retention, fail stale rows.
+	// One node per tick; followers skip.
+	LockBackupSweeper int64 = 0xC0DE0006
 )
 
 // WithTryAdvisoryLock attempts to acquire a session-level Postgres advisory

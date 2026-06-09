@@ -146,6 +146,16 @@ const (
 	// — absent keys mean unlimited.
 	ActionUpdateDeploymentResources = "updateDeploymentResources"
 
+	// Per-deployment snapshot backups (v1.25+, migration 000035).
+	// requestBackup/restoreBackup record the operator's intent (the
+	// export/import itself runs async on the job queue); restore is the
+	// destructive one (`convex import --replace`). Metadata carries
+	// {name, backupId} — never file paths.
+	ActionRequestBackup        = "requestBackup"
+	ActionRestoreBackup        = "restoreBackup"
+	ActionDeleteBackup         = "deleteBackup"
+	ActionUpdateBackupSettings = "updateBackupSettings"
+
 	// Instance alert settings (v1.25+, migration 000032). Deployment-down
 	// notification channels set/cleared from the dashboard's admin area;
 	// metadata carries {emailEnabled, webhookConfigured} — never the

@@ -20,6 +20,7 @@ import (
 	"github.com/Iann29/synapse/internal/alert"
 	"github.com/Iann29/synapse/internal/api"
 	"github.com/Iann29/synapse/internal/auth"
+	"github.com/Iann29/synapse/internal/backups"
 	"github.com/Iann29/synapse/internal/cells"
 	"github.com/Iann29/synapse/internal/config"
 	"github.com/Iann29/synapse/internal/convexenv"
@@ -402,6 +403,7 @@ func run() error {
 		// is unset, in which case /v1/admin/dns_credentials/cloudflare
 		// returns 503 crypto_not_configured.
 		ConvexEnv:          convexEnvClient,
+		BackupDir:          cfg.BackupDir,
 		DNSEnvelope:        dnsEnvelope,
 		Headscale:          headscaleClient,
 		HeadscaleServerURL: cfg.HeadscaleServerURL,
@@ -426,6 +428,7 @@ func run() error {
 			DB:               pool,
 			Docker:           dockerClient,
 			SnapshotMigrator: dockerClient,
+			Backups:          dockerClient,
 			Config: provisioner.Config{
 				PollInterval:          time.Second,
 				JobTimeout:            5 * time.Minute,
@@ -443,6 +446,7 @@ func run() error {
 				// .env default for the apply gate; runReconcile re-reads
 				// apply_settings (DB wins) at execution time.
 				ApplyEnabled: cfg.ApplyEnabled,
+				BackupDir:    cfg.BackupDir,
 			},
 			Logger:        logger,
 			ConvexEnv:     convexEnvClient,
@@ -452,6 +456,15 @@ func run() error {
 			DockerNetwork: cfg.DockerNetwork,
 		}
 		go pworker.Run(rootCtx)
+
+		// Backup sweeper (v1.25+): enqueue scheduled daily backups, prune
+		// retention, fail stale rows. Advisory-locked — one node per tick.
+		go (&backups.Sweeper{
+			DB:        pool,
+			BackupDir: cfg.BackupDir,
+			Interval:  10 * time.Minute,
+			Logger:    logger,
+		}).Run(rootCtx)
 	}
 
 	// Health worker — periodic reconciler that flips deployment rows to

@@ -1248,4 +1248,33 @@ export const ptBR: Record<string, string> = {
   "Apply (recreates container)": "Aplicar (recria o container)",
   "Applying...": "Aplicando...",
   "Could not resize deployment": "Não foi possível redimensionar o deployment",
+
+  // Per-deployment backups (v1.25) — BackupsPanel.
+  "Backups": "Backups",
+  "Manage backups for {deploymentName}": "Gerenciar backups de {deploymentName}",
+  "Back up now": "Fazer backup agora",
+  "A backup is a full Convex snapshot export (the same archive `npx convex export` produces), stored on this server. Restore replaces the deployment's data with the snapshot.":
+    "Um backup é um snapshot export completo do Convex (o mesmo arquivo que o `npx convex export` produz), guardado neste servidor. Restaurar substitui os dados do deployment pelo snapshot.",
+  "Backup action failed": "A ação de backup falhou",
+  "Could not load backups": "Não foi possível carregar os backups",
+  "No backups yet.": "Nenhum backup ainda.",
+  "(scheduled)": "(agendado)",
+  "restored {date}": "restaurado {date}",
+  "Download": "Baixar",
+  "Restore": "Restaurar",
+  "Restoring…": "Restaurando…",
+  "Restore backup from {date}": "Restaurar o backup de {date}",
+  "Delete backup from {date}": "Excluir o backup de {date}",
+  "Restore this backup? The deployment's CURRENT data is replaced wholesale with the snapshot from {date} — anything written since is lost. This cannot be undone.":
+    "Restaurar este backup? Os dados ATUAIS do deployment são substituídos por inteiro pelo snapshot de {date} — tudo que foi gravado depois é perdido. Isso não pode ser desfeito.",
+  "Delete this backup? The archive is removed from disk. This cannot be undone.":
+    "Excluir este backup? O arquivo é removido do disco. Isso não pode ser desfeito.",
+  "Could not download the backup archive": "Não foi possível baixar o arquivo de backup",
+  "Automatic backups": "Backups automáticos",
+  "Off": "Desligado",
+  "Daily": "Diário",
+  "daily": "diário",
+  "Keep last": "Manter os últimos",
+  "Daily backups run server-side; older complete backups beyond the retention count are pruned automatically.":
+    "Backups diários rodam no servidor; backups completos antigos além do limite de retenção são removidos automaticamente.",
 };

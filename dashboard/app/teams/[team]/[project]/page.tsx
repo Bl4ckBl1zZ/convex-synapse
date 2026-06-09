@@ -21,6 +21,7 @@ import { CellTopologyPanel } from "@/components/CellTopologyPanel";
 import { StateDriftPanel } from "@/components/StateDriftPanel";
 import { OperationRunsPanel } from "@/components/OperationRunsPanel";
 import { HostsPanel } from "@/components/HostsPanel";
+import { BackupsPanel } from "@/components/BackupsPanel";
 import { CliCredentialsPanel } from "@/components/CliCredentialsPanel";
 import { CustomDomainsPanel } from "@/components/CustomDomainsPanel";
 import { DeployKeysPanel } from "@/components/DeployKeysPanel";
@@ -773,6 +774,9 @@ await Promise.all([
                   <CliCredentialsPanel deploymentName={d.name} />
                   <DeployKeysPanel deploymentName={d.name} />
                   <CustomDomainsPanel deploymentName={d.name} />
+                  {!d.adopted && !d.hostIsRemote && (
+                    <BackupsPanel deploymentName={d.name} />
+                  )}
                 </div>
               </Card>
             );

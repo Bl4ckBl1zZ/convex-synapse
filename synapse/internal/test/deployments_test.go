@@ -60,6 +60,8 @@ type deploymentResp struct {
 	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
 	CPUs            *float64   `json:"cpus,omitempty"`
 	MemoryMB        *int       `json:"memoryMb,omitempty"`
+	BackupSchedule  string     `json:"backupSchedule,omitempty"`
+	BackupRetention int        `json:"backupRetention,omitempty"`
 }
 
 type deploymentAuthResp struct {
