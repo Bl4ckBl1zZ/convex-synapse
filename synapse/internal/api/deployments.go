@@ -1412,18 +1412,22 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 		}
 	} else {
 		var (
+			resolvedID string
 			hostName   string
 			hostStatus string
 			isRemote   bool
 			hasSSHKey  bool
 		)
+		// hostId accepts the UUID or the host's unique name (same id-or-name
+		// resolution as loadHost). Recapture the canonical id so the row we
+		// insert always stores the UUID, never the name the operator typed.
 		err := h.DB.QueryRow(r.Context(),
-			`SELECT name, status, is_remote, ssh_privkey_encrypted IS NOT NULL
-			   FROM hosts WHERE id::text = $1`, hostID,
-		).Scan(&hostName, &hostStatus, &isRemote, &hasSSHKey)
+			`SELECT id, name, status, is_remote, ssh_privkey_encrypted IS NOT NULL
+			   FROM hosts WHERE id::text = $1 OR name = $1`, hostID,
+		).Scan(&resolvedID, &hostName, &hostStatus, &isRemote, &hasSSHKey)
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusBadRequest, "host_not_found",
-				"No host with id "+hostID+" — register one via install-agent.sh first")
+				"No host "+hostID+" — register one via install-agent.sh first")
 			return
 		}
 		if err != nil {
@@ -1441,6 +1445,7 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 				"Host "+hostName+" has no SSH key on record — re-run install-agent.sh to repair")
 			return
 		}
+		hostID = resolvedID
 	}
 
 	// INSTANCE_SECRET is independent of name/port so we generate it once and

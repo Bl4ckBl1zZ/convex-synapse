@@ -75,6 +75,21 @@ fi
 argv=()
 _parse_argv "$cmd_string"
 
+# Teardown sentinel: when the operator deletes this host from the control
+# plane, Synapse central dispatches the single token "synapse-agent-teardown".
+# We hand off to the root-owned teardown script via one tightly-scoped
+# NOPASSWD sudoers rule (sudoers-synapse-deployer-teardown). This is a
+# separate, explicit escape hatch — the docker whitelist below is untouched
+# and still the only other thing this key can do.
+if [[ "${argv[0]:-}" == "synapse-agent-teardown" && ${#argv[@]} -eq 1 ]]; then
+    log_audit "teardown requested from ${SSH_CLIENT:-unknown}"
+    if [[ -n "${SYNAPSE_DEPLOYER_EXEC_TEST:-}" ]]; then
+        printf 'would-exec: sudo -n /usr/local/bin/synapse-agent-teardown\n'
+        exit 0
+    fi
+    exec sudo -n /usr/local/bin/synapse-agent-teardown
+fi
+
 if [[ "${argv[0]:-}" != "docker" ]]; then
     log_audit "refused: not a docker command from ${SSH_CLIENT:-unknown}: ${argv[*]}"
     echo "synapse-deployer-exec: only docker commands allowed" >&2

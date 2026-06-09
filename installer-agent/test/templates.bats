@@ -22,9 +22,13 @@ setup() {
     SVC_FILE="$INSTALLER_AGENT_TEMPLATES/synapse-agent.service"
     SSHD_FILE="$INSTALLER_AGENT_TEMPLATES/sshd-synapse.conf"
     EXEC_FILE="$INSTALLER_AGENT_TEMPLATES/synapse-deployer-exec"
+    TEARDOWN_FILE="$INSTALLER_AGENT_TEMPLATES/synapse-agent-teardown"
+    SUDOERS_FILE="$INSTALLER_AGENT_TEMPLATES/sudoers-synapse-deployer-teardown"
     [ -f "$SVC_FILE" ]
     [ -f "$SSHD_FILE" ]
     [ -f "$EXEC_FILE" ]
+    [ -f "$TEARDOWN_FILE" ]
+    [ -f "$SUDOERS_FILE" ]
 }
 
 # ---- synapse-agent.service ------------------------------------------
@@ -271,4 +275,80 @@ setup() {
         run "$EXEC_FILE"
     assert_success
     assert_output "would-exec: docker run -e X=it's busybox"
+}
+
+# ---- synapse-deployer-exec: teardown sentinel (gap 4) ---------------
+#
+# Deleting a host from the control plane dispatches the single token
+# "synapse-agent-teardown", which the wrapper hands to the root-owned
+# teardown script via the scoped NOPASSWD sudoers rule. The sentinel is
+# the ONLY non-docker thing the wrapper accepts, and only as a bare token.
+
+@test "synapse-deployer-exec: teardown sentinel hands off to sudo (TEST short-circuit)" {
+    SSH_ORIGINAL_COMMAND="synapse-agent-teardown" \
+        SYNAPSE_DEPLOYER_EXEC_TEST=1 \
+        run "$EXEC_FILE"
+    assert_success
+    assert_output --partial "would-exec: sudo -n /usr/local/bin/synapse-agent-teardown"
+}
+
+@test "synapse-deployer-exec: teardown sentinel with extra args is REFUSED" {
+    # Only the bare token is the sentinel; "synapse-agent-teardown --evil"
+    # must NOT escalate — it falls through to the docker gate and 99s.
+    SSH_ORIGINAL_COMMAND="synapse-agent-teardown --rm-rf /" run "$EXEC_FILE"
+    assert_failure 99
+    assert_output --partial "only docker commands allowed"
+}
+
+# ---- synapse-agent-teardown ----------------------------------------
+
+@test "synapse-agent-teardown: parses cleanly (bash -n)" {
+    run bash -n "$TEARDOWN_FILE"
+    assert_success
+}
+
+@test "synapse-agent-teardown: renders without leftover placeholders" {
+    local out
+    out="$(sed -e 's|{{SSH_USER}}|synapse-deployer|g' \
+               -e 's|{{INSTALL_DIR}}|/etc/synapse-agent|g' "$TEARDOWN_FILE")"
+    [[ "$out" != *'{{'* ]]
+}
+
+@test "synapse-agent-teardown: wipes the load-bearing footprint + self-destructs" {
+    local key
+    for key in 'synapse-agent.service' \
+               '/usr/local/bin/synapse-agent' \
+               '/etc/ssh/sshd_config.d/synapse-deployer.conf' \
+               '/usr/local/bin/synapse-deployer-exec' \
+               '/etc/sudoers.d/synapse-deployer-teardown' \
+               'userdel' \
+               'rm -f /usr/local/bin/synapse-agent-teardown'; do
+        run grep -F -- "$key" "$TEARDOWN_FILE"
+        if ! ((status == 0)); then
+            echo "teardown script missing: $key" >&2
+            return 1
+        fi
+    done
+}
+
+# ---- sudoers-synapse-deployer-teardown ------------------------------
+
+@test "sudoers rule: scoped NOPASSWD to exactly the teardown script" {
+    local out
+    out="$(sed -e 's|{{SSH_USER}}|synapse-deployer|g' "$SUDOERS_FILE")"
+    [[ "$out" != *'{{'* ]]
+    # Exactly one non-comment directive, scoped to the absolute script path.
+    run bash -c "sed -e 's|{{SSH_USER}}|synapse-deployer|g' '$SUDOERS_FILE' | grep -vE '^[[:space:]]*#' | grep -vE '^[[:space:]]*\$'"
+    assert_success
+    assert_output "synapse-deployer ALL=(root) NOPASSWD: /usr/local/bin/synapse-agent-teardown"
+}
+
+@test "sudoers rule: validates with visudo -cf when available" {
+    if ! command -v visudo >/dev/null 2>&1; then
+        skip "visudo not on PATH"
+    fi
+    local rendered="$BATS_TEST_TMPDIR/sudoers"
+    sed -e 's|{{SSH_USER}}|synapse-deployer|g' "$SUDOERS_FILE" > "$rendered"
+    run visudo -cf "$rendered"
+    assert_success
 }

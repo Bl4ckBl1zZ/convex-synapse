@@ -39,7 +39,7 @@ const desiredSync = {
 const desiredList = {
   name: "desired list",
   summary: "List active desired states (by project or host).",
-  usage: "synapse desired list (--project <id> | --host <id>) [--json]",
+  usage: "synapse desired list (--project <id> | --host <ref>) [--json]",
   async run(args, ctx) {
     const host = extractValueFlag(args, "host");
     let scope;
@@ -79,10 +79,10 @@ const desiredList = {
 const observedList = {
   name: "observed list",
   summary: "List a host's observed state (host facts + synapse-managed containers).",
-  usage: "synapse observed list --host <id> [--json]",
+  usage: "synapse observed list --host <ref> [--json]",
   async run(args, ctx) {
     const host = extractValueFlag(args, "host");
-    if (!host.value) throw new Error("Usage: synapse observed list --host <host-id>");
+    if (!host.value) throw new Error("Usage: synapse observed list --host <ref>");
     const observed = await ctx.api.hostObservedState(host.value);
     ctx.out.result({ hostId: host.value, count: observed.length, observed }, () => {
       ctx.out.table(
@@ -106,7 +106,7 @@ const observedList = {
 const driftRecompute = {
   name: "drift recompute",
   summary: "Recompute drift for a host / cell / project (diagnosis only).",
-  usage: "synapse drift recompute (--project <id> | --cell <id> | --host <id>) [--json]",
+  usage: "synapse drift recompute (--project <id> | --cell <id> | --host <ref>) [--json]",
   async run(args, ctx) {
     const { scope, id, rest } = resolveScope(ctx, args);
     if (rest.length > 0) throw new Error(`Unexpected argument: ${rest[0]}`);
@@ -119,7 +119,7 @@ const driftRecompute = {
 const driftLatest = {
   name: "drift latest",
   summary: "Show the latest drift report for a host / cell / project.",
-  usage: "synapse drift latest (--project <id> | --cell <id> | --host <id>) [--json]",
+  usage: "synapse drift latest (--project <id> | --cell <id> | --host <ref>) [--json]",
   async run(args, ctx) {
     const { scope, id, rest } = resolveScope(ctx, args);
     if (rest.length > 0) throw new Error(`Unexpected argument: ${rest[0]}`);
@@ -132,7 +132,7 @@ const driftLatest = {
 const reconcileDryRun = {
   name: "reconcile dry-run",
   summary: "Build a reconcile plan (dry-run only — applies nothing).",
-  usage: "synapse reconcile dry-run (--project <id> | --cell <id> | --host <id>) [--json]",
+  usage: "synapse reconcile dry-run (--project <id> | --cell <id> | --host <ref>) [--json]",
   description: `Builds a reconcile plan from current drift. Every step is planned/no-op/skipped; applyAllowed=false; nothing is sent to the agent.
 
 There is no apply mode. Passing --apply is an error.`,

@@ -134,6 +134,28 @@ func TestHosts_CreateListGet(t *testing.T) {
 	assertAuditEvent(t, h, audit.ActionCreateHost, admin.ID, audit.TargetHost, created.ID)
 }
 
+// TestHosts_ResolveByName covers gap 7: host-scoped endpoints accept the
+// host's unique name in place of its UUID (loadHost resolves id-or-name),
+// so the CLI / dashboard can address a host by its friendly name.
+func TestHosts_ResolveByName(t *testing.T) {
+	h := Setup(t)
+	admin := h.RegisterRandomUser() // first user = instance admin
+
+	var created models.Host
+	h.DoJSON(http.MethodPost, "/v1/hosts", admin.AccessToken,
+		map[string]any{"name": "vps-named", "region": "br"}, http.StatusCreated, &created)
+
+	// GET by NAME must resolve to the same host as GET by id.
+	var byName models.Host
+	h.DoJSON(http.MethodGet, "/v1/hosts/vps-named", admin.AccessToken, nil, http.StatusOK, &byName)
+	if byName.ID != created.ID {
+		t.Fatalf("resolve-by-name mismatch: got %s, want %s", byName.ID, created.ID)
+	}
+
+	// An unknown ref still 404s (no accidental match).
+	h.AssertStatus(http.MethodGet, "/v1/hosts/no-such-host", admin.AccessToken, nil, http.StatusNotFound)
+}
+
 func TestHosts_RequireInstanceAdmin(t *testing.T) {
 	h := Setup(t)
 	_ = h.RegisterRandomUser()         // first user = instance admin (not used here)

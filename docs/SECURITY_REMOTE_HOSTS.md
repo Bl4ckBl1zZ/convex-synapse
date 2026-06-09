@@ -46,6 +46,17 @@ shape.
   Compromise of one VPS does not let an attacker SSH into any
   *other* VPS.
 
+  > **One scoped sudo (host teardown).** synapse-deployer is otherwise
+  > a no-sudo account. The single exception: a `NOPASSWD` sudoers rule
+  > (`/etc/sudoers.d/synapse-deployer-teardown`) lets it run exactly one
+  > root-owned, argument-less script — `/usr/local/bin/synapse-agent-teardown`
+  > — reached via the wrapper's `synapse-agent-teardown` sentinel when the
+  > operator deletes the host. The script is root-owned and not writable by
+  > synapse-deployer, so a stolen key can at most trigger this VPS's *own*
+  > self-decommission (a wipe, not a takeover) — never a shell, and never
+  > reach another host. The sudoers rule is validated with `visudo -cf`
+  > before install so a bad render can't wedge sudo.
+
 - **Compromised non-deployer user on a remote VPS**. The
   synapse-agent observer runs as user `synapse-agent` (in the
   `docker` group). A separate non-root user. Even a root-level
@@ -279,11 +290,19 @@ PGPASSWORD=$PGPASSWORD psql -h localhost -U synapse -d synapse \
 #    (destroy + recreate — see REMOTE_HOSTS.md §Limitations).
 
 # 5. If the VPS is still accessible (i.e. you're decommissioning
-#    a legitimate host, not responding to compromise), `apt
-#    purge tailscale && systemctl disable --now synapse-agent &&
-#    rm -rf /etc/synapse-agent /var/lib/synapse-agent` to leave
-#    no trace.
+#    a legitimate host, not responding to compromise), wipe the
+#    agent footprint with the installer's uninstall mode:
+#      sudo bash install-agent.sh --uninstall
+#    (removes the unit, binary, config, SSH wrapper + keys, scoped
+#    sudoers, and system users; idempotent). Deleting the host from
+#    the dashboard already attempts this over SSH — step 5 is the
+#    manual path for a host the control plane can't reach.
 ```
+
+> **Note:** deleting a host from the dashboard / CLI now performs
+> steps 2 and 5 automatically as best-effort (Headscale node
+> deregistration + box-side teardown over SSH). This runbook is the
+> manual fallback for compromise response or an unreachable box.
 
 ### E. Rotate the agent token without rotating the SSH key
 

@@ -319,6 +319,12 @@ type SetupOpts struct {
 	// exercise the remote teardown timeout / force-delete path inject a
 	// fake whose Destroy blocks (simulating an unreachable VPS) or fails.
 	RemoteDockerFn func(api.RemoteTarget) api.RemoteDeployer
+	// RemoteTeardownFn mirrors api.RouterDeps.RemoteTeardown — the box-side
+	// agent wipe deleteHost dispatches over SSH when a remote host is
+	// removed (gap 4). nil (default) leaves it disabled → deleteHost records
+	// sshTeardown=skipped. Tests inject a recording fake to assert the
+	// best-effort cleanup runs and never blocks the delete.
+	RemoteTeardownFn func(context.Context, api.RemoteTarget) (api.HostTeardownResult, error)
 	// RemoteOpTimeout mirrors api.RouterDeps.RemoteOpTimeout. Tests that
 	// exercise the teardown/restart deadline set a small value so a
 	// blocking remote dispatcher surfaces the bound in milliseconds.
@@ -484,6 +490,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		HostDomain:             opts.HostDomain,
 		InstallAgentScriptPath: opts.InstallAgentScriptPath,
 		RemoteDocker:           opts.RemoteDockerFn,
+		RemoteTeardown:         opts.RemoteTeardownFn,
 		RemoteOpTimeout:        opts.RemoteOpTimeout,
 	}
 

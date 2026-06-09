@@ -105,6 +105,60 @@ ssh::install_deployer_exec() {
     ui::ok "Installed /usr/local/bin/synapse-deployer-exec"
 }
 
+# ssh::install_teardown — drop the root-owned teardown script + the single
+# scoped sudoers rule that lets synapse-deployer invoke it. This is the ONLY
+# sudo the deployer ever gets (everything else flows through the docker-only
+# wrapper). The sudoers rule is validated with `visudo -cf` BEFORE install so
+# a bad render can never wedge the whole sudoers file. {{SSH_USER}} +
+# {{INSTALL_DIR}} are baked in at render time so the script is self-contained
+# (sudo -n strips the environment).
+ssh::install_teardown() {
+    local ssh_user="${SSH_USER:-synapse-deployer}"
+    sed \
+        -e "s|{{SSH_USER}}|$ssh_user|g" \
+        -e "s|{{INSTALL_DIR}}|$INSTALL_DIR|g" \
+        "$INSTALLER_AGENT_TEMPLATES/synapse-agent-teardown" \
+        > /usr/local/bin/synapse-agent-teardown
+    chmod 0755 /usr/local/bin/synapse-agent-teardown
+    chown root:root /usr/local/bin/synapse-agent-teardown 2>/dev/null || true
+    ui::ok "Installed /usr/local/bin/synapse-agent-teardown"
+
+    local sudoers=/etc/sudoers.d/synapse-deployer-teardown
+    local tmp_sudoers
+    tmp_sudoers="$(mktemp)"
+    sed -e "s|{{SSH_USER}}|$ssh_user|g" \
+        "$INSTALLER_AGENT_TEMPLATES/sudoers-synapse-deployer-teardown" \
+        > "$tmp_sudoers"
+    if ! visudo -cf "$tmp_sudoers" >/dev/null 2>&1; then
+        rm -f "$tmp_sudoers"
+        ui::fail "Generated sudoers rule failed visudo -cf — refusing to install"
+        return 2
+    fi
+    install -m 0440 -o root -g root "$tmp_sudoers" "$sudoers"
+    rm -f "$tmp_sudoers"
+    ui::ok "Installed scoped sudoers rule: $sudoers"
+}
+
+# ssh::run_teardown — render the teardown script to a temp file and run it
+# as root NOW. Used by `install-agent.sh --uninstall` so it works even on
+# hosts installed before the teardown script existed (it never relies on the
+# on-disk copy). Idempotent + best-effort: safe when nothing is installed.
+ssh::run_teardown() {
+    local ssh_user="${SSH_USER:-synapse-deployer}"
+    local tmp
+    tmp="$(mktemp)"
+    sed \
+        -e "s|{{SSH_USER}}|$ssh_user|g" \
+        -e "s|{{INSTALL_DIR}}|$INSTALL_DIR|g" \
+        "$INSTALLER_AGENT_TEMPLATES/synapse-agent-teardown" \
+        > "$tmp"
+    chmod 0755 "$tmp"
+    bash "$tmp"
+    local rc=$?
+    rm -f "$tmp"
+    return "$rc"
+}
+
 # ssh::install_authorized_keys <pubkey>
 # Write authorized_keys for $SSH_USER with the forced-command + restrict
 # clause. Even with a stolen private key, the only thing an attacker can

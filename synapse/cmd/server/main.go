@@ -310,6 +310,37 @@ func run() error {
 		}
 	}
 
+	// remoteTeardown dispatches the box-side agent wipe over SSH when the
+	// operator deletes a remote host (gap 4). Sends the single sentinel
+	// "synapse-agent-teardown", which the forced-command wrapper hands to a
+	// root-owned teardown script via a scoped NOPASSWD sudoers rule. A host
+	// whose wrapper predates the sentinel returns exit 99 (whitelist refuse)
+	// → classified as "unsupported" so deleteHost can tell the operator to
+	// run `install-agent.sh --uninstall` on the box. nil when Remote Hosts
+	// SSH is disabled. Closes over the SAME sshClient as remoteDocker.
+	var remoteTeardown func(context.Context, api.RemoteTarget) (api.HostTeardownResult, error)
+	if sshClient != nil {
+		remoteTeardown = func(ctx context.Context, t api.RemoteTarget) (api.HostTeardownResult, error) {
+			_, err := sshClient.Run(ctx, sshprov.Target{
+				HostID:      t.HostID,
+				TailnetAddr: t.TailnetAddr,
+				User:        t.SSHUser,
+				Port:        t.SSHPort,
+			}, nil, "synapse-agent-teardown")
+			if err == nil {
+				return api.HostTeardownResult{Status: "ok"}, nil
+			}
+			var se *sshprov.Error
+			if errors.As(err, &se) && se.WhitelistRefused() {
+				return api.HostTeardownResult{
+					Status: "unsupported",
+					Detail: "host predates teardown support — run `install-agent.sh --uninstall` on the box",
+				}, nil
+			}
+			return api.HostTeardownResult{Status: "failed", Detail: err.Error()}, err
+		}
+	}
+
 	// Construct the DNS verifier here (it's started further below) so the
 	// router can wire its OnActivated hook to the deployments handler — that
 	// rebakes a deployment's container the instant a custom domain auto-
@@ -326,6 +357,7 @@ func run() error {
 		JWT:                   jwtIssuer,
 		Docker:                dockerClient,
 		RemoteDocker:          remoteDocker,
+		RemoteTeardown:        remoteTeardown,
 		PortRangeMin:          cfg.PortRangeMin,
 		PortRangeMax:          cfg.PortRangeMax,
 		HealthcheckViaNetwork: cfg.HealthcheckViaNetwork,

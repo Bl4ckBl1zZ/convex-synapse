@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# synapse-agent-teardown — fully removes the Synapse remote-host agent
+# footprint from this box. Rendered from installer-agent/templates by
+# install-agent.sh (with {{SSH_USER}} / {{INSTALL_DIR}} substituted) and
+# installed root-owned at /usr/local/bin/synapse-agent-teardown.
+#
+# Invoked one of two ways:
+#   1. Synapse central, when the operator deletes this host from the
+#      control plane: over SSH via the synapse-deployer-exec "teardown"
+#      sentinel → `sudo -n` (a single, tightly-scoped NOPASSWD rule).
+#   2. The operator directly: `install-agent.sh --uninstall` (as root).
+#
+# Idempotent + best-effort: every step tolerates "already gone" so a
+# half-installed or twice-run teardown never errors. NOT `set -e` — a
+# missing unit/user must not abort the rest of the wipe.
+set -uo pipefail
+
+SSH_USER="{{SSH_USER}}"
+INSTALL_DIR="{{INSTALL_DIR}}"
+
+log() { echo "synapse-agent-teardown: $*"; }
+
+# 1. Stop + disable the agent unit, then remove it.
+systemctl disable --now synapse-agent.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/synapse-agent.service
+systemctl daemon-reload >/dev/null 2>&1 || true
+log "agent service removed"
+
+# 2. Agent binary + runtime state + config dir.
+rm -f /usr/local/bin/synapse-agent
+rm -rf /var/lib/synapse-agent
+rm -rf "$INSTALL_DIR"
+log "agent binary + state removed"
+
+# 3. SSH plumbing: sshd drop-in (reload so the Match block stops applying),
+#    forced-command wrapper, the scoped sudoers rule, authorized_keys.
+#    Removing these from under the live SSH session is safe — the running
+#    process already holds what it needs; none of these are re-read.
+rm -f /etc/ssh/sshd_config.d/synapse-deployer.conf
+{ systemctl reload sshd || systemctl reload ssh; } >/dev/null 2>&1 || true
+rm -f /usr/local/bin/synapse-deployer-exec
+rm -f /etc/sudoers.d/synapse-deployer-teardown
+rm -f "/home/$SSH_USER/.ssh/authorized_keys"
+log "ssh plumbing removed"
+
+# 4. Delete the system users LAST and DETACHED. When dispatched over SSH
+#    this script runs (via sudo) while the parent session is still logged
+#    in AS $SSH_USER — userdel would refuse "user currently used by process".
+#    setsid + sleep detaches the cull so the SSH session closes first.
+# shellcheck disable=SC2016  # $1 is the INNER bash's positional arg, not ours
+nohup setsid bash -c '
+  sleep 5
+  userdel -r synapse-agent >/dev/null 2>&1 || true
+  userdel -r "$1"          >/dev/null 2>&1 || true
+' _ "$SSH_USER" >/dev/null 2>&1 &
+log "user removal scheduled"
+
+# 5. Self-destruct. Unlinking the running script is safe: the open fd
+#    keeps the inode alive until this process exits.
+rm -f /usr/local/bin/synapse-agent-teardown
+log "teardown complete"
+exit 0

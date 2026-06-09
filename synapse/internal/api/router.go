@@ -33,6 +33,11 @@ type RouterDeps struct {
 	// VPS. nil = Remote Hosts disabled. Production wiring (cmd/server)
 	// closes over the sshprov.Client; tests inject a recording fake.
 	RemoteDocker func(RemoteTarget) RemoteDeployer
+	// RemoteTeardown dispatches the box-side agent wipe over SSH when a
+	// remote host is deleted (gap 4). nil = Remote Hosts SSH disabled.
+	// Production (cmd/server) closes over the same sshprov.Client + key
+	// decrypt as RemoteDocker; tests inject a recording fake.
+	RemoteTeardown func(context.Context, RemoteTarget) (HostTeardownResult, error)
 	// RemoteOpTimeout overrides the default deadline for a teardown/
 	// restart dispatched to a remote host over SSH (see deployments.go
 	// remoteOpTimeout). Zero = use the default. Bumped by operators on
@@ -395,6 +400,8 @@ func NewRouter(d RouterDeps) http.Handler {
 		OfflineAfter:       d.AgentOfflineAfter,
 		Headscale:          d.Headscale,
 		HeadscaleServerURL: d.HeadscaleServerURL,
+		RemoteTeardown:     d.RemoteTeardown,
+		RemoteOpTimeout:    d.RemoteOpTimeout,
 	}
 	// Bloco 9b — Drift Engine + dry-run planner. Shares the host-liveness
 	// thresholds (they decide whether observed state can be trusted) and reuses

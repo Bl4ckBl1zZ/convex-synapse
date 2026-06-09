@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -55,6 +56,62 @@ type HostsHandler struct {
 	// dashboard renders a friendly hint instead of a generic failure.
 	Headscale          *headscale.Client
 	HeadscaleServerURL string
+	// RemoteTeardown dispatches the box-side agent wipe over SSH when a
+	// remote host is deleted (gap 4). nil = Remote Hosts SSH disabled (no
+	// crypto / ssh client) → deleteHost records sshTeardown=skipped.
+	// Production wiring (cmd/server) closes over the sshprov.Client + key
+	// decrypt, mirroring DeploymentsHandler.RemoteDocker; tests inject a
+	// recording fake. It returns a CLASSIFIED result so this handler stays
+	// transport-agnostic — an exit-99 from a host whose wrapper predates
+	// the teardown sentinel surfaces as "unsupported", not a hard failure.
+	RemoteTeardown func(ctx context.Context, t RemoteTarget) (HostTeardownResult, error)
+	// RemoteOpTimeout bounds a single remote teardown dispatch. Zero =
+	// remoteOpTimeout default. Mirrors DeploymentsHandler.RemoteOpTimeout.
+	RemoteOpTimeout time.Duration
+}
+
+// HostTeardownResult is the classified outcome of a best-effort remote
+// agent teardown dispatched when a host is deleted. Status is one of
+// "ok" | "unsupported" | "failed"; Detail is a human hint (empty on ok).
+type HostTeardownResult struct {
+	Status string
+	Detail string
+}
+
+// remoteTimeout is the deadline for a single remote teardown dispatch.
+func (h *HostsHandler) remoteTimeout() time.Duration {
+	if h.RemoteOpTimeout > 0 {
+		return h.RemoteOpTimeout
+	}
+	return remoteOpTimeout
+}
+
+// deregisterHeadscaleNode best-effort removes the host's node from the
+// Headscale tailnet. The hosts row doesn't store the Headscale-assigned
+// node id, so we match on the tailnet IP. Returns a status for the
+// deleteHost cleanup summary ("ok" | "not_found" | "failed" | "skipped");
+// never propagates an error — Headscale being down must not strand the row.
+func (h *HostsHandler) deregisterHeadscaleNode(ctx context.Context, tailnetAddr string) string {
+	if h.Headscale == nil || tailnetAddr == "" {
+		return "skipped"
+	}
+	nodes, err := h.Headscale.ListNodes(ctx, "synapse")
+	if err != nil {
+		logErr("headscale list nodes", err)
+		return "failed"
+	}
+	for _, n := range nodes {
+		for _, ip := range n.IPAddresses {
+			if ip == tailnetAddr {
+				if err := h.Headscale.DeleteNode(ctx, n.ID); err != nil {
+					logErr("headscale delete node", err)
+					return "failed"
+				}
+				return "ok"
+			}
+		}
+	}
+	return "not_found"
 }
 
 func (h *HostsHandler) staleAfter() time.Duration {
@@ -547,6 +604,50 @@ func (h *HostsHandler) deleteHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Best-effort remote decommission (gap 4). For a remote host, wipe the
+	// box BEFORE we drop the registry row — we still need its SSH
+	// coordinates + tailnet addr here. Neither step blocks the delete: an
+	// unreachable VPS or a Headscale hiccup must never strand the row.
+	// ?skip_teardown=true is the escape hatch (pure registry delete), e.g.
+	// when the operator plans to re-adopt the same box.
+	cleanup := map[string]string{}
+	if hst.IsRemote && r.URL.Query().Get("skip_teardown") != "true" {
+		var (
+			tailnetAddr string
+			sshUser     string
+			sshPort     int
+		)
+		if err := h.DB.QueryRow(r.Context(),
+			`SELECT COALESCE(tailnet_addr, ''), COALESCE(ssh_user, ''), COALESCE(ssh_port, 22)
+			   FROM hosts WHERE id = $1`, hst.ID,
+		).Scan(&tailnetAddr, &sshUser, &sshPort); err != nil {
+			logErr("load host ssh coords for teardown", err)
+		}
+
+		// (a) Box-side agent teardown over SSH.
+		if h.RemoteTeardown == nil || tailnetAddr == "" {
+			cleanup["sshTeardown"] = "skipped"
+		} else {
+			tctx, cancel := context.WithTimeout(r.Context(), h.remoteTimeout())
+			res, _ := h.RemoteTeardown(tctx, RemoteTarget{
+				HostID:      hst.ID,
+				TailnetAddr: tailnetAddr,
+				SSHUser:     sshUser,
+				SSHPort:     sshPort,
+			})
+			cancel()
+			if res.Status == "" {
+				res.Status = "failed"
+			}
+			cleanup["sshTeardown"] = res.Status
+		}
+
+		// (b) Headscale node deregistration.
+		hctx, cancel := context.WithTimeout(r.Context(), h.remoteTimeout())
+		cleanup["headscale"] = h.deregisterHeadscaleNode(hctx, tailnetAddr)
+		cancel()
+	}
+
 	tx, err := h.DB.Begin(r.Context())
 	if err != nil {
 		logErr("begin delete host tx", err)
@@ -580,14 +681,22 @@ func (h *HostsHandler) deleteHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	meta := map[string]any{"name": hst.Name, "isRemote": hst.IsRemote}
+	if len(cleanup) > 0 {
+		meta["cleanup"] = cleanup
+	}
 	_ = audit.Record(r.Context(), h.DB, audit.Options{
 		ActorID:    uid,
 		Action:     audit.ActionDeleteHost,
 		TargetType: audit.TargetHost,
 		TargetID:   hst.ID,
-		Metadata:   map[string]any{"name": hst.Name, "isRemote": hst.IsRemote},
+		Metadata:   meta,
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"id": hst.ID, "status": "deleted"})
+	resp := map[string]any{"id": hst.ID, "status": "deleted"}
+	if len(cleanup) > 0 {
+		resp["cleanup"] = cleanup
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // sampleDeploymentNames returns up to 5 live deployment names on a host, for a
@@ -869,8 +978,11 @@ func (h *HostsHandler) rotateAgentToken(w http.ResponseWriter, r *http.Request) 
 // ---------- helpers ----------
 
 func (h *HostsHandler) loadHost(w http.ResponseWriter, r *http.Request) (models.Host, bool) {
-	id := chi.URLParam(r, "hostID")
-	row := h.DB.QueryRow(r.Context(), `SELECT `+hostColumns+` FROM hosts WHERE id::text = $1`, id)
+	// {hostID} accepts either the UUID or the host's (globally unique) name —
+	// mirrors teams.go::resolveTeam's id-or-slug resolution so operators can
+	// pass the friendly name on the CLI / in URLs.
+	ref := chi.URLParam(r, "hostID")
+	row := h.DB.QueryRow(r.Context(), `SELECT `+hostColumns+` FROM hosts WHERE id::text = $1 OR name = $1`, ref)
 	hst, err := scanHost(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "host_not_found", "Host not found")

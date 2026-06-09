@@ -485,10 +485,6 @@ errors clearly when the operator hits it.
 - **macOS / Windows agent: not supported.** `install-agent.sh`
   preflight hard-rejects anything other than Linux with systemd.
   Container-on-Linux is the only validated path.
-- **CLI does not resolve host names.** `synapse deployment create
-  --host=` and `synapse drift recompute --host=` take the host
-  UUID. Find it via `synapse hosts list`. Name-based lookup is a
-  v1.19 nice-to-have.
 - **Host SSH key rotation is re-install today.** See
   `docs/SECURITY_REMOTE_HOSTS.md` — the `--rotate-ssh-key`
   lifecycle command referenced in the migration comment is a
@@ -497,7 +493,7 @@ errors clearly when the operator hits it.
 
 ## CLI integration
 
-Existing Cell Control Plane CLI commands accept `--host=<uuid>`
+Existing Cell Control Plane CLI commands accept `--host=<ref>`
 where they used to take just `--project`/`--cell`:
 
 ```bash
@@ -507,19 +503,22 @@ synapse hosts list [--json]
 # Mint an adoption token for an existing host row (advanced —
 # the dashboard "Setup remote install" button is the normal path
 # because it bundles the Headscale pre-auth key)
-synapse hosts adoption-token <host-id>
+synapse hosts adoption-token <host-ref>
 
 # Place a new deployment on a specific host
-synapse deployment create --type=prod --host=<host-uuid>
+synapse deployment create --type=prod --host=<host-ref>
 
 # Drift / observed-state for a host
-synapse drift recompute --host=<host-uuid>
-synapse drift latest    --host=<host-uuid>
-synapse observed list   --host=<host-uuid>
+synapse drift recompute --host=<host-ref>
+synapse drift latest    --host=<host-ref>
+synapse observed list   --host=<host-ref>
 ```
 
-`--host=` and `--cell=` / `--project=` are mutually exclusive on
-the drift commands (`cli/lib/commands/_cellplane.js:resolveScope`).
+`--host=` takes the host's **name or UUID** — the backend resolves
+either (`hosts.name` is globally unique), so `--host=vps-br-1` works
+as well as `--host=<uuid>`. `--host=` and `--cell=` / `--project=`
+are mutually exclusive on the drift commands
+(`cli/lib/commands/_cellplane.js:resolveScope`).
 
 Remove a host from the control plane once it's empty:
 
@@ -547,30 +546,47 @@ Once removed, the host's agent rows, adoption tokens, and
 desired/observed/drift state cascade away; any cell that used it as its
 primary host simply loses that affinity (the cell survives).
 
-> **Honest scope — removal is registry-only.** Deleting a host clears
-> it from Synapse's database. For a **remote** host it does **not**
-> deregister the Headscale tailnet node, and it does **not** SSH in to
-> stop/remove the `synapse-agent` systemd unit, the
-> `synapse-agent`/`synapse-deployer` system users, or their SSH keys on
-> the VPS. Those linger until you clean them up by hand. The lingering
-> agent is harmless — once its `host_agents` row is gone its heartbeats
-> are rejected (`401`) — but to fully decommission the box:
->
-> ```bash
-> # On the control plane (deregister the tailnet node):
-> docker compose exec headscale headscale nodes list
-> docker compose exec headscale headscale nodes delete -i <node-id>
->
-> # On the VPS (remove the agent + users):
-> systemctl disable --now synapse-agent
-> rm -f /etc/systemd/system/synapse-agent.service
-> userdel -r synapse-agent ; userdel -r synapse-deployer
-> ```
->
-> Runbook D in [`SECURITY_REMOTE_HOSTS.md`](SECURITY_REMOTE_HOSTS.md)
-> is the fuller decommission/compromise procedure. Automating this
-> teardown on delete is a tracked follow-up
-> (`docs/HOST_REMOVAL_INVESTIGATION.md`).
+### What removal cleans up (remote hosts)
+
+For a **remote** host, deleting it does a best-effort decommission of
+the box before dropping the registry row — neither step blocks the
+delete, so an unreachable VPS or a Headscale hiccup never strands the
+row:
+
+1. **Box-side agent teardown over SSH.** Synapse central dispatches the
+   single `synapse-agent-teardown` sentinel through the
+   `synapse-deployer-exec` forced-command wrapper, which hands it to a
+   root-owned teardown script via one tightly-scoped `NOPASSWD` sudoers
+   rule. The script stops/removes the `synapse-agent` unit, the binary,
+   `/etc/synapse-agent`, the sshd drop-in, the wrapper, the sudoers
+   rule, the SSH keys, and the `synapse-agent`/`synapse-deployer`
+   system users — then self-destructs.
+2. **Headscale node deregistration.** The host's tailnet node is matched
+   by its `tailnet_addr` and deleted, so it drops off the tailnet.
+
+The delete response + the `deleteHost` audit event carry a `cleanup`
+summary, e.g. `{"sshTeardown":"ok","headscale":"ok"}`. Statuses:
+`ok` · `unsupported` (host installed before the teardown sentinel —
+run `install-agent.sh --uninstall` on the box) · `failed` (box
+unreachable) · `not_found` · `skipped` (Remote Hosts SSH/Headscale not
+configured).
+
+**Hosts adopted before this version** carry the old docker-only wrapper,
+so the SSH teardown returns `unsupported`. Finish the wipe on the box
+directly — it works on any host and is idempotent:
+
+```bash
+sudo bash install-agent.sh --uninstall
+# or via curl|bash:
+curl -sSf https://raw.githubusercontent.com/Iann29/convex-synapse/main/install-agent.sh \
+  | sudo bash -s -- --uninstall
+```
+
+**Escape hatch.** `POST /v1/hosts/{ref}/delete?skip_teardown=true` does a
+pure registry delete (no SSH, no Headscale) — use it when you plan to
+re-adopt the same box. Runbook D in
+[`SECURITY_REMOTE_HOSTS.md`](SECURITY_REMOTE_HOSTS.md) is the fuller
+decommission/compromise procedure.
 
 ## Troubleshooting
 

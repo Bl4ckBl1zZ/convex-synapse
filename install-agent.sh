@@ -155,6 +155,12 @@ Optional:
                               up Docker (get.docker.com) + jq/openssh/tar
                               before preflight. Pass this on hardened or
                               air-gapped hosts that pre-bake their image.
+    --uninstall               Remove the Synapse agent footprint from this
+                              host (systemd unit, binary, config, SSH
+                              wrapper + keys, scoped sudoers, system users)
+                              and exit. Idempotent; needs no other flags.
+                              Use this when the control plane can't reach
+                              the box to tear it down over SSH.
     --version                 Print installer version and exit.
     --help                    This message.
 
@@ -179,6 +185,7 @@ parse_flags() {
     NO_AUTOINSTALL=0
     SHOW_VERSION=0
     SHOW_HELP=0
+    UNINSTALL=0
     while (( $# > 0 )); do
         case "$1" in
             --control-url=*)        CONTROL_URL="${1#*=}" ;;
@@ -191,6 +198,7 @@ parse_flags() {
             --non-interactive)      export SYNAPSE_NON_INTERACTIVE=1 ;;
             --no-bootstrap)         NO_BOOTSTRAP=1 ;;
             --no-autoinstall)       NO_AUTOINSTALL=1 ;;
+            --uninstall)            UNINSTALL=1 ;;
             --version)              SHOW_VERSION=1 ;;
             --help|-h)              SHOW_HELP=1 ;;
             *) echo "unknown flag: $1" >&2; usage >&2; exit 2 ;;
@@ -415,6 +423,7 @@ phase_ssh() {
     ui::step "Setting up SSH for deployer"
     SSH_PUBKEY="$(ssh::generate_keypair)"
     ssh::install_deployer_exec
+    ssh::install_teardown
     ssh::configure_sshd "$TAILNET_ADDR"
     ssh::install_authorized_keys "$SSH_PUBKEY"
 }
@@ -433,6 +442,13 @@ phase_systemd() {
 phase_verify() {
     CURRENT_STEP="verify"
     verify::heartbeat
+}
+
+phase_uninstall() {
+    CURRENT_STEP="uninstall"
+    ui::step "Removing Synapse agent from this host"
+    ssh::run_teardown
+    ui::ok "Synapse agent removed (system users are deleted a few seconds later)."
 }
 
 phase_success_screen() {
@@ -475,6 +491,20 @@ main() {
             && needs_bootstrap; then
         bootstrap "$@"
         exit 2  # bootstrap execs; reaching here = failure
+    fi
+
+    # Uninstall mode: wipe the agent footprint and exit. Runs after the
+    # bootstrap re-exec (so the teardown template is on disk under
+    # curl|bash) but BEFORE the secret prompts — uninstall needs no
+    # control-url / token. Idempotent; safe on a half-installed host.
+    if (( UNINSTALL )); then
+        if [[ "$(id -u 2>/dev/null)" != "0" ]]; then
+            echo "error: --uninstall must run as root (try: sudo)" >&2
+            exit 2
+        fi
+        source_libs
+        phase_uninstall
+        exit 0
     fi
 
     # Interactive prompts for the three secrets. No-op when --non-interactive
