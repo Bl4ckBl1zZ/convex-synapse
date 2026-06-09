@@ -187,12 +187,23 @@ type Config struct {
 	AgentOfflineAfter time.Duration
 
 	// Bloco 9 — desired/observed/drift. These gate the model/observe/compare/
-	// plan layer; NONE of them enable apply. AgentApply is the hard gate for a
-	// future apply mode and MUST stay false in this block.
+	// plan layer; NONE of them enable apply.
 	EnableDesiredState    bool
 	EnableObservedState   bool
 	EnableReconcileDryRun bool
-	AgentApply            bool
+	// AgentApply is the DEAD agent-driven apply gate. It MUST stay false: apply
+	// is central-driven (see ApplyEnabled). Kept only so the flag's absence is
+	// explicit; no code path reads it. See docs/CCP_APPLY_PLAN.md §2.
+	AgentApply bool
+
+	// Bloco 10 — central-driven apply (reconcile execution). OFF by default.
+	// ApplyEnabled gates the whole reconcile/apply surface (endpoint hidden +
+	// 404 when false; dashboard shows no Apply button). ApplyDangerous is the
+	// SECOND gate for data-affecting actions (stop/remove) — they additionally
+	// require per-request explicit confirmation even when this is true. Phase 1
+	// (create/restart) needs only ApplyEnabled. See docs/CCP_APPLY_PLAN.md.
+	ApplyEnabled   bool
+	ApplyDangerous bool
 
 	// Headscale (v1.18+, Remote Hosts). HeadscaleURL is the internal
 	// HTTP API the synapse-api container hits (e.g.
@@ -326,9 +337,13 @@ func Load() (*Config, error) {
 		EnableDesiredState:    getEnvDefault("SYNAPSE_ENABLE_DESIRED_STATE", "true") != "false",
 		EnableObservedState:   getEnvDefault("SYNAPSE_ENABLE_OBSERVED_STATE", "true") != "false",
 		EnableReconcileDryRun: getEnvDefault("SYNAPSE_ENABLE_RECONCILE_DRY_RUN", "true") != "false",
-		// Hard-disabled in Bloco 9. Apply is not implemented; this flag exists
-		// so the surface is explicit and defaults to false.
+		// Dead agent-driven apply gate. Stays false; central-driven apply
+		// (ApplyEnabled) supersedes it. No code path reads this.
 		AgentApply: getEnvDefault("SYNAPSE_AGENT_APPLY", "false") == "true",
+
+		// Bloco 10 — central-driven apply. Both default OFF.
+		ApplyEnabled:   getEnvDefault("SYNAPSE_APPLY_ENABLED", "false") == "true",
+		ApplyDangerous: getEnvDefault("SYNAPSE_APPLY_DANGEROUS", "false") == "true",
 
 		HeadscaleURL:       strings.TrimRight(os.Getenv("SYNAPSE_HEADSCALE_URL"), "/"),
 		HeadscaleAPIKey:    os.Getenv("SYNAPSE_HEADSCALE_API_KEY"),

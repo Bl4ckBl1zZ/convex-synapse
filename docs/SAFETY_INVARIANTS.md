@@ -1,9 +1,16 @@
 # Safety Invariants
 
 The [Cell Control Plane](CELL_CONTROL_PLANE.md) is **observe + diagnose + plan
-only**. These invariants MUST hold. Breaking any of them is a release blocker —
-not a refactor decision. They exist because the next capability (apply) is
-destructive, so the diagnosis layer is built with hard guarantees first.
+only** by default. These invariants MUST hold. Breaking any of them is a release
+blocker — not a refactor decision. They exist because apply is destructive, so
+the diagnosis layer is built with hard guarantees first.
+
+> **Bloco 10 — gated apply.** Apply is the "future, explicitly-reviewed block"
+> invariants 12–13 reserved. It is **central-driven** (the `synapse-api` enqueues
+> work on the existing provisioning queue; the agent never mutates) and **off by
+> default** (`SYNAPSE_APPLY_ENABLED=false`). The agent-facing invariants (5–8, 10,
+> 11, 13) are **preserved unchanged**; only 9 and 12 are relaxed, gated, for the
+> central plane. Full re-review + guardrails: [`CCP_APPLY_PLAN.md`](CCP_APPLY_PLAN.md) §8.
 
 ## Boundaries with Amagejumpy
 
@@ -24,15 +31,24 @@ destructive, so the diagnosis layer is built with hard guarantees first.
 
 ## No apply, anywhere
 
-9. The dashboard has **no Apply button**; it never sends `apply: true`.
+9. The dashboard has **no Apply button** — *unless* `SYNAPSE_APPLY_ENABLED=true`
+    (Bloco 10). When shown, the button calls the explicit `reconcile/apply`
+    verb; it **never** sends `apply: true` to the dry-run path. With apply
+    disabled (the default) the button is absent.
 10. A `reconcile/dry_run` (or drift recompute) request with `apply: true` is
-    rejected `400 apply_not_supported`.
+    rejected `400 apply_not_supported`. **Unchanged** — apply is its own
+    endpoint, never a flag on the dry-run path.
 11. Dry-run **never executes** OperationSteps — steps are only `planned` /
     `no_op` / `skipped`, and every plan carries `applyAllowed: false` /
-    `willApply: false`.
-12. **Docker mutation is forbidden** until a future, explicitly-reviewed block.
+    `willApply: false`. **Unchanged** — only the `reconcile/apply` endpoint
+    executes steps.
+12. **Docker mutation is forbidden** for the agent, always (inv. 5). For the
+    **central** plane it is forbidden *unless* `SYNAPSE_APPLY_ENABLED=true`, and
+    then only `create`/`restart` (Phase 1) — `stop`/`remove` need the second
+    gate `SYNAPSE_APPLY_DANGEROUS=true` + explicit confirmation. All apply paths
+    obey guardrails G1–G12 in [`CCP_APPLY_PLAN.md`](CCP_APPLY_PLAN.md) §6.
 13. **Caddy / proxy mutation is forbidden** until a future, explicitly-reviewed
-    block.
+    block. **Unchanged** — apply touches containers only.
 
 ## No secrets in state
 
