@@ -34,6 +34,7 @@ type planStepLike struct {
 type dryRunResult struct {
 	OperationRun models.OperationRun `json:"operationRun"`
 	Steps        []planStepLike      `json:"steps"`
+	ApplyEnabled bool                `json:"applyEnabled"`
 }
 
 // ---------- seeding helpers ----------
@@ -450,6 +451,7 @@ func TestDrift_OperationRunAndLatest(t *testing.T) {
 	var run struct {
 		OperationRun models.OperationRun `json:"operationRun"`
 		Steps        []any               `json:"steps"`
+		ApplyEnabled bool                `json:"applyEnabled"`
 	}
 	h.DoJSON(http.MethodGet, "/v1/operation_runs/"+*res.Report.OperationRunID, owner.AccessToken, nil, http.StatusOK, &run)
 	if run.OperationRun.Type != models.OperationTypeComputeDrift || run.OperationRun.Status != models.OperationStatusSucceeded {
