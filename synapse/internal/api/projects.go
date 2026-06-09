@@ -621,25 +621,38 @@ func (h *ProjectsHandler) deleteProject(w http.ResponseWriter, r *http.Request) 
 	// deployments have no Synapse-managed container; provisioning ones are left
 	// to the provisioner, which tears down whatever it built once it sees the
 	// row marked deleted below. Destroy is idempotent.
-	rows, err := h.DB.Query(r.Context(),
-		`SELECT name, adopted, status FROM deployments WHERE project_id = $1 AND status <> 'deleted'`, p.ID)
+	// Pull the host placement + HA shape, not just the name: a deployment on
+	// a remote host lives on that VPS's docker daemon (reachable only over
+	// SSH), and an HA deployment is two replica containers (convex-<name>-0/1).
+	// Destroying by plain name on the LOCAL daemon would no-op for both and
+	// silently leak the container(s) — exactly the v1.12.5 leak, by the back
+	// door of Remote Hosts / HA. destroyDeploymentContainers dispatches to the
+	// right daemon and loops HA replicas.
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT d.name, d.adopted, d.status, d.ha_enabled, d.replica_count,
+		       d.host_id::text, d.host_id IS NOT NULL AND COALESCE(h.is_remote, false),
+		       COALESCE(h.tailnet_addr, ''), COALESCE(h.ssh_user, ''), COALESCE(h.ssh_port, 22)
+		  FROM deployments d
+		  LEFT JOIN hosts h ON h.id = d.host_id
+		 WHERE d.project_id = $1 AND d.status <> 'deleted'`, p.ID)
 	if err != nil {
 		logErr("list project deployments for teardown", err)
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to delete project")
 		return
 	}
-	type projDep struct {
-		name, status string
-		adopted      bool
-	}
-	var deps []projDep
+	var deps []models.Deployment
 	for rows.Next() {
-		var d projDep
-		if err := rows.Scan(&d.name, &d.adopted, &d.status); err != nil {
+		var d models.Deployment
+		var hostID *string
+		if err := rows.Scan(&d.Name, &d.Adopted, &d.Status, &d.HAEnabled, &d.ReplicaCount,
+			&hostID, &d.HostIsRemote, &d.HostTailnetAddr, &d.HostSSHUser, &d.HostSSHPort); err != nil {
 			rows.Close()
 			logErr("scan project deployment", err)
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to delete project")
 			return
+		}
+		if hostID != nil {
+			d.HostID = *hostID
 		}
 		deps = append(deps, d)
 	}
@@ -649,14 +662,15 @@ func (h *ProjectsHandler) deleteProject(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to delete project")
 		return
 	}
-	for _, d := range deps {
-		if d.adopted || d.status == models.DeploymentStatusProvisioning {
+	for i := range deps {
+		d := &deps[i]
+		if d.Adopted || d.Status == models.DeploymentStatusProvisioning {
 			continue
 		}
-		if destroyErr := h.Deployments.Docker.Destroy(r.Context(), d.name); destroyErr != nil {
+		if destroyErr := h.Deployments.destroyDeploymentContainers(r.Context(), d); destroyErr != nil {
 			logErr("destroy container on project delete", destroyErr)
 			writeError(w, http.StatusInternalServerError, "destroy_failed",
-				"Could not tear down deployment "+d.name+"; resolve it and retry")
+				"Could not tear down deployment "+d.Name+"; resolve it and retry")
 			return
 		}
 	}

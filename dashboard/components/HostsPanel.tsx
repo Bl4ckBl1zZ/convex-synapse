@@ -591,6 +591,15 @@ function HostDetailsDialog({
   const agents = data?.items ?? [];
 
   const revoke = async (agentId: string) => {
+    if (
+      !window.confirm(
+        t(
+          "Revoke this agent? The remote host will lose its connection to the control plane and can no longer be managed until you re-join it with install-agent.sh.",
+        ),
+      )
+    ) {
+      return;
+    }
     setActionError(null);
     setBusyAgentId(agentId);
     try {
@@ -603,6 +612,15 @@ function HostDetailsDialog({
     }
   };
   const rotate = async (agentId: string) => {
+    if (
+      !window.confirm(
+        t(
+          "Rotate this agent's token? The current token stops working immediately — the running agent must be re-configured with the new token or the host goes offline.",
+        ),
+      )
+    ) {
+      return;
+    }
     setActionError(null);
     setBusyAgentId(agentId);
     try {

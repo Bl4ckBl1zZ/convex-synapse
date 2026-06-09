@@ -416,6 +416,15 @@ function TokensDialog({
     }
   };
   const revoke = async (id: string) => {
+    if (
+      !window.confirm(
+        t(
+          "Revoke this service token? Any service still using it to authenticate between cells will immediately start getting 401s. This cannot be undone.",
+        ),
+      )
+    ) {
+      return;
+    }
     setActionError(null);
     setBusyId(id);
     try {

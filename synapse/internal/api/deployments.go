@@ -70,6 +70,11 @@ type Provisioner interface {
 	Restart(ctx context.Context, deploymentName string) error
 	// RestartReplica bounces a single HA replica's container in place.
 	RestartReplica(ctx context.Context, deploymentName string, replicaIndex int) error
+	// DestroyReplica removes a single HA replica's container (convex-<name>-<i>)
+	// and, unless keepVolume, its data volume. HA delete must loop this across
+	// every replica — the plain Destroy only targets the single-replica
+	// container name (convex-<name>) and would silently leak both HA replicas.
+	DestroyReplica(ctx context.Context, deploymentName string, replicaIndex int, keepVolume bool) error
 }
 
 // RemoteDeployer is the subset of container ops the delete/restart
@@ -197,6 +202,37 @@ func (h *DeploymentsHandler) dockerFor(d *models.Deployment) (RemoteDeployer, er
 		SSHUser:     d.HostSSHUser,
 		SSHPort:     d.HostSSHPort,
 	}), nil
+}
+
+// destroyDeploymentContainers tears down a deployment's container(s) on the
+// host they actually live on, with no HTTP/force logic — the caller maps the
+// returned error to a response. Two shapes:
+//   - HA (always local): convex-<name>-0/1 + their volumes via DestroyReplica.
+//   - single: dispatched to the deployment's host (local daemon, or the remote
+//     VPS over SSH) so a remote container isn't no-op'd locally and leaked.
+//
+// Idempotent: an already-gone container is success. Callers MUST skip adopted
+// deployments (we never tear down a container we didn't create). Used by
+// deleteProject; deleteDeployment keeps its own copy because it needs the
+// finer-grained 502-vs-500 + force/orphan response handling.
+func (h *DeploymentsHandler) destroyDeploymentContainers(ctx context.Context, d *models.Deployment) error {
+	if d.HAEnabled && d.ReplicaCount > 0 {
+		tctx, cancel := context.WithTimeout(ctx, h.remoteTimeout())
+		defer cancel()
+		for i := 0; i < d.ReplicaCount; i++ {
+			if err := h.Docker.DestroyReplica(tctx, d.Name, i, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	dispatcher, err := h.dockerFor(d)
+	if err != nil {
+		return err
+	}
+	tctx, cancel := context.WithTimeout(ctx, h.remoteTimeout())
+	defer cancel()
+	return dispatcher.Destroy(tctx, d.Name)
 }
 
 // remoteTimeout is the deadline for a single host-dispatched teardown/
@@ -2448,7 +2484,28 @@ func (h *DeploymentsHandler) deleteDeployment(w http.ResponseWriter, r *http.Req
 	// container or volume, so there's nothing to tear down. Just unregister
 	// the row. The actual backend keeps running until the operator who
 	// owns it stops it.
-	if !d.Adopted {
+	if !d.Adopted && d.HAEnabled && d.ReplicaCount > 0 {
+		// HA deployments are always LOCAL (HA is refused on remote hosts at
+		// provision), and their containers are named convex-<name>-0/1 with
+		// per-replica volumes. The single-replica Destroy(name) targets only
+		// convex-<name> — it would no-op and silently leak BOTH replicas plus
+		// their volumes, freeing the ports in the DB so the next deploy
+		// collides on "port already allocated". Tear down each replica.
+		teardownCtx, cancel := context.WithTimeout(r.Context(), h.remoteTimeout())
+		for i := 0; i < d.ReplicaCount; i++ {
+			if derr := h.Docker.DestroyReplica(teardownCtx, d.Name, i, false); derr != nil {
+				if !force {
+					cancel()
+					logErr("docker destroy replica", derr)
+					writeError(w, http.StatusInternalServerError, "destroy_failed", derr.Error())
+					return
+				}
+				logErr("force-delete: replica teardown failed, orphaning", derr)
+				orphaned = true
+			}
+		}
+		cancel()
+	} else if !d.Adopted {
 		// Tear down the container/volume first; if that fails, leave the
 		// row alone so the operator can retry. A successful Destroy is
 		// idempotent. Dispatch to the deployment's HOST — a remote host's

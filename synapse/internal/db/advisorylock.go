@@ -41,6 +41,15 @@ const (
 	// same inserts; the lock ensures exactly one runs it. The backfill is
 	// idempotent regardless, but the lock avoids redundant work + log noise.
 	LockCellBackfill int64 = 0xC0DE0004
+
+	// LockReconcileReaper guards the provisioner's PERIODIC wedge sweep
+	// (provisioner.Worker.reapStuck): re-pend/fail stale claimed jobs,
+	// fail deployments wedged in 'provisioning' with no live job, and
+	// finalize operation_runs orphaned in queued/running. The boot-time
+	// recovery (requeueStale + sweepOrphanedProvisioning) only runs once;
+	// this catches the same wedges within a long-lived process. One node
+	// per tick; followers skip.
+	LockReconcileReaper int64 = 0xC0DE0005
 )
 
 // WithTryAdvisoryLock attempts to acquire a session-level Postgres advisory

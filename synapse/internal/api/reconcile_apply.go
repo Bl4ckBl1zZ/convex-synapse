@@ -152,10 +152,28 @@ func (h *DriftHandler) doApply(w http.ResponseWriter, r *http.Request, scope dri
 		}
 
 		if enqueue {
-			if _, err := provisioner.EnqueueReconcile(ctx, tx, depID, s.Action, runID, stepID, h.HealthcheckViaNetwork); err != nil {
+			_, enqueued, err := provisioner.EnqueueReconcile(ctx, tx, depID, s.Action, runID, stepID, h.HealthcheckViaNetwork)
+			if err != nil {
 				logErr("apply: enqueue reconcile", err)
 				writeError(w, http.StatusInternalServerError, "internal", "Failed to enqueue reconcile work")
 				return
+			}
+			if !enqueued {
+				// Lost the single-flight race to a concurrent apply (the
+				// per-deployment in-flight index rejected the duplicate).
+				// Re-mark the step we just inserted as 'planned' to 'skipped'
+				// so the run rolls up accurately and we never double-act.
+				if _, err := tx.Exec(ctx, `
+					UPDATE operation_steps SET status = 'skipped',
+					       reason = 'deployment has work in flight', updated_at = now()
+					 WHERE id = $1
+				`, stepID); err != nil {
+					logErr("apply: mark step skipped", err)
+					writeError(w, http.StatusInternalServerError, "internal", "Failed to enqueue reconcile work")
+					return
+				}
+				skipped++
+				continue
 			}
 			queued++
 			continue

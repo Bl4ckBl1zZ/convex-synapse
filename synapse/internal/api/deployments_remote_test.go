@@ -38,6 +38,10 @@ func (f *dockerForFakeLocal) Restart(_ context.Context, name string) error {
 	return nil
 }
 func (f *dockerForFakeLocal) RestartReplica(context.Context, string, int) error { return nil }
+func (f *dockerForFakeLocal) DestroyReplica(_ context.Context, name string, _ int, _ bool) error {
+	f.destroyed = append(f.destroyed, name)
+	return nil
+}
 
 // dockerForFakeRemote is what the RemoteDocker factory returns in tests.
 type dockerForFakeRemote struct {

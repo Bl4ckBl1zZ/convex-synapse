@@ -336,6 +336,16 @@ export const ptBR: Record<string, string> = {
   "Could not revoke agent": "Não foi possível revogar o agent",
   "Could not revoke deploy key": "Não foi possível revogar a deploy key",
   "Could not rotate token": "Não foi possível rotacionar o token",
+  "Revoke this service token? Any service still using it to authenticate between cells will immediately start getting 401s. This cannot be undone.":
+    "Revogar este service token? Qualquer serviço que ainda o use para autenticar entre cells vai começar a receber 401 na hora. Isso não pode ser desfeito.",
+  "Revoke this agent? The remote host will lose its connection to the control plane and can no longer be managed until you re-join it with install-agent.sh.":
+    "Revogar este agent? A host remota vai perder a conexão com o control plane e não poderá mais ser gerenciada até você reconectá-la com o install-agent.sh.",
+  "Rotate this agent's token? The current token stops working immediately — the running agent must be re-configured with the new token or the host goes offline.":
+    "Rotacionar o token deste agent? O token atual para de funcionar na hora — o agent em execução precisa ser reconfigurado com o novo token ou a host fica offline.",
+  "Clear email settings? Team invites will no longer be emailed — they'll fall back to invite links you have to share manually.":
+    "Limpar as configurações de email? Os convites de time não serão mais enviados por email — vão voltar a usar links de convite que você precisa compartilhar manualmente.",
+  'Delete "{name}" from every environment? It\'s a live function-runtime variable — running deployments stop seeing process.env.{name} as soon as this syncs. This cannot be undone.':
+    'Excluir "{name}" de todos os ambientes? É uma variável do runtime de funções em uso — deployments em execução param de ver process.env.{name} assim que isso sincronizar. Isso não pode ser desfeito.',
   "Could not save": "Não foi possível salvar",
   "Could not save env var": "Não foi possível salvar a variável de ambiente",
   "Could not save team": "Não foi possível salvar o time",

@@ -190,7 +190,6 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
   const [hostId, setHostId] = useState<string>("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [openingName, setOpeningName] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Adopt-existing modal state. Kept separate from the create-deployment
@@ -677,9 +676,8 @@ await Promise.all([
                       variant="secondary"
                       size="sm"
                       onClick={() => openDashboard(d.name)}
-                      disabled={openingName === d.name}
                     >
-                      {openingName === d.name ? t("Opening...") : t("Open dashboard")}
+                      {t("Open dashboard")}
                     </Button>
                     <Button
                       variant="secondary"

@@ -11,6 +11,16 @@ ExecStart=/usr/local/bin/synapse-updater
 Restart=on-failure
 RestartSec=5
 
+# KillMode=process — on stop/restart, signal ONLY the daemon process, not the
+# whole cgroup. The daemon forks setup.sh (→ `docker compose up --build`) to
+# run an upgrade; with the systemd default (control-group) a `systemctl
+# restart synapse-updater` or a daemon crash mid-upgrade would SIGTERM the
+# in-flight setup.sh too, leaving the stack half-recreated. The daemon also
+# passes start_new_session=True when spawning setup.sh, so the child is
+# detached on both the cgroup and session axes. The upgrade finishes on its
+# own; the operator's logs/<n> output is unaffected.
+KillMode=process
+
 # Updater needs full root because setup.sh --upgrade writes to /opt/synapse,
 # uses /var/run/docker.sock, and may invoke the package manager. Locking it
 # down to a dedicated user would just bloat the install with sudoers config

@@ -580,6 +580,10 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 			PublicURL:             opts.PublicURL,
 			ProxyEnabled:          opts.ProxyEnabled,
 			BaseDomain:            opts.BaseDomain,
+			// Mirror the api-side apply gate default. runReconcile re-reads
+			// apply_settings (DB wins); with no row, tests that pass
+			// ApplyEnabled:true via env must still let reconcile execute.
+			ApplyEnabled: opts.ApplyEnabled,
 		},
 		Logger: logger,
 	}

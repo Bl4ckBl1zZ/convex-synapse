@@ -52,6 +52,17 @@ func (w *Worker) runReconcile(ctx context.Context, logger *slog.Logger, j claime
 		return
 	}
 
+	// Re-check the apply gate at EXECUTION time, not just at enqueue. The
+	// dashboard toggle (apply_settings) is the operator's kill-switch; a job
+	// queued while apply was ON must do nothing if apply was flipped OFF
+	// before the worker picked it up. Fail-closed on a settings read error.
+	// Without this the kill-switch is an illusion for already-queued work.
+	if !w.applyEnabledNow(ctx, logger) {
+		logger.Warn("provisioner: reconcile skipped — apply disabled before execution")
+		w.skipReconcile(j, "apply was disabled before this job ran")
+		return
+	}
+
 	switch j.ReconcileAction {
 	case "create":
 		w.reconcileCreate(ctx, logger, j)

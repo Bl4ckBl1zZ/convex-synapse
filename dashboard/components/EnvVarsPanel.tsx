@@ -49,6 +49,10 @@ export function EnvVarsPanel({ projectId }: Props) {
   // shoulder-surfer or screen-share doesn't leak secrets just because
   // the operator opened the project page.
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  // In-flight delete guard: keyed by name (delete-all) or name:type (one row)
+  // so a double-click doesn't fire two delete+push requests at the runtime
+  // env store.
+  const [deleting, setDeleting] = useState<Set<string>>(new Set());
 
   // Re-sync flow state (manual retry of the per-deployment push).
   const [syncOpen, setSyncOpen] = useState(false);
@@ -110,8 +114,19 @@ export function EnvVarsPanel({ projectId }: Props) {
     }
   };
 
+  const markDeleting = (key: string, on: boolean) =>
+    setDeleting((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+
   const removeOne = async (n: string, type: DeploymentTypeOption) => {
+    const key = n + ":" + type;
+    if (deleting.has(key)) return;
     setFormError(null);
+    markDeleting(key, true);
     try {
       const resp = await api.projects.updateEnvVars(projectId, [
         { op: "delete", name: n, deploymentTypes: [type] },
@@ -128,11 +143,25 @@ export function EnvVarsPanel({ projectId }: Props) {
       setFormError(
         err instanceof ApiError ? err.message : t("Could not delete env var"),
       );
+    } finally {
+      markDeleting(key, false);
     }
   };
 
   const removeAllForName = async (n: string) => {
+    if (deleting.has(n)) return;
+    if (
+      !window.confirm(
+        t(
+          'Delete "{name}" from every environment? It\'s a live function-runtime variable — running deployments stop seeing process.env.{name} as soon as this syncs. This cannot be undone.',
+          { name: n },
+        ),
+      )
+    ) {
+      return;
+    }
     setFormError(null);
+    markDeleting(n, true);
     try {
       const resp = await api.projects.updateEnvVars(projectId, [
         { op: "delete", name: n },
@@ -152,6 +181,8 @@ export function EnvVarsPanel({ projectId }: Props) {
       setFormError(
         err instanceof ApiError ? err.message : t("Could not delete env var"),
       );
+    } finally {
+      markDeleting(n, false);
     }
   };
 
@@ -250,7 +281,8 @@ export function EnvVarsPanel({ projectId }: Props) {
                   <button
                     type="button"
                     onClick={() => removeAllForName(name)}
-                    className="text-[11px] text-neutral-500 hover:text-red-400"
+                    disabled={deleting.has(name)}
+                    className="text-[11px] text-neutral-500 hover:text-red-400 disabled:opacity-50"
                     aria-label={t("Delete all values for {name}", { name })}
                     data-testid={`env-var-delete-all-${name}`}
                   >
@@ -301,6 +333,7 @@ export function EnvVarsPanel({ projectId }: Props) {
                           variant="ghost"
                           size="sm"
                           onClick={() => removeOne(v.name, dt)}
+                          disabled={deleting.has(v.name + ":" + dt) || deleting.has(v.name)}
                           aria-label={t("Delete {name} ({type})", { name: v.name, type: dt })}
                         >
                           {t("Delete")}

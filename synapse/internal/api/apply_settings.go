@@ -130,16 +130,27 @@ func (h *ApplySettingsHandler) set(w http.ResponseWriter, r *http.Request) {
 
 // resolveApplySettings returns the effective apply enable/dangerous flags: the
 // dashboard-set DB row if present, else the .env defaults. Read at gate-time
-// (dry-run + apply) so a dashboard toggle takes effect without a restart. Any
-// error degrades to the env defaults — a settings-read hiccup must not silently
-// FLIP apply on; it falls back to whatever the host was configured with.
+// (dry-run + apply) so a dashboard toggle takes effect without a restart.
+//
+// Error handling is deliberately asymmetric and fail-closed:
+//   - no row yet (pgx.ErrNoRows) → legitimately fall back to the .env default;
+//     a fresh install simply hasn't been toggled.
+//   - any OTHER error (transient DB hiccup, pool exhausted) → return
+//     (false, false). It must NOT fall back to the env default here: if the
+//     operator provisioned with SYNAPSE_APPLY_ENABLED=true and then turned
+//     apply OFF in the dashboard (DB row = false), an env-fallback on a read
+//     error would silently RE-ENABLE apply — exactly the flip this gate is
+//     meant to prevent. A read we can't trust means "don't mutate".
 func resolveApplySettings(ctx context.Context, db *pgxpool.Pool, envEnabled, envDangerous bool) (enabled, dangerous bool) {
 	var e, d bool
 	err := db.QueryRow(ctx,
 		`SELECT apply_enabled, apply_dangerous FROM apply_settings WHERE id = true`,
 	).Scan(&e, &d)
-	if err != nil {
-		return envEnabled, envDangerous // no row (or transient error) → .env default
+	if err == nil {
+		return e, d
 	}
-	return e, d
+	if errors.Is(err, pgx.ErrNoRows) {
+		return envEnabled, envDangerous // no row → .env default
+	}
+	return false, false // transient error → fail closed, never re-enable on a hiccup
 }

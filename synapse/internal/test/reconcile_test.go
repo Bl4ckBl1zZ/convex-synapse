@@ -108,12 +108,12 @@ func provisionedContains(h *Harness, name string) bool {
 // 1. create: a 'failed' deployment with no container is provisioned; the step
 //    and run finalize 'succeeded' and the deployment row flips to 'running'.
 func TestReconcile_Create(t *testing.T) {
-	h := Setup(t)
+	h := SetupWithOpts(t, SetupOpts{ApplyEnabled: true})
 	admin := h.RegisterRandomUser()
 	projectID, depID, name := seedProjectAndDeployment(t, h, admin.ID, "failed")
 	runID, stepID := seedReconcileRunStep(t, h, projectID, depID, "create")
 
-	if _, err := provisioner.EnqueueReconcile(h.rootCtx, h.DB, depID, "create", runID, stepID, false); err != nil {
+	if _, _, err := provisioner.EnqueueReconcile(h.rootCtx, h.DB, depID, "create", runID, stepID, false); err != nil {
 		t.Fatalf("EnqueueReconcile: %v", err)
 	}
 	if st := waitRunTerminal(t, h, runID); st != "succeeded" {
@@ -137,13 +137,13 @@ func TestReconcile_Create(t *testing.T) {
 // 2. create idempotency (G4): a deployment already 'provisioning' (a create is
 //    in flight) is a no_op — no second container, step no_op, run succeeded.
 func TestReconcile_CreateIdempotentNoOp(t *testing.T) {
-	h := Setup(t)
+	h := SetupWithOpts(t, SetupOpts{ApplyEnabled: true})
 	admin := h.RegisterRandomUser()
 	projectID, depID, name := seedProjectAndDeployment(t, h, admin.ID, "provisioning")
 	runID, stepID := seedReconcileRunStep(t, h, projectID, depID, "create")
 
 	provBefore := len(h.Docker.ProvisionedSpecs())
-	if _, err := provisioner.EnqueueReconcile(h.rootCtx, h.DB, depID, "create", runID, stepID, false); err != nil {
+	if _, _, err := provisioner.EnqueueReconcile(h.rootCtx, h.DB, depID, "create", runID, stepID, false); err != nil {
 		t.Fatalf("EnqueueReconcile: %v", err)
 	}
 	if st := waitRunTerminal(t, h, runID); st != "succeeded" {
@@ -164,13 +164,13 @@ func TestReconcile_CreateIdempotentNoOp(t *testing.T) {
 // 3. restart: a 'stopped' deployment is bounced in place; step + run succeed,
 //    deployment flips to 'running', no new container is provisioned.
 func TestReconcile_Restart(t *testing.T) {
-	h := Setup(t)
+	h := SetupWithOpts(t, SetupOpts{ApplyEnabled: true})
 	admin := h.RegisterRandomUser()
 	projectID, depID, name := seedProjectAndDeployment(t, h, admin.ID, "stopped")
 	runID, stepID := seedReconcileRunStep(t, h, projectID, depID, "restart")
 
 	provBefore := len(h.Docker.ProvisionedSpecs())
-	if _, err := provisioner.EnqueueReconcile(h.rootCtx, h.DB, depID, "restart", runID, stepID, false); err != nil {
+	if _, _, err := provisioner.EnqueueReconcile(h.rootCtx, h.DB, depID, "restart", runID, stepID, false); err != nil {
 		t.Fatalf("EnqueueReconcile: %v", err)
 	}
 	if st := waitReconcileJob(t, h, depID); st != "done" {

@@ -56,6 +56,15 @@ export function EmailSettingsPanel() {
   };
 
   const clear = async () => {
+    if (
+      !window.confirm(
+        t(
+          "Clear email settings? Team invites will no longer be emailed — they'll fall back to invite links you have to share manually.",
+        ),
+      )
+    ) {
+      return;
+    }
     setFormError(null);
     setSaving(true);
     try {

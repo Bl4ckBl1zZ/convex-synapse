@@ -100,6 +100,22 @@ type Config struct {
 	PublicURL    string
 	ProxyEnabled bool
 	BaseDomain   string
+
+	// ApplyEnabled is the .env default for the Cell Control Plane reconcile
+	// gate (SYNAPSE_APPLY_ENABLED). It is ONLY a fallback: the runReconcile
+	// executor re-reads the apply_settings table at execution time (DB wins
+	// over env, fail-closed on a read error) so that toggling apply OFF in
+	// the dashboard kills already-enqueued reconcile jobs before they mutate
+	// anything. Without that re-check the dashboard kill-switch would be a
+	// no-op for work already in the queue.
+	ApplyEnabled bool
+
+	// MaxAttempts caps how many times a single job may be claimed before the
+	// worker gives up and marks it failed, instead of re-pending it forever.
+	// A deterministically-failing reconcile (image missing on the host, port
+	// permanently taken) would otherwise loop endlessly, hammering the remote
+	// host over SSH on every JobTimeout sweep. Defaults to 5.
+	MaxAttempts int
 }
 
 func (c Config) sane() Config {
@@ -122,7 +138,32 @@ func (c Config) sane() Config {
 	if out.PortRangeMax == 0 {
 		out.PortRangeMax = 3500
 	}
+	if out.MaxAttempts <= 0 {
+		out.MaxAttempts = 5
+	}
 	return out
+}
+
+// applyEnabledNow re-resolves the Cell Control Plane apply gate at execution
+// time, mirroring api.resolveApplySettings: the apply_settings DB row wins
+// over the .env default, and a transient read error fails CLOSED (apply off)
+// so a DB hiccup can never silently re-enable mutation. This is the second
+// half of the kill-switch — the apply handler checks the gate at enqueue,
+// the worker re-checks it here so a job that was queued while apply was ON
+// does nothing if the operator flips apply OFF before it runs.
+func (w *Worker) applyEnabledNow(ctx context.Context, logger *slog.Logger) bool {
+	var enabled bool
+	err := w.DB.QueryRow(ctx, `SELECT apply_enabled FROM apply_settings WHERE id = true`).Scan(&enabled)
+	if err == nil {
+		return enabled
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		// No row → fall back to the .env default (matches resolveApplySettings).
+		return w.Config.ApplyEnabled
+	}
+	// Transient DB error → fail closed. Never mutate on an unreadable gate.
+	logger.Warn("provisioner: apply gate read failed, treating as disabled", "err", err)
+	return false
 }
 
 // Worker pulls pending provision jobs from Postgres and runs them through
@@ -223,20 +264,34 @@ func EnqueueReplica(ctx context.Context, db Execer, deploymentID, replicaID stri
 }
 
 // EnqueueReconcile inserts a Bloco 10 reconcile job linking back to an
-// OperationRun/Step. action is create|restart|stop|remove. The partial unique
-// index provisioning_jobs_reconcile_step_inflight makes a duplicate in-flight
-// job for the same step a 23505 violation — the apply handler relies on that
-// for single-flight idempotency. Returns the job id.
-func EnqueueReconcile(ctx context.Context, db queryRower, deploymentID, action, operationRunID, operationStepID string, healthcheckViaNetwork bool) (int64, error) {
-	var id int64
-	err := db.QueryRow(ctx, `
+// OperationRun/Step. action is create|restart|stop|remove.
+//
+// Single-flight is a DB invariant: the partial unique index
+// provisioning_jobs_reconcile_deployment_inflight (000031) permits at most one
+// un-finished reconcile job PER DEPLOYMENT, and the per-step index (000029)
+// per step. INSERT ... ON CONFLICT DO NOTHING turns a would-be-duplicate into
+// a clean no-op rather than a tx-aborting 23505 — so a second concurrent apply
+// that loses the race enqueues nothing instead of double-mutating. The
+// returned enqueued flag is false in exactly that case (RETURNING yields no
+// row), and the caller marks its step skipped.
+func EnqueueReconcile(ctx context.Context, db queryRower, deploymentID, action, operationRunID, operationStepID string, healthcheckViaNetwork bool) (id int64, enqueued bool, err error) {
+	err = db.QueryRow(ctx, `
 		INSERT INTO provisioning_jobs
 			(deployment_id, kind, status, healthcheck_via_network,
 			 reconcile_action, operation_run_id, operation_step_id)
 		VALUES ($1, 'reconcile', 'pending', $2, $3, $4, $5)
+		ON CONFLICT DO NOTHING
 		RETURNING id
 	`, deploymentID, healthcheckViaNetwork, action, operationRunID, operationStepID).Scan(&id)
-	return id, err
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Conflict on a single-flight index → a reconcile for this deployment
+		// is already in flight. Not an error: the caller skips its step.
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
 }
 
 // EnqueueUpgradeToHA inserts the long-running upgrade job. The caller stores
@@ -278,6 +333,30 @@ func (w *Worker) Run(ctx context.Context) {
 		logger.Warn("provisioner: requeued stale jobs", "count", n)
 	}
 
+	// Periodic wedge sweep — the boot-time requeueStale above only runs
+	// once; this catches jobs/runs/deployments that wedge while the process
+	// is alive (worker goroutine dies between claim and finish). Cadence is
+	// a fraction of JobTimeout so a stuck row is recovered within ~1.5×
+	// JobTimeout, not "never until restart". Advisory-locked: one node/tick.
+	reaperEvery := cfg.JobTimeout / 2
+	if reaperEvery < 30*time.Second {
+		reaperEvery = 30 * time.Second
+	}
+	reaperDone := make(chan struct{})
+	go func() {
+		defer close(reaperDone)
+		t := time.NewTicker(reaperEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				w.reapStuck(ctx, cfg)
+			}
+		}
+	}()
+
 	done := make(chan struct{}, cfg.Concurrency)
 	for i := 0; i < cfg.Concurrency; i++ {
 		go w.loop(ctx, logger, cfg, done)
@@ -285,6 +364,7 @@ func (w *Worker) Run(ctx context.Context) {
 	for i := 0; i < cfg.Concurrency; i++ {
 		<-done
 	}
+	<-reaperDone
 	logger.Info("provisioner worker stopping")
 }
 
@@ -316,6 +396,29 @@ func (w *Worker) loop(ctx context.Context, logger *slog.Logger, cfg Config, done
 func (w *Worker) requeueStale(ctx context.Context, cfg Config) (int64, error) {
 	// JobTimeout is a Go duration; convert to seconds for the Postgres
 	// interval expression.
+	secs := int(cfg.JobTimeout.Seconds())
+
+	// First, give up on jobs that have been claimed-and-abandoned too many
+	// times. `attempts` is bumped on every claim; once it crosses MaxAttempts
+	// a re-pend would just feed an infinite retry loop (e.g. a deterministic
+	// Provision failure that keeps SIGKILLing the worker, or an image that
+	// will never pull). Mark those failed so an operator sees them instead of
+	// the worker silently churning forever. Reconcile jobs also need their
+	// ledger step closed — handled lazily by the sweep in reapStuck.
+	failTag, err := w.DB.Exec(ctx, `
+		UPDATE provisioning_jobs
+		   SET status      = 'failed',
+		       finished_at = now(),
+		       error       = COALESCE(NULLIF(error, ''), 'exceeded max attempts; giving up')
+		 WHERE status   = 'claimed'
+		   AND claimed_at < now() - ($1::int * interval '1 second')
+		   AND attempts >= $2
+	`, secs, cfg.MaxAttempts)
+	if err != nil {
+		return 0, err
+	}
+
+	// Re-pend the rest: claimed, stale, but still under the attempt cap.
 	tag, err := w.DB.Exec(ctx, `
 		UPDATE provisioning_jobs
 		   SET status     = 'pending',
@@ -323,11 +426,121 @@ func (w *Worker) requeueStale(ctx context.Context, cfg Config) (int64, error) {
 		       claimed_at = NULL
 		 WHERE status     = 'claimed'
 		   AND claimed_at < now() - ($1::int * interval '1 second')
-	`, int(cfg.JobTimeout.Seconds()))
+		   AND attempts < $2
+	`, secs, cfg.MaxAttempts)
 	if err != nil {
 		return 0, err
 	}
+	if n := failTag.RowsAffected(); n > 0 {
+		w.log().Warn("provisioner: failed jobs over attempt cap", "count", n, "max_attempts", cfg.MaxAttempts)
+	}
 	return tag.RowsAffected(), nil
+}
+
+// log returns a never-nil logger. Worker.Logger may be nil in minimal test
+// harnesses; Run() substitutes slog.Default() for its local, but helpers that
+// reach for w.Logger directly need the same guard.
+func (w *Worker) log() *slog.Logger {
+	if w.Logger != nil {
+		return w.Logger
+	}
+	return slog.Default()
+}
+
+// reapStuck is the PERIODIC counterpart to the boot-time recovery. Within a
+// long-running process a worker can die between claim and finish, wedging:
+//   - jobs stuck in 'claimed' (requeueStale only ran at boot),
+//   - deployments stuck in 'provisioning' with no live job behind them,
+//   - operation_runs orphaned in queued/running because the last job that
+//     would have rolled them up never finished.
+//
+// One node per tick (advisory lock); followers skip silently. All three
+// passes are best-effort and idempotent — a failure in one is logged and the
+// others still run on the next tick.
+func (w *Worker) reapStuck(ctx context.Context, cfg Config) {
+	acquired, err := synapsedb.WithTryAdvisoryLock(ctx, w.DB, synapsedb.LockReconcileReaper,
+		func(ctx context.Context) error {
+			secs := int(cfg.JobTimeout.Seconds())
+
+			// 1. Re-pend / fail stale claimed jobs (periodic requeueStale).
+			if n, err := w.requeueStale(ctx, cfg); err != nil {
+				w.log().Error("reaper: requeue stale failed", "err", err)
+			} else if n > 0 {
+				w.log().Warn("reaper: requeued stale jobs", "count", n)
+			}
+
+			// 2. Fail deployments wedged in 'provisioning' whose owning worker
+			//    is gone: last_deploy_at is stamped when the provision flip
+			//    happens, so a row older than the timeout with no pending/
+			//    claimed job behind it will never make progress. Mark failed so
+			//    the operator can retry instead of watching an eternal spinner.
+			if tag, err := w.DB.Exec(ctx, `
+				UPDATE deployments d
+				   SET status = 'failed', last_deploy_at = now()
+				 WHERE d.status = 'provisioning'
+				   AND d.last_deploy_at < now() - ($1::int * interval '1 second')
+				   AND NOT EXISTS (
+				       SELECT 1 FROM provisioning_jobs j
+				        WHERE j.deployment_id = d.id
+				          AND j.status IN ('pending','claimed')
+				   )
+			`, secs); err != nil {
+				w.log().Error("reaper: fail stuck provisioning failed", "err", err)
+			} else if n := tag.RowsAffected(); n > 0 {
+				w.log().Warn("reaper: failed deployments stuck in provisioning", "count", n)
+			}
+
+			// 3. Finalize orphaned operation_runs: queued/running, untouched
+			//    past the timeout, with no live reconcile job. First close any
+			//    dangling 'planned' steps as failed (a dead worker never wrote
+			//    their terminal status; leaving them 'planned' would make the
+			//    rollup mis-report the run as succeeded), then roll up.
+			rows, err := w.DB.Query(ctx, `
+				SELECT id FROM operation_runs r
+				 WHERE r.status IN ('queued','running')
+				   AND r.updated_at < now() - ($1::int * interval '1 second')
+				   AND NOT EXISTS (
+				       SELECT 1 FROM provisioning_jobs j
+				        WHERE j.operation_run_id = r.id
+				          AND j.kind = 'reconcile'
+				          AND j.status IN ('pending','claimed')
+				   )
+			`, secs)
+			if err != nil {
+				w.log().Error("reaper: orphan run query failed", "err", err)
+				return nil
+			}
+			var orphanRuns []string
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					w.log().Error("reaper: scan orphan run", "err", err)
+					return nil
+				}
+				orphanRuns = append(orphanRuns, id)
+			}
+			rows.Close()
+			for _, id := range orphanRuns {
+				if _, err := w.DB.Exec(ctx, `
+					UPDATE operation_steps SET status = 'failed',
+					       error = COALESCE(NULLIF(error, ''), 'worker died before this step ran'),
+					       updated_at = now()
+					 WHERE operation_run_id = $1 AND status = 'planned'
+				`, id); err != nil {
+					w.log().Error("reaper: close planned steps", "run_id", id, "err", err)
+					continue
+				}
+				w.rollupReconcileRun(id)
+				w.log().Warn("reaper: finalized orphaned operation_run", "run_id", id)
+			}
+			return nil
+		})
+	if err != nil {
+		w.log().Error("reaper: advisory lock failed", "err", err)
+		return
+	}
+	_ = acquired // follower nodes simply skip this tick
 }
 
 // processOne dequeues + runs a single job. Returns true if a job was

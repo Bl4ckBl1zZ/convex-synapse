@@ -185,6 +185,13 @@ def run_upgrade(ref: str) -> None:
                 stderr=subprocess.STDOUT,
                 cwd=str(INSTALL_DIR),
                 env=child_env,
+                # Detach setup.sh into its own session/process group so a
+                # daemon restart (or crash → systemd Restart=on-failure)
+                # doesn't drag the in-flight upgrade down with it. Paired
+                # with KillMode=process in the unit; together they ensure
+                # `systemctl restart synapse-updater` mid-upgrade leaves the
+                # running setup.sh + its `docker compose up --build` alone.
+                start_new_session=True,
             )
             exit_code = proc.wait()
     except (OSError, subprocess.SubprocessError) as e:
@@ -381,6 +388,13 @@ def run_reconfigure(job_id: str, payload: dict) -> None:
                 stderr=subprocess.STDOUT,
                 cwd=str(INSTALL_DIR),
                 env=child_env,
+                # Detach setup.sh into its own session/process group so a
+                # daemon restart (or crash → systemd Restart=on-failure)
+                # doesn't drag the in-flight upgrade down with it. Paired
+                # with KillMode=process in the unit; together they ensure
+                # `systemctl restart synapse-updater` mid-upgrade leaves the
+                # running setup.sh + its `docker compose up --build` alone.
+                start_new_session=True,
             )
             exit_code = proc.wait()
     except (OSError, subprocess.SubprocessError) as e:
@@ -462,6 +476,13 @@ def run_configure_headscale(job_id: str, payload: dict) -> None:
                 stderr=subprocess.STDOUT,
                 cwd=str(INSTALL_DIR),
                 env=child_env,
+                # Detach setup.sh into its own session/process group so a
+                # daemon restart (or crash → systemd Restart=on-failure)
+                # doesn't drag the in-flight upgrade down with it. Paired
+                # with KillMode=process in the unit; together they ensure
+                # `systemctl restart synapse-updater` mid-upgrade leaves the
+                # running setup.sh + its `docker compose up --build` alone.
+                start_new_session=True,
             )
             exit_code = proc.wait()
     except (OSError, subprocess.SubprocessError) as e:

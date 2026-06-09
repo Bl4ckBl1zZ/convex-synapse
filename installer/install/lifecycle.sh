@@ -740,6 +740,35 @@ lifecycle::_upgrade_phase_b() {
         fi
     fi
 
+    # --- 8.9. snapshot the metadata DB before migrations run -------
+    # `compose up --build` (next step) boots the NEW synapse-api, which
+    # runs golang-migrate on startup — a one-way move forward. The image
+    # snapshot (step 4) can roll the BINARY back, but not the SCHEMA: a
+    # rolled-back old binary may not understand the new schema, and
+    # golang-migrate refuses to start on a 'dirty' version. So capture a
+    # pg_dump here; if the upgrade goes bad, the operator can restore it
+    # (synapse --restore, or psql replay) to recover the pre-migration
+    # state. postgres is the OLD container and stays up across the
+    # rebuild, so this dumps the live pre-migration DB.
+    #
+    # Best-effort: a dump failure WARNS (so the operator knows there's no
+    # DB rollback point) but does not abort — the migrations heading into
+    # 1.24 are additive/safe, and a postgres that can't be dumped would
+    # fail the migration step anyway with a clearer error.
+    local db_snap_file="$install_dir/.upgrade-db-snapshot.sql.gz"
+    local _pg_user _pg_db _docker_cmd
+    _pg_user="$(secrets::env_get "$env_file" POSTGRES_USER)"; _pg_user="${_pg_user:-synapse}"
+    _pg_db="$(secrets::env_get "$env_file" POSTGRES_DB)"; _pg_db="${_pg_db:-synapse}"
+    _docker_cmd="${COMPOSE_CMD:-docker}"
+    if ui::spin "Snapshotting database before migrations" \
+            bash -c "set -o pipefail; '$_docker_cmd' exec synapse-postgres pg_dump -U '$_pg_user' -d '$_pg_db' --clean --if-exists | gzip > '$db_snap_file'"; then
+        lifecycle::log "$log_file" "db snapshot written: $db_snap_file"
+    else
+        rm -f "$db_snap_file"
+        ui::warn "could not snapshot the database — upgrade will proceed WITHOUT a DB rollback point"
+        lifecycle::log "$log_file" "db snapshot FAILED — proceeding without DB rollback point"
+    fi
+
     # --- 9. compose up -d --build ----------------------------------
     local profile_args=()
     while IFS= read -r line; do
@@ -772,6 +801,27 @@ lifecycle::_upgrade_phase_b() {
         return 2
     fi
 
+    # --- 11. read-only smoke beyond /health ------------------------
+    # /health is a liveness probe that doesn't touch the DB or any
+    # handler, so a migration that succeeded-but-broke-a-handler (a
+    # dropped column another query still reads, a shape mismatch) would
+    # pass it. /v1/install_status is public, read-only, and runs a real
+    # query (EXISTS on users) through a handler — so curl -f succeeding
+    # here proves the migrated schema + the API layer actually serve a
+    # request (a 500 makes -f exit non-zero). A failure rolls back, same
+    # as a health failure. Uses the same COMPOSE_CURL indirection as the
+    # health probe so the bats harness can drive it deterministically.
+    local smoke_curl="${COMPOSE_CURL:-curl}"
+    local smoke_url="http://localhost:$synapse_port/v1/install_status"
+    if ! "$smoke_curl" -fsS --max-time 10 "$smoke_url" >/dev/null 2>&1; then
+        ui::fail "Post-upgrade smoke failed: $smoke_url did not serve (a migration may have broken a handler)"
+        secrets::set_env_var "$env_file" SYNAPSE_VERSION "$old_version_stamp"
+        lifecycle::log "$log_file" "upgrade failed: smoke /v1/install_status (stamp reverted to ${old_version_stamp:-unknown})"
+        lifecycle::_rollback "$install_dir" "$snap_file" "$log_file"
+        return 2
+    fi
+    lifecycle::log "$log_file" "post-upgrade smoke ok: /v1/install_status served"
+
     ui::success "Upgrade complete: ${current:-unknown} → $new_stamp"
     lifecycle::log "$log_file" "upgrade success: ${current:-unknown} → $new_stamp"
     return 0
@@ -796,6 +846,18 @@ lifecycle::_rollback() {
     lifecycle::log "$log" "rollback: re-tagged from $snap"
     ui::warn "Rollback applied — inspect with:"
     ui::warn "  docker compose -f $install_dir/docker-compose.yml logs --tail=200"
+    # Image rollback restores the BINARY only. If the failed upgrade had
+    # already run migrations, the schema moved forward and the old binary
+    # may not understand it. Point the operator at the pre-migration DB
+    # snapshot so they can restore it by hand if the rolled-back stack
+    # misbehaves (additive migrations usually stay compatible, but say so).
+    local db_snap="$install_dir/.upgrade-db-snapshot.sql.gz"
+    if [[ -f "$db_snap" ]]; then
+        ui::warn "Pre-migration DB snapshot saved at: $db_snap"
+        ui::warn "  If the rolled-back stack misbehaves, restore it with:"
+        ui::warn "  gunzip -c '$db_snap' | docker compose -f $install_dir/docker-compose.yml exec -T synapse-postgres psql -U synapse -d synapse"
+        lifecycle::log "$log" "rollback: db snapshot available at $db_snap"
+    fi
 }
 
 # ====================================================================

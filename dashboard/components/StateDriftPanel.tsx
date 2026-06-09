@@ -123,20 +123,29 @@ export function StateDriftPanel({ projectId }: Props) {
     run("apply", async () => {
       const res = await api.reconcile.projectApply(projectId);
       let status = res.status;
+      let finalResult: Record<string, unknown> | null = null;
       for (let i = 0; i < 80 && (status === "running" || status === "queued"); i += 1) {
         await new Promise((r) => setTimeout(r, 1500));
         try {
           const detail = await api.operationRuns.get(res.operationRunId);
           status = detail.operationRun.status;
+          finalResult = detail.operationRun.result ?? finalResult;
         } catch {
           break;
         }
       }
       setDryRun(null);
       await Promise.all([mutateDrift(), refreshRuns()]);
-      const queued = res.summary?.queued ?? 0;
       if (status === "succeeded") {
-        setNotice(t("Apply succeeded — {n} action(s) reconciled.", { n: queued }));
+        // Report the count that actually RECONCILED from the run's rollup
+        // result, not res.summary.queued (the count we enqueued at apply-start).
+        // Some queued steps can finish as no_op/skipped/failed, so the queued
+        // count overstates "reconciled".
+        const reconciled =
+          typeof finalResult?.succeeded === "number"
+            ? (finalResult.succeeded as number)
+            : (res.summary?.queued ?? 0);
+        setNotice(t("Apply succeeded — {n} action(s) reconciled.", { n: reconciled }));
       } else {
         setError(t("Apply finished with status: {status}.", { status }));
       }

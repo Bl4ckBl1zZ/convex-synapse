@@ -432,6 +432,9 @@ func run() error {
 				PublicURL:    cfg.PublicURL,
 				ProxyEnabled: cfg.ProxyEnabled,
 				BaseDomain:   cfg.BaseDomain,
+				// .env default for the apply gate; runReconcile re-reads
+				// apply_settings (DB wins) at execution time.
+				ApplyEnabled: cfg.ApplyEnabled,
 			},
 			Logger:        logger,
 			ConvexEnv:     convexEnvClient,

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS provisioning_jobs_reconcile_deployment_inflight;

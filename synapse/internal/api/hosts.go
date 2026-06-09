@@ -662,6 +662,33 @@ func (h *HostsHandler) deleteHost(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
+	// Re-check the guards INSIDE the txn, with the host row locked FOR UPDATE.
+	// Guards 2/3 above ran in autocommit, then the teardown took up to 25s —
+	// a concurrent createDeployment could have attached a deployment to this
+	// host in that window. Without this re-check the DELETE would either trip
+	// the ON DELETE RESTRICT FK (an ugly 500) or, worse, race it. Locking the
+	// row also serialises two concurrent deleteHost calls. A deployment that
+	// appeared during teardown surfaces as a clean 409 (host kept; the agent
+	// may already be torn down, so the operator re-runs install-agent.sh).
+	if _, err := tx.Exec(r.Context(), `SELECT 1 FROM hosts WHERE id = $1 FOR UPDATE`, hst.ID); err != nil {
+		logErr("lock host for delete", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+	var liveNow int
+	if err := tx.QueryRow(r.Context(), `
+		SELECT count(*) FROM deployments WHERE host_id = $1 AND status <> 'deleted'
+	`, hst.ID).Scan(&liveNow); err != nil {
+		logErr("recheck host deployments", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to remove host")
+		return
+	}
+	if liveNow > 0 {
+		writeError(w, http.StatusConflict, "host_has_deployments",
+			"A deployment was attached to this host while it was being removed. Delete or move it, then retry.")
+		return
+	}
+
 	// Reassign soft-deleted deployments' history rows to the self-host so the
 	// ON DELETE RESTRICT FK doesn't block the delete. (Live rows were already
 	// refused above; only status='deleted' rows can remain here.)
