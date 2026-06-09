@@ -384,6 +384,8 @@ func run() error {
 		DomainCache:         proxyResolver,
 		AgentStaleAfter:     cfg.AgentStaleAfter,
 		AgentOfflineAfter:   cfg.AgentOfflineAfter,
+		ApplyEnabled:        cfg.ApplyEnabled,
+		ApplyDangerous:      cfg.ApplyDangerous,
 		EnableDesiredState:  cfg.EnableDesiredState,
 		EnableObservedState: cfg.EnableObservedState,
 		// DNS-provider credentials reuse the same SecretBox as the HA

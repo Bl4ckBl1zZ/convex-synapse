@@ -59,6 +59,7 @@ func (h *CellsHandler) Routes() chi.Router {
 			r.Get("/drift/latest", h.Drift.latestCell)
 			r.Post("/drift/recompute", h.Drift.recomputeCell)
 			r.Post("/reconcile/dry_run", h.Drift.dryRunCell)
+			r.Post("/reconcile/apply", h.Drift.applyCell)
 		}
 	})
 	return r

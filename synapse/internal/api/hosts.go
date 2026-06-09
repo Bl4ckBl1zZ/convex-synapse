@@ -198,6 +198,7 @@ func (h *HostsHandler) Routes() chi.Router {
 			r.Get("/drift/latest", h.Drift.latestHost)
 			r.Post("/drift/recompute", h.Drift.recomputeHost)
 			r.Post("/reconcile/dry_run", h.Drift.dryRunHost)
+			r.Post("/reconcile/apply", h.Drift.applyHost)
 		}
 	})
 	return r

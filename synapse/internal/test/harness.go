@@ -329,6 +329,11 @@ type SetupOpts struct {
 	// exercise the teardown/restart deadline set a small value so a
 	// blocking remote dispatcher surfaces the bound in milliseconds.
 	RemoteOpTimeout time.Duration
+	// ApplyEnabled / ApplyDangerous mirror api.RouterDeps (Bloco 10). Default
+	// false → the reconcile/apply endpoint 404s. Tests that exercise apply set
+	// ApplyEnabled true.
+	ApplyEnabled   bool
+	ApplyDangerous bool
 }
 
 // stubResolverFunc adapts a closure to api.HostDomainResolver.
@@ -482,6 +487,8 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		EnableDesiredState:     true,
 		EnableObservedState:    true,
 		ConvexEnv:              opts.ConvexEnv,
+		ApplyEnabled:           opts.ApplyEnabled,
+		ApplyDangerous:         opts.ApplyDangerous,
 		HeadscaleServerURL:     opts.HeadscaleServerURL,
 		Headscale:              opts.Headscale,
 		HeadscaleDomain:        opts.HeadscaleDomain,

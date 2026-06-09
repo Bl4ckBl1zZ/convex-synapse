@@ -177,6 +177,7 @@ func (h *ProjectsHandler) Routes() chi.Router {
 			r.Get("/drift/latest", h.Drift.latestProject)
 			r.Post("/drift/recompute", h.Drift.recomputeProject)
 			r.Post("/reconcile/dry_run", h.Drift.dryRunProject)
+			r.Post("/reconcile/apply", h.Drift.applyProject)
 		}
 	})
 

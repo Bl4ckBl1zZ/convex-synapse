@@ -700,6 +700,7 @@ const (
 	OperationTypeRecordObservedState       = "record_observed_state"
 	OperationTypeComputeDrift              = "compute_drift"
 	OperationTypeReconcileDryRun           = "reconcile_dry_run"
+	OperationTypeReconcileApply            = "reconcile_apply"
 	OperationTypeCreateDesiredState        = "create_desired_state"
 	OperationTypeDisableDesiredState       = "disable_desired_state"
 )

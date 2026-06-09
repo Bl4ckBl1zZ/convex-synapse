@@ -35,6 +35,14 @@ type DriftHandler struct {
 	// effectiveStatus that decides whether observation can be trusted.
 	StaleAfter   time.Duration
 	OfflineAfter time.Duration
+
+	// Bloco 10 — central-driven apply. ApplyEnabled gates the whole
+	// reconcile/apply surface (404 when false). ApplyDangerous is the second
+	// gate for stop/remove. HealthcheckViaNetwork is passed through to the
+	// reconcile jobs the apply handler enqueues. See docs/CCP_APPLY_PLAN.md.
+	ApplyEnabled          bool
+	ApplyDangerous        bool
+	HealthcheckViaNetwork bool
 }
 
 func (h *DriftHandler) staleAfter() time.Duration {

@@ -177,6 +177,12 @@ type RouterDeps struct {
 	AgentStaleAfter   time.Duration
 	AgentOfflineAfter time.Duration
 
+	// Bloco 10 — central-driven apply gates (both default false / OFF).
+	// ApplyEnabled gates the whole reconcile/apply surface; ApplyDangerous
+	// is the second gate for stop/remove. See docs/CCP_APPLY_PLAN.md.
+	ApplyEnabled   bool
+	ApplyDangerous bool
+
 	// Bloco 9 — desired/observed state. Default true in the harness (zero
 	// value false there, so the harness opts in explicitly if needed). Apply
 	// is never enabled in this block.
@@ -409,12 +415,15 @@ func NewRouter(d RouterDeps) http.Handler {
 	// Routes are mounted on each scope's handler (instance-admin for host,
 	// project-RBAC for cell/project). Compares + plans only; never applies.
 	driftH := &DriftHandler{
-		DB:           d.DB,
-		Projects:     projectsH,
-		Cells:        cellsH,
-		Hosts:        hostsH,
-		StaleAfter:   d.AgentStaleAfter,
-		OfflineAfter: d.AgentOfflineAfter,
+		DB:                    d.DB,
+		Projects:              projectsH,
+		Cells:                 cellsH,
+		Hosts:                 hostsH,
+		StaleAfter:            d.AgentStaleAfter,
+		OfflineAfter:          d.AgentOfflineAfter,
+		ApplyEnabled:          d.ApplyEnabled,
+		ApplyDangerous:        d.ApplyDangerous,
+		HealthcheckViaNetwork: d.HealthcheckViaNetwork,
 	}
 	projectsH.Drift = driftH
 	cellsH.Drift = driftH

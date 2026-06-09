@@ -42,6 +42,8 @@ type Provisioner interface {
 	Destroy(ctx context.Context, deploymentName string) error
 	DestroyReplica(ctx context.Context, deploymentName string, replicaIndex int, keepVolume bool) error
 	Stop(ctx context.Context, deploymentName string) error
+	// Restart bounces an existing container in place (Bloco 10 reconcile).
+	Restart(ctx context.Context, deploymentName string) error
 }
 
 // SnapshotMigrator is implemented by the Docker client in production and by
@@ -185,6 +187,7 @@ type queryRower interface {
 const (
 	jobKindProvision   = "provision"
 	jobKindUpgradeToHA = "upgrade_to_ha"
+	jobKindReconcile   = "reconcile"
 )
 
 // Enqueue inserts a 'provision' job for deploymentID. The caller is expected
@@ -217,6 +220,23 @@ func EnqueueReplica(ctx context.Context, db Execer, deploymentID, replicaID stri
 		VALUES ($1, $2, 'provision', 'pending', $3)
 	`, deploymentID, replicaID, healthcheckViaNetwork)
 	return err
+}
+
+// EnqueueReconcile inserts a Bloco 10 reconcile job linking back to an
+// OperationRun/Step. action is create|restart|stop|remove. The partial unique
+// index provisioning_jobs_reconcile_step_inflight makes a duplicate in-flight
+// job for the same step a 23505 violation — the apply handler relies on that
+// for single-flight idempotency. Returns the job id.
+func EnqueueReconcile(ctx context.Context, db queryRower, deploymentID, action, operationRunID, operationStepID string, healthcheckViaNetwork bool) (int64, error) {
+	var id int64
+	err := db.QueryRow(ctx, `
+		INSERT INTO provisioning_jobs
+			(deployment_id, kind, status, healthcheck_via_network,
+			 reconcile_action, operation_run_id, operation_step_id)
+		VALUES ($1, 'reconcile', 'pending', $2, $3, $4, $5)
+		RETURNING id
+	`, deploymentID, healthcheckViaNetwork, action, operationRunID, operationStepID).Scan(&id)
+	return id, err
 }
 
 // EnqueueUpgradeToHA inserts the long-running upgrade job. The caller stores
@@ -330,6 +350,8 @@ func (w *Worker) processOne(ctx context.Context, logger *slog.Logger, cfg Config
 		w.runJob(jobCtx, logger, job)
 	case jobKindUpgradeToHA:
 		w.runUpgradeToHA(jobCtx, logger, cfg, job)
+	case jobKindReconcile:
+		w.runReconcile(jobCtx, logger, job)
 	default:
 		logger.Error("provisioner: unknown job kind",
 			"job_id", job.JobID, "deployment_id", job.DeploymentID, "kind", job.Kind)
@@ -373,6 +395,18 @@ type claimedJob struct {
 	HostTailnetAddr string
 	HostSSHUser     string
 	HostSSHPort     int
+
+	// Reconcile targeting (Bloco 10). Populated only for kind='reconcile'
+	// jobs. ReconcileAction is one of create/restart/stop/remove;
+	// OperationRunID/OperationStepID link the job back to the OperationRun
+	// ledger so runReconcile writes terminal step status there.
+	// DeploymentStatus/Adopted are the live guard fields (idempotency +
+	// "never reconcile an adopted deployment").
+	ReconcileAction  string
+	OperationRunID   string
+	OperationStepID  string
+	DeploymentStatus string
+	Adopted          bool
 }
 
 // Storage carries the per-deployment Postgres + S3 connection info that
@@ -417,13 +451,16 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 	var replicaHostPort *int
 	var deploymentHostPort *int
 	var deploymentContainerID *string
+	var operationRunID, operationStepID *string
 	err = tx.QueryRow(ctx, `
 		SELECT j.id, j.kind, j.deployment_id, j.replica_id::text,
 		       d.project_id::text, d.name, d.deployment_type,
 		       d.host_port, d.container_id, d.admin_key, d.instance_secret, d.ha_enabled,
 		       r.replica_index, r.host_port,
 		       j.healthcheck_via_network,
-		       d.host_id::text, h.is_remote, COALESCE(h.tailnet_addr, ''), h.ssh_user, h.ssh_port
+		       d.host_id::text, h.is_remote, COALESCE(h.tailnet_addr, ''), h.ssh_user, h.ssh_port,
+		       COALESCE(j.reconcile_action, ''), j.operation_run_id::text, j.operation_step_id::text,
+		       d.status, d.adopted
 		  FROM provisioning_jobs j
 		  JOIN deployments d ON d.id = j.deployment_id
 		  JOIN hosts       h ON h.id = d.host_id
@@ -437,8 +474,16 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 		&deploymentHostPort, &deploymentContainerID, &j.AdminKey, &j.InstanceSecret, &j.HAEnabled,
 		&replicaIndex, &replicaHostPort,
 		&j.HealthcheckViaNetwork,
-		&j.HostID, &j.HostIsRemote, &j.HostTailnetAddr, &j.HostSSHUser, &j.HostSSHPort)
+		&j.HostID, &j.HostIsRemote, &j.HostTailnetAddr, &j.HostSSHUser, &j.HostSSHPort,
+		&j.ReconcileAction, &operationRunID, &operationStepID,
+		&j.DeploymentStatus, &j.Adopted)
 	_ = replicaID
+	if operationRunID != nil {
+		j.OperationRunID = *operationRunID
+	}
+	if operationStepID != nil {
+		j.OperationStepID = *operationStepID
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return claimedJob{}, false
 	}
@@ -661,6 +706,41 @@ func indexOf(s, sub string) int {
 // row and just flips status to 'deleted' (it can't safely call Destroy
 // while we're mid-create). When we're done, we re-read status: if it's
 // no longer 'provisioning', we tear down whatever we built.
+// buildSpec assembles the DeploymentSpec from a claimed job. Shared by the
+// provision path (runJob) and the Bloco 10 reconcile-create path so the
+// container is built identically however it was triggered.
+func (w *Worker) buildSpec(ctx context.Context, j claimedJob) dockerprov.DeploymentSpec {
+	spec := dockerprov.DeploymentSpec{
+		Name:                  j.Name,
+		DeploymentID:          j.DeploymentID,
+		ProjectID:             j.ProjectID,
+		InstanceSecret:        j.InstanceSecret,
+		HostPort:              j.HostPort,
+		EnvVars:               j.EnvVars,
+		HealthcheckViaNetwork: j.HealthcheckViaNetwork,
+		HAReplica:             j.HAEnabled,
+		ReplicaIndex:          j.ReplicaIndex,
+		PublicURL:             w.computePublicOrigin(ctx, j.DeploymentID, j.Name, j.HostPort),
+		SiteURL:               w.computeSiteOrigin(ctx, j.DeploymentID, j.Name),
+	}
+	if j.Storage != nil {
+		spec.Storage = &dockerprov.StorageEnv{
+			PostgresURL:     j.Storage.PostgresURL,
+			DoNotRequireSSL: j.Storage.DoNotRequireSSL,
+			S3Endpoint:      j.Storage.S3Endpoint,
+			S3Region:        j.Storage.S3Region,
+			S3AccessKey:     j.Storage.S3AccessKey,
+			S3SecretKey:     j.Storage.S3SecretKey,
+			BucketFiles:     j.Storage.BucketFiles,
+			BucketModules:   j.Storage.BucketModules,
+			BucketSearch:    j.Storage.BucketSearch,
+			BucketExports:   j.Storage.BucketExports,
+			BucketSnapshots: j.Storage.BucketSnapshots,
+		}
+	}
+	return spec
+}
+
 func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) {
 	// Panic shield so a bad job never kills the worker.
 	defer func() {
@@ -710,34 +790,7 @@ func (w *Worker) runJob(ctx context.Context, logger *slog.Logger, j claimedJob) 
 		return
 	}
 
-	spec := dockerprov.DeploymentSpec{
-		Name:                  j.Name,
-		DeploymentID:          j.DeploymentID,
-		ProjectID:             j.ProjectID,
-		InstanceSecret:        j.InstanceSecret,
-		HostPort:              j.HostPort,
-		EnvVars:               j.EnvVars,
-		HealthcheckViaNetwork: j.HealthcheckViaNetwork,
-		HAReplica:             j.HAEnabled,
-		ReplicaIndex:          j.ReplicaIndex,
-		PublicURL:             w.computePublicOrigin(ctx, j.DeploymentID, j.Name, j.HostPort),
-		SiteURL:               w.computeSiteOrigin(ctx, j.DeploymentID, j.Name),
-	}
-	if j.Storage != nil {
-		spec.Storage = &dockerprov.StorageEnv{
-			PostgresURL:     j.Storage.PostgresURL,
-			DoNotRequireSSL: j.Storage.DoNotRequireSSL,
-			S3Endpoint:      j.Storage.S3Endpoint,
-			S3Region:        j.Storage.S3Region,
-			S3AccessKey:     j.Storage.S3AccessKey,
-			S3SecretKey:     j.Storage.S3SecretKey,
-			BucketFiles:     j.Storage.BucketFiles,
-			BucketModules:   j.Storage.BucketModules,
-			BucketSearch:    j.Storage.BucketSearch,
-			BucketExports:   j.Storage.BucketExports,
-			BucketSnapshots: j.Storage.BucketSnapshots,
-		}
-	}
+	spec := w.buildSpec(ctx, j)
 
 	// v1.18+: route to local Docker or *dockerprov.RemoteClient based
 	// on the host's is_remote flag. dockerForJob markFailed's the job
@@ -1383,6 +1436,7 @@ func (w *Worker) computeSiteOrigin(ctx context.Context, deploymentID, name strin
 type jobDispatcher interface {
 	Provision(ctx context.Context, spec dockerprov.DeploymentSpec) (*dockerprov.DeploymentInfo, error)
 	Destroy(ctx context.Context, deploymentName string) error
+	Restart(ctx context.Context, deploymentName string) error
 }
 
 // dockerForJob returns the dispatcher appropriate for this job's host:
