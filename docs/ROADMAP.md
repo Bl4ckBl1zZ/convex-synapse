@@ -1,8 +1,9 @@
 # Roadmap
 
-Current test inventory as of 2026-05-06: 317 Go test functions, 50
-Playwright e2e tests, and 396 bats cases. Historical milestone counts below
-are left as per-PR deltas, not the current totals.
+Current test inventory as of 2026-06-09: 712 Go test functions (565
+integration in `internal/test`), 139 Playwright e2e tests across 41 specs,
+and 396 bats cases. Historical milestone counts below are left as per-PR
+deltas, not the current totals.
 
 ## v0.1 — "It runs end-to-end" ✅ DONE
 
@@ -156,6 +157,23 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
 
 ### ✅ Shipped this milestone
 
+- [x] **Deployment-down alerts (v1.25)** — the health worker now notifies
+  somebody when a deployment transitions to `stopped`/`failed` instead of
+  silently flipping the row: email to the owning team's admins (same
+  Resend config as invites — DB settings win over `.env`) + a generic
+  webhook whose payload carries both `text` (Slack) and `content`
+  (Discord) plus structured fields, so one URL covers Slack / Discord /
+  custom receivers. Fires exactly once per down transition (the sweep
+  only selects `running` replicas, so there's no per-sweep spam by
+  construction) and stays silent when auto-restart already recovered the
+  blip. Config via **Admin → Alerts** (`/v1/admin/alert_settings`,
+  migration 000032 singleton; masked webhook hint, URL never echoed) or
+  `SYNAPSE_ALERT_WEBHOOK_URL`. Notifier is detached + best-effort — a
+  hung receiver can't stall the sweep (which runs under the fleet-wide
+  advisory lock). New package `internal/alert`; `email.ResolveSender`
+  extracted for reuse. Tests: +14 Go integration, +3 Playwright (one of
+  the four gaps picked from the Convex Cloud comparison — next: password
+  reset, deployment classes, per-deployment backups).
 - [x] **Phase 3 polish on the in-iframe deployment picker.** Same
   overlay (Strategy E), more ergonomics. Five UX wins, zero new
   dependencies: keyboard navigation in the dropdown (↑↓ Enter

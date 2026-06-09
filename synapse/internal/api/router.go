@@ -99,6 +99,12 @@ type RouterDeps struct {
 	// point its dashboard at its own release stream.
 	GitHubRepo string
 
+	// AlertWebhookURL is the .env fallback (SYNAPSE_ALERT_WEBHOOK_URL) for
+	// deployment-down webhook alerts. The alert_settings handler reports it
+	// as source="env" when no DB row overrides it. The Notifier itself is
+	// wired in main.go (it hangs off the health worker, not the router).
+	AlertWebhookURL string
+
 	// GitHubAPIBase is a test seam — defaults to https://api.github.com.
 	// Setting it (httptest.Server URL) lets integration tests stub the
 	// GitHub fetch without network.
@@ -587,6 +593,13 @@ func NewRouter(d RouterDeps) http.Handler {
 				DB:           d.DB,
 				EnvEnabled:   d.ApplyEnabled,
 				EnvDangerous: d.ApplyDangerous,
+			}
+			// Alert settings (v1.25+): deployment-down notification
+			// channels. The Notifier itself hangs off the health worker
+			// (main.go); this is just the config surface.
+			adminH.AlertSettings = &AlertSettingsHandler{
+				DB:            d.DB,
+				EnvWebhookURL: d.AlertWebhookURL,
 			}
 			r.Mount("/admin", adminH.Routes())
 			// Personal access tokens — flat verb-suffixed endpoints under /v1.

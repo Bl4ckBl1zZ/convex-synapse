@@ -188,28 +188,14 @@ func (h *EmailSettingsHandler) clear(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveEmailSender returns the active Sender: the DB-configured Resend
-// settings if present (decrypted), else the .env fallback. Read at
-// send-time so a dashboard change takes effect without a restart. Any
-// failure (no crypto, no row, decrypt error) degrades to the fallback —
-// invites are best-effort, never blocked by an email-config hiccup.
+// settings if present (decrypted), else the .env fallback. Thin wrapper
+// over email.ResolveSender (shared with the alert Notifier) that adapts
+// the api-side SecretEnvelope; nil here must stay nil as the interface
+// value, hence the explicit branch.
 func resolveEmailSender(ctx context.Context, db *pgxpool.Pool, crypto SecretEnvelope, fallback email.Sender) email.Sender {
-	if crypto == nil {
-		return fallback
+	var dec email.Decrypter
+	if crypto != nil {
+		dec = crypto
 	}
-	var (
-		keyEnc []byte
-		from   string
-	)
-	err := db.QueryRow(ctx,
-		`SELECT api_key_encrypted, from_address FROM email_settings WHERE id = true`,
-	).Scan(&keyEnc, &from)
-	if err != nil {
-		return fallback // no row (or transient error) → .env fallback
-	}
-	key, derr := crypto.DecryptString(keyEnc)
-	if derr != nil {
-		logErr("decrypt resend key", derr)
-		return fallback
-	}
-	return email.New(key, from)
+	return email.ResolveSender(ctx, db, dec, fallback)
 }

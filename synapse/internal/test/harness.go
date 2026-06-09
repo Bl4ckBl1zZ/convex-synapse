@@ -222,6 +222,10 @@ type SetupOpts struct {
 	// GitHub. Production wiring leaves both empty (defaults apply).
 	GitHubRepo    string
 	GitHubAPIBase string
+	// AlertWebhookURL mirrors api.RouterDeps.AlertWebhookURL — the .env
+	// fallback (SYNAPSE_ALERT_WEBHOOK_URL) the alert_settings handler
+	// reports as source="env" when no DB row exists.
+	AlertWebhookURL string
 	// Docker overrides the default FakeDocker in both the API router and
 	// provisioner worker. Gated real-backend e2e tests pass a
 	// *dockerprov.Client here; normal tests leave it nil.
@@ -474,6 +478,7 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		UpdaterToken:          opts.UpdaterToken,
 		GitHubRepo:            opts.GitHubRepo,
 		GitHubAPIBase:         opts.GitHubAPIBase,
+		AlertWebhookURL:       opts.AlertWebhookURL,
 		PublicIP:              opts.PublicIP,
 		HostDomainResolver:    opts.HostDomainResolver,
 		DomainsResolver:       opts.DomainsResolver,

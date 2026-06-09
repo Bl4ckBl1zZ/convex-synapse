@@ -11,6 +11,10 @@ const TABLES = [
   "audit_events",
   "provisioning_jobs",
   "deploy_keys",
+  // Instance-wide singleton the admin-alerts spec writes through the REAL
+  // backend (not mocked — alert settings need no SYNAPSE_STORAGE_KEY), so
+  // it must be reset between tests.
+  "alert_settings",
   // Cell Control Plane (feat/cell-control-plane). cells/cell_resources/
   // deployment_placements would CASCADE from deployments/projects/teams, but
   // hosts (+ host_agents/host_adoption_tokens) are only referenced via

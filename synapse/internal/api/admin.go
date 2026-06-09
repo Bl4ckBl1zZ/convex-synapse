@@ -76,6 +76,9 @@ type AdminHandler struct {
 	// ApplySettings, when non-nil, mounts /apply_settings under /v1/admin
 	// (v1.23+): the dashboard toggle for CCP apply. Same instance-admin gate.
 	ApplySettings *ApplySettingsHandler
+	// AlertSettings, when non-nil, mounts /alert_settings under /v1/admin
+	// (v1.25+, migration 000032): deployment-down notification channels.
+	AlertSettings *AlertSettingsHandler
 	// HeadscaleEnabled mirrors RouterDeps: true when Synapse boot wired
 	// a non-nil headscale.Client AND a non-empty
 	// SYNAPSE_HEADSCALE_SERVER_URL. The headscale admin GET handler
@@ -167,6 +170,10 @@ func (h *AdminHandler) Routes() chi.Router {
 	// Apply settings (v1.23+, migration 000030) — the CCP apply toggle.
 	if h.ApplySettings != nil {
 		r.Mount("/apply_settings", h.ApplySettings.Routes())
+	}
+	// Alert settings (v1.25+, migration 000032) — deployment-down alerts.
+	if h.AlertSettings != nil {
+		r.Mount("/alert_settings", h.AlertSettings.Routes())
 	}
 	return r
 }

@@ -488,6 +488,22 @@ export type EmailSettings = {
   updatedAt: string | null;
 };
 
+// GET/POST/DELETE /v1/admin/alert_settings (v1.25+). Deployment-down alert
+// channels: email to team admins (rides the email_settings/Resend config)
+// + a generic webhook (Slack / Discord / custom). The full webhook URL is
+// never returned — its path embeds the receiver's secret — only a masked
+// hint (scheme + host). source:
+//   db      → saved via this dashboard (wins entirely, even empty webhook)
+//   env     → SYNAPSE_ALERT_WEBHOOK_URL on the host
+//   default → nothing set (email alerts on whenever email is configured)
+export type AlertSettings = {
+  source: "db" | "env" | "default";
+  emailEnabled: boolean;
+  webhookConfigured: boolean;
+  webhookHint: string;
+  updatedAt: string | null;
+};
+
 // GET/POST /v1/admin/apply_settings (v1.23+). The CCP apply toggle. source
 // distinguishes a dashboard-set value ("db") from the .env default ("env").
 export type ApplySettings = {
@@ -2494,6 +2510,28 @@ export const api = {
       },
       clear(): Promise<EmailSettings> {
         return request<EmailSettings>("/v1/admin/email_settings", {
+          method: "DELETE",
+        });
+      },
+    },
+    // Deployment-down alert channels (v1.25+). The webhook URL is
+    // write-only — get() returns only a masked hint. The health worker
+    // re-reads the row per alert, so changes apply without restart.
+    alertSettings: {
+      get(): Promise<AlertSettings> {
+        return request<AlertSettings>("/v1/admin/alert_settings");
+      },
+      // webhookUrl semantics mirror the API: undefined = keep the saved
+      // webhook (the field is omitted from the body), "" = clear it,
+      // non-empty = replace.
+      set(emailEnabled: boolean, webhookUrl?: string): Promise<AlertSettings> {
+        return request<AlertSettings>("/v1/admin/alert_settings", {
+          method: "POST",
+          body: { emailEnabled, ...(webhookUrl !== undefined ? { webhookUrl } : {}) },
+        });
+      },
+      clear(): Promise<AlertSettings> {
+        return request<AlertSettings>("/v1/admin/alert_settings", {
           method: "DELETE",
         });
       },

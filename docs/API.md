@@ -150,6 +150,40 @@ and takes effect on the next invite (no restart).
 
 Clears the stored key; email reverts to the `.env` fallback (or `none`).
 
+### `GET /v1/admin/alert_settings` 🔧 (v1.25+, instance admin)
+
+Returns the deployment-down alert config:
+`{source, emailEnabled, webhookConfigured, webhookHint, updatedAt}`.
+`source` is `db` (saved via this endpoint — wins entirely, even with an
+empty webhook), `env` (host `.env` fallback — `SYNAPSE_ALERT_WEBHOOK_URL`),
+or `default` (nothing set: email alerts on whenever email is configured,
+no webhook). The full webhook URL is **never** returned — Slack/Discord
+hook paths embed a secret — only a masked `webhookHint` (scheme + host).
+
+When the health worker flips a deployment to `stopped`/`failed` it fires
+both channels best-effort: email to the owning team's **admins** (riding
+the `email_settings` Resend config) and a webhook POST whose JSON carries
+both `text` (Slack) and `content` (Discord) plus structured
+`{event, status, previousStatus, deployment, project, team, dashboardUrl,
+occurredAt}` fields, so one URL works for Slack, Discord, and custom
+receivers. Alerts fire only on the state **transition** (one per down
+event, no per-sweep spam), and a blip that auto-restart already recovered
+never alerts.
+
+### `POST /v1/admin/alert_settings` 🔧 (v1.25+, instance admin)
+
+Body `{emailEnabled, webhookUrl?}`. Upserts the singleton row and returns
+the same shape as GET. `webhookUrl` semantics: **absent** = keep the saved
+webhook (GET never returns it, so a client can't resend it), **empty** =
+clear it (silences the `.env` fallback too — the row wins), **non-empty**
+= replace (must be absolute http(s); 400 `invalid_webhook_url` otherwise).
+Takes effect on the next health sweep — no restart. No
+`SYNAPSE_STORAGE_KEY` requirement.
+
+### `DELETE /v1/admin/alert_settings` 🔧 (v1.25+, instance admin)
+
+Deletes the row; alerting reverts to the `.env` fallback / defaults.
+
 ## Teams
 
 ### `POST /v1/teams/create_team` ✅

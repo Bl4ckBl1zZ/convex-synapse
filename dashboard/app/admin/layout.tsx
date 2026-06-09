@@ -78,6 +78,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       testid: "admin-nav-email",
     },
     {
+      href: "/admin/alerts",
+      label: t("Alerts"),
+      testid: "admin-nav-alerts",
+    },
+    {
       href: "/admin/apply",
       label: t("Apply"),
       testid: "admin-nav-apply",

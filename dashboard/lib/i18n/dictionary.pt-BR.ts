@@ -1179,4 +1179,29 @@ export const ptBR: Record<string, string> = {
   "Your demo deployment is ready. The next page shows the": "Seu deployment de demonstração está pronto. A próxima página mostra o",
   "Your Synapse identity and API access tokens.": "Sua identidade no Synapse e tokens de acesso à API.",
   "your VPS IP": "o IP do seu VPS",
+
+  // Deployment-down alerts (v1.25) — AlertSettingsPanel + admin nav.
+  "Alerts": "Alertas",
+  "Deployment alerts": "Alertas de deployment",
+  "Get notified when a deployment goes down (stopped or failed). Email goes to the admins of the team that owns the deployment and requires the Email settings to be configured; the webhook accepts Slack and Discord URLs out of the box, or any endpoint that takes a JSON POST.":
+    "Receba uma notificação quando um deployment cair (stopped ou failed). O email vai para os admins do time dono do deployment e exige as configurações de Email preenchidas; o webhook aceita URLs do Slack e do Discord sem ajuste, ou qualquer endpoint que receba um POST JSON.",
+  "Email alerts on": "Alertas por email ativados",
+  "Email alerts off": "Alertas por email desativados",
+  "Webhook configured": "Webhook configurado",
+  "No webhook": "Sem webhook",
+  "via host .env (SYNAPSE_ALERT_WEBHOOK_URL)": "via .env do host (SYNAPSE_ALERT_WEBHOOK_URL)",
+  "Email team admins when a deployment goes down": "Enviar email aos admins do time quando um deployment cair",
+  "Webhook URL": "URL do webhook",
+  "Leave blank to keep the current webhook": "Deixe em branco para manter o webhook atual",
+  "Slack incoming webhooks and Discord webhook URLs work as-is. The URL is stored server-side and never shown again — only the host is echoed back.":
+    "Webhooks de entrada do Slack e URLs de webhook do Discord funcionam sem ajuste. A URL fica guardada no servidor e nunca é exibida de novo — só o host é mostrado.",
+  "Could not load alert settings": "Não foi possível carregar as configurações de alerta",
+  "Could not save alert settings": "Não foi possível salvar as configurações de alerta",
+  "Could not reset alert settings": "Não foi possível redefinir as configurações de alerta",
+  "Remove webhook": "Remover webhook",
+  "Remove the alert webhook? Deployment-down alerts will no longer be posted to it.":
+    "Remover o webhook de alertas? Os alertas de deployment caído não serão mais enviados para ele.",
+  "Reset to defaults": "Redefinir para os padrões",
+  "Reset alert settings to defaults? Email alerts turn back on and the webhook reverts to the host .env (SYNAPSE_ALERT_WEBHOOK_URL), if set.":
+    "Redefinir as configurações de alerta para os padrões? Os alertas por email voltam a ficar ativados e o webhook volta para o .env do host (SYNAPSE_ALERT_WEBHOOK_URL), se definido.",
 };

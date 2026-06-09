@@ -101,6 +101,13 @@ type Config struct {
 	// are deliberately out of scope.
 	HealthAutoRestart bool
 
+	// AlertWebhookURL is the .env fallback for deployment-down webhook
+	// alerts (Slack / Discord / custom receivers). A row in alert_settings
+	// (dashboard-managed) wins over this — same precedence model as the
+	// Resend email settings. Empty (default) → no webhook alerts unless
+	// configured from the dashboard.
+	AlertWebhookURL string
+
 	// HA configuration (v0.5+). Off by default — Synapse continues to
 	// behave exactly like v0.4 when SYNAPSE_HA_ENABLED is unset. When
 	// enabled, create_deployment accepts a `ha:true` flag in the body
@@ -312,6 +319,7 @@ func Load() (*Config, error) {
 		ResendAPIKey:          strings.TrimSpace(os.Getenv("SYNAPSE_RESEND_API_KEY")),
 		EmailFrom:             strings.TrimSpace(os.Getenv("SYNAPSE_EMAIL_FROM")),
 		HealthAutoRestart:     getEnvDefault("SYNAPSE_HEALTH_AUTO_RESTART", "") == "true",
+		AlertWebhookURL:       strings.TrimSpace(os.Getenv("SYNAPSE_ALERT_WEBHOOK_URL")),
 
 		HAEnabled:             getEnvDefault("SYNAPSE_HA_ENABLED", "") == "true",
 		BackendPostgresURL:    os.Getenv("SYNAPSE_BACKEND_POSTGRES_URL"),

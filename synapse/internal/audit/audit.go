@@ -137,6 +137,13 @@ const (
 	ActionUpdateEmailSettings = "email_settings.updated"
 	ActionClearEmailSettings  = "email_settings.cleared"
 
+	// Instance alert settings (v1.25+, migration 000032). Deployment-down
+	// notification channels set/cleared from the dashboard's admin area;
+	// metadata carries {emailEnabled, webhookConfigured} — never the
+	// webhook URL (its path embeds the receiver's secret).
+	ActionUpdateAlertSettings = "alert_settings.updated"
+	ActionClearAlertSettings  = "alert_settings.cleared"
+
 	// ActionUpdateApplySettings records a dashboard toggle of CCP apply
 	// (Bloco 10). Metadata carries {applyEnabled, applyDangerous}.
 	ActionUpdateApplySettings = "apply_settings.updated"
@@ -217,6 +224,8 @@ const (
 	TargetDNSCredential = "dnsCredential"
 	// TargetEmailSettings is the instance email_settings singleton row.
 	TargetEmailSettings = "emailSettings"
+	// TargetAlertSettings is the instance alert_settings singleton row.
+	TargetAlertSettings = "alertSettings"
 	// TargetApplySettings is the instance apply_settings singleton row.
 	TargetApplySettings = "applySettings"
 	// Cell Control Plane (feat/cell-control-plane).

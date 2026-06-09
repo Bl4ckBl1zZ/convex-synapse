@@ -4,8 +4,11 @@
 // host reboot, etc.) the worker flips the row to "stopped" so the dashboard
 // reflects reality and the port can be safely re-allocated.
 //
-// The worker is intentionally read-mostly: it observes Docker, updates DB.
-// It does NOT auto-restart containers — that's a v1.0 feature (see ROADMAP).
+// Two optional hooks ride the reconciliation: AutoRestart (Config flag +
+// Restarter) bounces a replica whose container merely exited, and Alerter
+// (v1.25+) notifies team admins / a webhook when a deployment-level status
+// transitions to stopped/failed — fired exactly once per down event, and
+// never for a blip auto-restart already recovered.
 package health
 
 import (
@@ -42,6 +45,16 @@ type DockerStatusReporter interface {
 type Restarter interface {
 	Restart(ctx context.Context, deploymentName string) error
 	RestartReplica(ctx context.Context, deploymentName string, replicaIndex int) error
+}
+
+// Alerter is the optional deployment-down notification hook. The worker
+// calls it AFTER a deployment-level status transition lands in the DB
+// (running → stopped/failed) — replica-level flapping that auto-restart
+// already recovered never reaches it. Implementations must be best-effort
+// and non-blocking (the sweep runs under the fleet-wide advisory lock):
+// alert.Notifier detaches into a goroutine internally. nil disables alerts.
+type Alerter interface {
+	DeploymentDown(ctx context.Context, deploymentID, previousStatus, newStatus string)
 }
 
 // RemoteReporter is the subset of *dockerprov.RemoteClient the health
@@ -111,6 +124,7 @@ type Worker struct {
 	DB        *pgxpool.Pool
 	Docker    DockerStatusReporter
 	Restarter Restarter // optional; required when Config.AutoRestart is true
+	Alerter   Alerter   // optional; nil = no deployment-down notifications
 	Config    Config
 	Logger    *slog.Logger
 	// RemoteFor returns a reporter bound to a remote host's SSH target,
@@ -359,24 +373,43 @@ func (w *Worker) recomputeDeploymentStatus(ctx context.Context, logger *slog.Log
 	// active rows. Also avoid clobbering 'failed' with 'stopped' — once
 	// flipped to failed (via the worker or the provisioner) the deployment
 	// stays there until the operator intervenes.
-	tag, err := w.DB.Exec(ctx, `
-		UPDATE deployments
+	//
+	// The self-join captures the pre-update status in the same statement
+	// (RETURNING prev.status): the alert below fires only on a real
+	// deployment-level transition, and reads old → new atomically — a
+	// separate SELECT would race other nodes' sweeps. ErrNoRows = the WHERE
+	// filtered everything out (no change) = no alert.
+	var prevStatus string
+	err = w.DB.QueryRow(ctx, `
+		UPDATE deployments d
 		   SET status = $1
-		 WHERE id = $2
-		   AND status NOT IN ('deleted','failed')
-		   AND status <> $1
-	`, target, deploymentID)
+		  FROM (SELECT id, status FROM deployments WHERE id = $2) prev
+		 WHERE d.id = prev.id
+		   AND d.status NOT IN ('deleted','failed')
+		   AND d.status <> $1
+		RETURNING prev.status
+	`, target, deploymentID).Scan(&prevStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return // no deployment-level change
+	}
 	if err != nil {
 		logger.Error("health: update aggregate", "deployment_id", deploymentID, "err", err)
 		return
 	}
-	if tag.RowsAffected() > 0 {
-		logger.Info("health: deployment status recomputed",
-			"deployment_id", deploymentID,
-			"new_status", target,
-			"replicas_total", total,
-			"replicas_running", anyRunning,
-			"replicas_failed", anyFailed)
+	logger.Info("health: deployment status recomputed",
+		"deployment_id", deploymentID,
+		"old_status", prevStatus,
+		"new_status", target,
+		"replicas_total", total,
+		"replicas_running", anyRunning,
+		"replicas_failed", anyFailed)
+
+	// Deployment went down (stopped or failed) — page somebody. The
+	// running→running and *→running directions stay silent, and replica
+	// blips that auto-restart already recovered never reach this point
+	// (the replica is back to 'running' before the batched recompute).
+	if w.Alerter != nil && (target == "stopped" || target == "failed") {
+		w.Alerter.DeploymentDown(ctx, deploymentID, prevStatus, target)
 	}
 }
 

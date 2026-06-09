@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/Iann29/synapse/internal/alert"
 	"github.com/Iann29/synapse/internal/api"
 	"github.com/Iann29/synapse/internal/auth"
 	"github.com/Iann29/synapse/internal/cells"
@@ -231,11 +232,13 @@ func run() error {
 		dnsEnvelope       api.SecretEnvelope
 		deploymentsCrypto api.SecretEncrypter
 		workerCrypto      provisioner.SecretDecrypter
+		alertCrypto       email.Decrypter
 	)
 	if secretBox != nil {
 		dnsEnvelope = secretBox
 		deploymentsCrypto = secretBox
 		workerCrypto = secretBox
+		alertCrypto = secretBox
 	}
 
 	// Proxy resolver — built up-front so the domains handler can
@@ -351,6 +354,10 @@ func run() error {
 		ExpectedIP: cfg.PublicIP,
 	}
 
+	// Hoisted so the alert Notifier (health worker, below) shares the same
+	// .env-fallback Sender the invite path uses.
+	emailSender := email.New(cfg.ResendAPIKey, cfg.EmailFrom)
+
 	handler := api.NewRouter(api.RouterDeps{
 		Logger:                logger,
 		DB:                    pool,
@@ -366,7 +373,8 @@ func run() error {
 		PublicURL:             cfg.PublicURL,
 		ProxyEnabled:          cfg.ProxyEnabled,
 		BaseDomain:            cfg.BaseDomain,
-		Email:                 email.New(cfg.ResendAPIKey, cfg.EmailFrom),
+		Email:                 emailSender,
+		AlertWebhookURL:       cfg.AlertWebhookURL,
 		HA: api.HAConfig{
 			Enabled:             cfg.HAEnabled,
 			BackendPostgresURL:  cfg.BackendPostgresURL,
@@ -471,6 +479,19 @@ func run() error {
 			DB:        pool,
 			Docker:    dockerClient,
 			Restarter: dockerClient,
+			// Deployment-down notifications (v1.25+): email to team admins
+			// + optional webhook. Best-effort + detached — the Notifier
+			// never blocks the sweep. Channel config is re-read from
+			// alert_settings on every alert, so dashboard changes apply
+			// without a restart.
+			Alerter: &alert.Notifier{
+				DB:                 pool,
+				EmailFallback:      emailSender,
+				Crypto:             alertCrypto,
+				WebhookURLFallback: cfg.AlertWebhookURL,
+				PublicURL:          cfg.PublicURL,
+				Logger:             logger,
+			},
 			Config: health.Config{
 				Interval:      30 * time.Second,
 				StatusTimeout: 5 * time.Second,
