@@ -236,7 +236,7 @@ func (h *DriftHandler) doDryRun(w http.ResponseWriter, r *http.Request, scope dr
 	writeJSON(w, http.StatusOK, map[string]any{
 		"operationRun": run,
 		"steps":        steps,
-		"applyEnabled": h.ApplyEnabled,
+		"applyEnabled": h.effectiveApplyEnabled(r.Context()),
 	})
 }
 

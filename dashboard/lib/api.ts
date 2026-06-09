@@ -488,6 +488,15 @@ export type EmailSettings = {
   updatedAt: string | null;
 };
 
+// GET/POST /v1/admin/apply_settings (v1.23+). The CCP apply toggle. source
+// distinguishes a dashboard-set value ("db") from the .env default ("env").
+export type ApplySettings = {
+  enabled: boolean;
+  dangerous: boolean;
+  source: "db" | "env";
+  updatedAt: string | null;
+};
+
 // Returned once at create time. `adminKey` is the freshly-minted value;
 // `envSnippet` and `exportSnippet` are paste-ready for `.env.local` and
 // shell respectively. The dashboard MUST surface this immediately and
@@ -2486,6 +2495,19 @@ export const api = {
       clear(): Promise<EmailSettings> {
         return request<EmailSettings>("/v1/admin/email_settings", {
           method: "DELETE",
+        });
+      },
+    },
+    // CCP apply toggle (v1.23+). DB value wins over the .env default; a
+    // change takes effect without restarting the api.
+    applySettings: {
+      get(): Promise<ApplySettings> {
+        return request<ApplySettings>("/v1/admin/apply_settings");
+      },
+      set(enabled: boolean, dangerous: boolean): Promise<ApplySettings> {
+        return request<ApplySettings>("/v1/admin/apply_settings", {
+          method: "POST",
+          body: { enabled, dangerous },
         });
       },
     },

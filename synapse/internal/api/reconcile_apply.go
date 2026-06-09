@@ -22,6 +22,15 @@ import (
 //   POST /v1/cells/{id}/reconcile/apply      (project-admin on the cell's project)
 //   POST /v1/hosts/{ref}/reconcile/apply     (instance-admin)
 
+// effectiveApplyEnabled resolves whether apply is on for this instance: the
+// dashboard toggle (apply_settings row) when present, else the .env default
+// (DriftHandler.ApplyEnabled). Read per-request so a dashboard change takes
+// effect without restarting the api.
+func (h *DriftHandler) effectiveApplyEnabled(ctx context.Context) bool {
+	enabled, _ := resolveApplySettings(ctx, h.DB, h.ApplyEnabled, h.ApplyDangerous)
+	return enabled
+}
+
 type applyReq struct {
 	// ForceDangerous + Confirm gate Phase-2 stop/remove. Inert in Phase 1
 	// (those actions are always skipped). Kept so the wire shape is stable.
@@ -71,8 +80,9 @@ func (h *DriftHandler) applyHost(w http.ResponseWriter, r *http.Request) {
 // reason. Returns 202 with the run id; the worker finalizes the run.
 func (h *DriftHandler) doApply(w http.ResponseWriter, r *http.Request, scope driftScope) {
 	// G1 — gate. 404 (not 403) so a disabled instance is indistinguishable
-	// from one that never had the feature.
-	if !h.ApplyEnabled {
+	// from one that never had the feature. The effective value is the
+	// dashboard toggle (apply_settings) when set, else the .env default.
+	if !h.effectiveApplyEnabled(r.Context()) {
 		writeError(w, http.StatusNotFound, "not_found", "Reconcile apply is not enabled on this instance")
 		return
 	}

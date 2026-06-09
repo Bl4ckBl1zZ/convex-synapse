@@ -137,6 +137,10 @@ const (
 	ActionUpdateEmailSettings = "email_settings.updated"
 	ActionClearEmailSettings  = "email_settings.cleared"
 
+	// ActionUpdateApplySettings records a dashboard toggle of CCP apply
+	// (Bloco 10). Metadata carries {applyEnabled, applyDangerous}.
+	ActionUpdateApplySettings = "apply_settings.updated"
+
 	// Instance-level upgrade flow (v1.1.0+). Synapse-original — Cloud has
 	// no per-customer upgrade because Cloud is the platform.
 	ActionUpgradeStarted = "upgradeStarted"
@@ -213,6 +217,8 @@ const (
 	TargetDNSCredential = "dnsCredential"
 	// TargetEmailSettings is the instance email_settings singleton row.
 	TargetEmailSettings = "emailSettings"
+	// TargetApplySettings is the instance apply_settings singleton row.
+	TargetApplySettings = "applySettings"
 	// Cell Control Plane (feat/cell-control-plane).
 	TargetHost         = "host"
 	TargetCell         = "cell"

@@ -583,6 +583,11 @@ func NewRouter(d RouterDeps) http.Handler {
 			// for project-scoped credentials (v1.6.4+).
 			adminH.DNSCredentials = dnsCredsH
 			adminH.EmailSettings = emailSettingsH
+			adminH.ApplySettings = &ApplySettingsHandler{
+				DB:           d.DB,
+				EnvEnabled:   d.ApplyEnabled,
+				EnvDangerous: d.ApplyDangerous,
+			}
 			r.Mount("/admin", adminH.Routes())
 			// Personal access tokens — flat verb-suffixed endpoints under /v1.
 			// Registered directly (not via Mount) because chi's Mount("/", ...)

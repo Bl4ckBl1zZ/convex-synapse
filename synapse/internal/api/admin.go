@@ -73,6 +73,9 @@ type AdminHandler struct {
 	// /v1/admin (v1.22+). Same requireInstanceAdmin gate; nil = router
 	// wired without email support (the dashboard probes via 404).
 	EmailSettings *EmailSettingsHandler
+	// ApplySettings, when non-nil, mounts /apply_settings under /v1/admin
+	// (v1.23+): the dashboard toggle for CCP apply. Same instance-admin gate.
+	ApplySettings *ApplySettingsHandler
 	// HeadscaleEnabled mirrors RouterDeps: true when Synapse boot wired
 	// a non-nil headscale.Client AND a non-empty
 	// SYNAPSE_HEADSCALE_SERVER_URL. The headscale admin GET handler
@@ -160,6 +163,10 @@ func (h *AdminHandler) Routes() chi.Router {
 	// pattern as dns_credentials above.
 	if h.EmailSettings != nil {
 		r.Mount("/email_settings", h.EmailSettings.Routes())
+	}
+	// Apply settings (v1.23+, migration 000030) — the CCP apply toggle.
+	if h.ApplySettings != nil {
+		r.Mount("/apply_settings", h.ApplySettings.Routes())
 	}
 	return r
 }
