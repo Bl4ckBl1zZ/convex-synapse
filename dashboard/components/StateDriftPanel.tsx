@@ -22,11 +22,13 @@ type Props = { projectId: string };
 
 // StateDriftPanel (Bloco 9c) — the operator's read + diagnose surface for the
 // Cell Control Plane. It shows DESIRED state vs the latest DRIFT report and can
-// build a reconcile DRY-RUN plan. It is diagnosis + planning ONLY:
-//   • the agent is observe-only,
-//   • no host change is ever applied,
-//   • the dry-run plan is a recommendation (applyAllowed=false),
-//   • there is intentionally no Apply button.
+// build a reconcile DRY-RUN plan. Diagnosis + planning, with a GATED apply:
+//   • the agent is observe-only — it never mutates,
+//   • dry-run is always read-only (applyAllowed=false),
+//   • an Apply button appears ONLY when the instance has
+//     SYNAPSE_APPLY_ENABLED=true (Bloco 10). It calls the explicit
+//     reconcile/apply verb — central-driven create/restart — never apply:true
+//     on the dry-run path. Off by default → no Apply button.
 export function StateDriftPanel({ projectId }: Props) {
   const { t } = useT();
   const { data: desired, mutate: mutateDesired } = useSWR<DesiredState[]>(
@@ -45,7 +47,7 @@ export function StateDriftPanel({ projectId }: Props) {
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );
 
-  const [busy, setBusy] = useState<null | "sync" | "recompute" | "dryrun">(null);
+  const [busy, setBusy] = useState<null | "sync" | "recompute" | "dryrun" | "apply">(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dryRun, setDryRun] = useState<DryRunResponse | null>(null);
@@ -53,7 +55,7 @@ export function StateDriftPanel({ projectId }: Props) {
   const refreshRuns = () => globalMutate(["/operation-runs", projectId]);
 
   async function run(
-    kind: "sync" | "recompute" | "dryrun",
+    kind: "sync" | "recompute" | "dryrun" | "apply",
     fn: () => Promise<void>,
   ) {
     setBusy(kind);
@@ -103,6 +105,43 @@ export function StateDriftPanel({ projectId }: Props) {
       await refreshRuns();
       setNotice(t("Dry-run plan built. Nothing was sent to the agent."));
     });
+
+  // Apply (Bloco 10, central-driven). Only reachable when the dry-run reported
+  // applyEnabled=true. Confirms, enqueues the reconcile, then polls the
+  // OperationRun to completion. The agent never mutates — the control plane
+  // does, through the same provisioning queue create_deployment uses.
+  const onApply = () => {
+    if (
+      !window.confirm(
+        t(
+          "Apply this plan? Synapse will create/restart the planned deployments on their hosts — a real change, not a dry-run. Dangerous actions (stop/remove) are skipped.",
+        ),
+      )
+    ) {
+      return;
+    }
+    run("apply", async () => {
+      const res = await api.reconcile.projectApply(projectId);
+      let status = res.status;
+      for (let i = 0; i < 80 && (status === "running" || status === "queued"); i += 1) {
+        await new Promise((r) => setTimeout(r, 1500));
+        try {
+          const detail = await api.operationRuns.get(res.operationRunId);
+          status = detail.operationRun.status;
+        } catch {
+          break;
+        }
+      }
+      setDryRun(null);
+      await Promise.all([mutateDrift(), refreshRuns()]);
+      const queued = res.summary?.queued ?? 0;
+      if (status === "succeeded") {
+        setNotice(t("Apply succeeded — {n} action(s) reconciled.", { n: queued }));
+      } else {
+        setError(t("Apply finished with status: {status}.", { status }));
+      }
+    });
+  };
 
   const report = drift?.report ?? null;
   const items = drift?.items ?? [];
@@ -193,7 +232,14 @@ export function StateDriftPanel({ projectId }: Props) {
           </div>
         )}
 
-        {dryRun && <DryRunPlanView dryRun={dryRun} onDismiss={() => setDryRun(null)} />}
+        {dryRun && (
+          <DryRunPlanView
+            dryRun={dryRun}
+            onDismiss={() => setDryRun(null)}
+            onApply={onApply}
+            applying={busy === "apply"}
+          />
+        )}
       </div>
     </Card>
   );
@@ -312,9 +358,13 @@ function itemNote(item: DriftItem): { note: string | null; reason: string } {
 function DryRunPlanView({
   dryRun,
   onDismiss,
+  onApply,
+  applying,
 }: {
   dryRun: DryRunResponse;
   onDismiss: () => void;
+  onApply: () => void;
+  applying: boolean;
 }) {
   const { t } = useT();
   const plan = (dryRun.operationRun.plan ?? {}) as {
@@ -323,9 +373,15 @@ function DryRunPlanView({
     summary?: { planned?: number; noOp?: number; skipped?: number; investigate?: number; dangerous?: number };
   };
   const s = plan.summary ?? {};
+  // A step is auto-applicable only when it's a non-dangerous create/restart.
+  // stop/remove are Phase 2 (skipped), so they don't make the plan applyable.
+  const hasApplicable = dryRun.steps.some((st) =>
+    ["create", "restart"].includes(st.action) && st.status === "planned",
+  );
   const hasAction = dryRun.steps.some((st) =>
     ["create", "restart", "stop", "remove"].includes(st.action),
   );
+  const canApply = (dryRun.applyEnabled ?? false) && hasApplicable;
   return (
     <div
       className="space-y-2 rounded-md border border-violet-900/50 bg-violet-900/10 px-3 py-3"
@@ -352,9 +408,30 @@ function DryRunPlanView({
         <Badge tone={(s.dangerous ?? 0) > 0 ? "red" : "neutral"}>{t("dangerous {n}", { n: s.dangerous ?? 0 })}</Badge>
       </div>
 
-      <p className="text-[11px] text-violet-200/80">
-        {t("This plan is a recommendation. Nothing was sent to the agent. Apply is intentionally not available.")}
-      </p>
+      {canApply ? (
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 rounded border border-amber-700/40 bg-amber-900/10 px-3 py-2"
+          data-testid="reconcile-apply-box"
+        >
+          <p className="text-[11px] text-amber-200/90">
+            {t("Apply will create/restart the planned deployments on their hosts (central-driven — the agent never mutates). Dangerous actions are skipped.")}
+          </p>
+          <Button
+            size="sm"
+            onClick={onApply}
+            disabled={applying}
+            data-testid="reconcile-apply"
+          >
+            {applying ? t("Applying…") : t("Apply plan")}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-[11px] text-violet-200/80">
+          {(dryRun.applyEnabled ?? false)
+            ? t("This plan is a recommendation. Nothing here is auto-applicable.")
+            : t("This plan is a recommendation. Nothing was sent to the agent. Apply is not enabled on this instance.")}
+        </p>
+      )}
 
       {dryRun.steps.length === 0 ? (
         <p className="text-[11px] text-neutral-500">{t("No steps — nothing to reconcile.")}</p>

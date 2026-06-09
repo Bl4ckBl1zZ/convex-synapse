@@ -230,7 +230,14 @@ func (h *DriftHandler) doDryRun(w http.ResponseWriter, r *http.Request, scope dr
 		return
 	}
 	h.auditDrift(r.Context(), uid, scope, audit.ActionReconcileDryRun, run.PlanJSON)
-	writeJSON(w, http.StatusOK, map[string]any{"operationRun": run, "steps": steps})
+	// applyEnabled tells the dashboard whether to surface an Apply button on
+	// this plan (Bloco 10). It never changes what dry-run does — dry-run is
+	// always read-only; apply is the separate reconcile/apply verb.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"operationRun": run,
+		"steps":        steps,
+		"applyEnabled": h.ApplyEnabled,
+	})
 }
 
 // applyRejected enforces the dry-run-only contract: an explicit apply:true in

@@ -1119,7 +1119,17 @@ export type PlanStep = {
 };
 
 export type OperationRunDetail = { operationRun: OperationRun; steps: OperationStep[] };
-export type DryRunResponse = { operationRun: OperationRun; steps: PlanStep[] };
+export type DryRunResponse = {
+  operationRun: OperationRun;
+  steps: PlanStep[];
+  // Bloco 10: true when SYNAPSE_APPLY_ENABLED — drives the gated Apply button.
+  applyEnabled?: boolean;
+};
+export type ApplyResponse = {
+  operationRunId: string;
+  status: string;
+  summary: Record<string, number>;
+};
 
 export type SyncDesiredResult = {
   created: number;
@@ -2266,6 +2276,24 @@ export const api = {
     hostDryRun: (hostId: string): Promise<DryRunResponse> =>
       request<DryRunResponse>(
         `/v1/hosts/${encodeURIComponent(hostId)}/reconcile/dry_run`,
+        { method: "POST", body: {} },
+      ),
+    // Apply (Bloco 10, central-driven). Enqueues reconcile work and returns the
+    // OperationRun to poll. 404s when SYNAPSE_APPLY_ENABLED is off — the UI only
+    // calls this when the dry-run reported applyEnabled=true.
+    projectApply: (projectId: string): Promise<ApplyResponse> =>
+      request<ApplyResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/reconcile/apply`,
+        { method: "POST", body: {} },
+      ),
+    cellApply: (cellId: string): Promise<ApplyResponse> =>
+      request<ApplyResponse>(
+        `/v1/cells/${encodeURIComponent(cellId)}/reconcile/apply`,
+        { method: "POST", body: {} },
+      ),
+    hostApply: (hostId: string): Promise<ApplyResponse> =>
+      request<ApplyResponse>(
+        `/v1/hosts/${encodeURIComponent(hostId)}/reconcile/apply`,
         { method: "POST", body: {} },
       ),
   },

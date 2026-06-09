@@ -234,15 +234,82 @@ test("dry-run renders a plan, applyAllowed=false, no Apply button", async ({ pag
   const plan = page.getByTestId("dry-run-plan");
   await expect(plan).toBeVisible();
   await expect(plan.getByTestId("dry-run-apply-allowed")).toContainText("applyAllowed: false");
-  await expect(plan).toContainText("Apply is intentionally not available");
+  // Apply is OFF by default (no applyEnabled in the stubbed response).
+  await expect(plan).toContainText("Apply is not enabled on this instance");
 
   const steps = plan.getByTestId("dry-run-step");
   await expect(steps).toHaveCount(2);
   await expect(plan.locator('[data-action="restart"]')).toContainText("willApply: false");
   await expect(plan.locator('[data-action="remove"]')).toContainText("dangerous");
 
-  // The whole page must never expose an Apply control.
-  await expect(page.getByRole("button", { name: /^apply$/i })).toHaveCount(0);
+  // The whole page must never expose an Apply control when apply is disabled.
+  await expect(page.getByTestId("reconcile-apply")).toHaveCount(0);
+});
+
+test("apply gated ON: Apply button appears, enqueues, and reports success", async ({ page }) => {
+  await registerViaUI(page);
+  const { projectId } = await createTeamAndProject(page);
+  await stubDrift(page, projectId, { latest: reportWithItems(projectId) });
+
+  // Dry-run reports applyEnabled=true + a planned create step.
+  await page.route(`**/v1/projects/${projectId}/reconcile/dry_run`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        applyEnabled: true,
+        operationRun: {
+          id: "run-dry-2",
+          type: "reconcile_dry_run",
+          status: "succeeded",
+          plan: { mode: "dry-run", applyAllowed: false, summary: { planned: 1 } },
+          createdAt: "2026-05-25T00:00:00Z",
+          updatedAt: "2026-05-25T00:00:00Z",
+        },
+        steps: [
+          {
+            action: "create",
+            resourceType: "convex_deployment",
+            resourceKey: "convex_deployment:dep-a",
+            status: "planned",
+            reason: "desired running but no container",
+            willApply: false,
+          },
+        ],
+      }),
+    }),
+  );
+  let applyCalled = false;
+  await page.route(`**/v1/projects/${projectId}/reconcile/apply`, (route) => {
+    applyCalled = true;
+    return route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ operationRunId: "run-apply-1", status: "running", summary: { queued: 1, skipped: 0, noOp: 0, dangerousSkipped: 0 } }),
+    });
+  });
+  await page.route(`**/v1/operation_runs/run-apply-1`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        operationRun: { id: "run-apply-1", type: "reconcile_apply", status: "succeeded", projectId, createdAt: "2026-05-25T00:00:00Z", updatedAt: "2026-05-25T00:00:00Z" },
+        steps: [{ id: "s0", stepIndex: 0, action: "create", resourceType: "convex_deployment", resourceKey: "convex_deployment:dep-a", status: "succeeded" }],
+      }),
+    }),
+  );
+  await page.reload();
+
+  await page.getByRole("button", { name: "Dry-run reconcile" }).click();
+  const applyBtn = page.getByTestId("reconcile-apply");
+  await expect(applyBtn).toBeVisible();
+
+  // The Apply confirm() must be accepted to proceed.
+  page.on("dialog", (d) => d.accept());
+  await applyBtn.click();
+
+  await expect(page.getByTestId("drift-notice")).toContainText("Apply succeeded");
+  expect(applyCalled).toBe(true);
 });
 
 test("sync + recompute call their endpoints and show a notice", async ({ page }) => {

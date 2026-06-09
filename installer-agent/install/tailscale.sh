@@ -68,6 +68,13 @@ tailscale::install() {
 # --hostname uses /etc/hostname so the node shows up in Headscale with
 # a recognisable name.
 #
+# --force-reauth forces a fresh registration with Headscale even when the
+# local tailscaled still thinks it's "up". Without it, RE-adopting a box
+# whose Headscale node was removed (e.g. after a host delete deregistered
+# it) reports the stale cached tailnet IP without re-registering — so the
+# control plane can't route to it and remote provisioning times out. With
+# it, the box always (re)registers cleanly and reports its real current IP.
+#
 # Token redaction: --auth-key is NEVER echoed; we log only the server URL
 # + hostname. The tailscale binary itself does not log the key.
 tailscale::join() {
@@ -80,7 +87,8 @@ tailscale::join() {
             --auth-key="$auth_key" \
             --accept-routes \
             --hostname="$host" \
-            --reset; then
+            --reset \
+            --force-reauth; then
         ui::fail "tailscale up failed (check headscale URL + pre-auth key)"
         return 2
     fi
