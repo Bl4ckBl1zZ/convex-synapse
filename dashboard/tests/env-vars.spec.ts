@@ -68,6 +68,8 @@ test("project env vars: add, list, delete", async ({ page }) => {
 
   // Delete API_KEY (all types). v1.17.1+: same NAME stores one row per
   // deployment_type, so the bulk-delete button removes every type at once.
+  // Delete-all pops a confirm() (it's a live function-runtime var) — accept it.
+  page.on("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Delete all values for API_KEY" }).click();
   // The grouped "Delete all values" button is unique per name; once
   // API_KEY is gone, the button must disappear. (v1.10.0+: ActivityFeed

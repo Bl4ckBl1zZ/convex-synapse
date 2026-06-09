@@ -76,7 +76,9 @@ test("admin configures and clears Resend email settings", async ({ page }) => {
   await expect(status).toContainText("Configured");
   await expect(status).toContainText("no-reply@x.com");
 
-  // Clear reverts to the unconfigured state.
+  // Clear reverts to the unconfigured state. Clearing pops a confirm()
+  // (invites would stop being emailed) — accept it.
+  page.on("dialog", (d) => d.accept());
   await page.getByTestId("email-settings-clear").click();
   await expect(page.getByTestId("email-settings-status")).toContainText("Not configured");
 });
