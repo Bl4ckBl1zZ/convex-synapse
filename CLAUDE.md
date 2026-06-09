@@ -194,6 +194,7 @@ If you're tempted to add one, move it to the roadmap and discuss first.
 | Feature | Where |
 |---|---|
 | Auth (register/login/refresh, JWT + opaque PATs) | `internal/api/auth.go`, `internal/api/access_tokens.go` |
+| **Password reset (v1.25)**: `POST /v1/auth/forgot_password` (sempre 200 idêntico — sem oráculo de enumeração; envio do email destacado em goroutine) + `POST /v1/auth/reset_password`. Token `syn_reset_…` single-use (sha256 armazenado, 1h, máx 3 ativos/conta), email via mesma config Resend dos invites. Reset estampa `users.password_changed_at` e o `/v1/auth/refresh` recusa refresh JWTs com `iat` anterior (trunca pra segundo — login no mesmo segundo do reset sobrevive). Páginas `/forgot-password` + `/reset-password` + link no login. Migration 000033 | `internal/api/auth.go::forgotPassword/resetPassword`, `internal/api/password_reset_email.go`, `dashboard/app/{forgot-password,reset-password}/page.tsx` |
 | Teams + invites (multi-user via opaque tokens) | `internal/api/teams.go`, `internal/api/invites.go` |
 | Projects + env vars (CRUD, batch updates) | `internal/api/projects.go` |
 | Deployments (provision real Convex backends, ~1s) | `internal/api/deployments.go`, `internal/provisioner/` |

@@ -1,7 +1,7 @@
 # Roadmap
 
-Current test inventory as of 2026-06-09: 712 Go test functions (565
-integration in `internal/test`), 139 Playwright e2e tests across 41 specs,
+Current test inventory as of 2026-06-09: 721 Go test functions (574
+integration in `internal/test`), 142 Playwright e2e tests across 42 specs,
 and 396 bats cases. Historical milestone counts below are left as per-PR
 deltas, not the current totals.
 
@@ -157,6 +157,20 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
 
 ### ✅ Shipped this milestone
 
+- [x] **Password reset (v1.25)** — self-service forgot-password flow;
+  before this, a forgotten password meant asking the instance admin to
+  poke the DB. `POST /v1/auth/forgot_password` always answers the same
+  `200 {ok:true}` (no user-enumeration oracle; the email send is detached
+  so latency can't leak it) and emails a single-use `syn_reset_…` link
+  (sha256-at-rest, 1h expiry, max 3 active per account) via the same
+  Resend config as invites. `POST /v1/auth/reset_password` swaps the hash
+  transactionally, kills the account's other outstanding links, and stamps
+  `users.password_changed_at` — `/v1/auth/refresh` now refuses refresh
+  JWTs issued before the last change, so a reset signs out stolen
+  sessions. Dashboard: "Forgot password?" on /login + /forgot-password +
+  /reset-password pages (pt-BR included). Migration 000033. Tests: +9 Go
+  integration, +3 Playwright (gap 2 of 4 from the Convex Cloud
+  comparison — next: deployment classes, per-deployment backups).
 - [x] **Deployment-down alerts (v1.25)** — the health worker now notifies
   somebody when a deployment transitions to `stopped`/`failed` instead of
   silently flipping the row: email to the owning team's admins (same

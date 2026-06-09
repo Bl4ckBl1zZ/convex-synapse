@@ -1204,4 +1204,31 @@ export const ptBR: Record<string, string> = {
   "Reset to defaults": "Redefinir para os padrões",
   "Reset alert settings to defaults? Email alerts turn back on and the webhook reverts to the host .env (SYNAPSE_ALERT_WEBHOOK_URL), if set.":
     "Redefinir as configurações de alerta para os padrões? Os alertas por email voltam a ficar ativados e o webhook volta para o .env do host (SYNAPSE_ALERT_WEBHOOK_URL), se definido.",
+
+  // Password reset (v1.25) — /forgot-password + /reset-password + login link.
+  "Forgot password?": "Esqueceu a senha?",
+  "Reset your password": "Redefinir sua senha",
+  "Enter your account email and we'll send a reset link.": "Informe o email da sua conta e enviaremos um link de redefinição.",
+  "Send reset link": "Enviar link de redefinição",
+  "Sending…": "Enviando…",
+  "Check your inbox": "Confira sua caixa de entrada",
+  "If an account exists for that email — and this Synapse instance has email configured — a reset link is on its way. It works once and expires in 1 hour.":
+    "Se existir uma conta com esse email — e esta instância do Synapse tiver email configurado — um link de redefinição está a caminho. Ele funciona uma vez e expira em 1 hora.",
+  "Nothing arriving? Ask your instance admin — email may not be configured, in which case they can reset your password manually.":
+    "Não chegou nada? Fale com o admin da instância — o email pode não estar configurado e, nesse caso, ele pode redefinir sua senha manualmente.",
+  "Back to sign in": "Voltar para o login",
+  "Choose a new password": "Escolha uma nova senha",
+  "The reset link works once and expires in 1 hour.": "O link de redefinição funciona uma vez e expira em 1 hora.",
+  "New password": "Nova senha",
+  "Confirm new password": "Confirme a nova senha",
+  "Passwords don't match": "As senhas não coincidem",
+  "Set new password": "Definir nova senha",
+  "Could not reset password": "Não foi possível redefinir a senha",
+  "Password updated": "Senha atualizada",
+  "Your password was changed. Sign in with the new one — older sessions were signed out.":
+    "Sua senha foi alterada. Entre com a nova — sessões antigas foram desconectadas.",
+  "Missing reset token": "Token de redefinição ausente",
+  "This page only works from the link in a reset email. Request a new one below.":
+    "Esta página só funciona a partir do link de um email de redefinição. Solicite um novo abaixo.",
+  "Request a reset link": "Solicitar um link de redefinição",
 };

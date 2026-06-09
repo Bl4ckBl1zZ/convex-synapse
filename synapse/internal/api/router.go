@@ -293,7 +293,10 @@ func NewRouter(d RouterDeps) http.Handler {
 
 	r.Method(http.MethodGet, "/health", &HealthHandler{DB: d.DB, Version: d.Version})
 
-	authH := &AuthHandler{DB: d.DB, JWT: d.JWT}
+	// Email/Crypto/PublicURL power the password-reset flow (v1.25+): the
+	// reset email rides the same Resend config as invites (DB settings win
+	// over .env) and the link points at <PublicURL>/reset-password.
+	authH := &AuthHandler{DB: d.DB, JWT: d.JWT, Email: d.Email, Crypto: d.DNSEnvelope, PublicURL: d.PublicURL}
 	meH := &MeHandler{DB: d.DB}
 	invitesH := &InvitesHandler{DB: d.DB}
 	tokensH := &AccessTokensHandler{DB: d.DB}

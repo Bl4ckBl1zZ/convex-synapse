@@ -1425,6 +1425,24 @@ export const api = {
     return persistToken(t);
   },
 
+  // Password reset (v1.25+). forgotPassword always resolves {ok:true} —
+  // the server never reveals whether the account exists; the email (when
+  // the instance has Resend configured) carries the single-use link.
+  forgotPassword(email: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>("/v1/auth/forgot_password", {
+      method: "POST",
+      body: { email },
+      auth: false,
+    });
+  },
+  resetPassword(token: string, newPassword: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>("/v1/auth/reset_password", {
+      method: "POST",
+      body: { token, newPassword },
+      auth: false,
+    });
+  },
+
   me(): Promise<User> {
     return request<User>("/v1/me");
   },

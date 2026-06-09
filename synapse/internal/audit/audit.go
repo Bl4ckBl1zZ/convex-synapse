@@ -27,6 +27,10 @@ import (
 const (
 	// Auth.
 	ActionLogin = "login"
+	// ActionPasswordReset records a completed self-service password reset
+	// (v1.25+). Only the success path is audited — the anonymous
+	// forgot_password endpoint must not let strangers spam audit rows.
+	ActionPasswordReset = "passwordReset"
 
 	// Teams.
 	ActionCreateTeam       = "createTeam"

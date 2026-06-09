@@ -34,7 +34,34 @@ Body: `{email, password}`. Same response shape as register.
 
 ### `POST /v1/auth/refresh` 🔧
 
-Body: `{refreshToken}`. Returns a new token pair.
+Body: `{refreshToken}`. Returns a new token pair. Refresh tokens issued
+**before** the account's last password change are refused with 401
+`invalid_refresh` (the stateless-JWT equivalent of "reset signs out old
+sessions"); access tokens already in flight keep their ≤15-minute tail.
+
+### `POST /v1/auth/forgot_password` 🔧 (v1.25+, anonymous)
+
+Body: `{email}`. **Always** answers `200 {ok:true}` with an identical body
+— whether the account exists, email is configured, or the per-account cap
+was hit. Anything else would be a user-enumeration oracle; the email send
+itself is detached so Resend latency can't leak it either.
+
+When the account exists AND a sender is configured (Admin → Email or the
+`.env` fallback) AND `SYNAPSE_PUBLIC_URL` is set, a single-use
+`syn_reset_…` token is minted (sha256 stored, 1-hour expiry, max 3 active
+per account) and emailed as `<PublicURL>/reset-password?token=…`. Default
+installs without email answer 200 and mint nothing — the instance admin
+remains the manual fallback.
+
+### `POST /v1/auth/reset_password` 🔧 (v1.25+, anonymous)
+
+Body: `{token, newPassword}`. Validates the token (unused + unexpired →
+else 400 `invalid_token`), enforces the 8-char minimum (400
+`weak_password` — without consuming the token, so the link survives a
+typo), then in one transaction: updates the hash, stamps
+`users.password_changed_at` (revoking pre-reset refresh tokens), marks the
+token used and deletes the account's other outstanding reset links.
+Audited as `passwordReset`.
 
 ## Profile
 
