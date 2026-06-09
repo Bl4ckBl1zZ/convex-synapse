@@ -737,7 +737,8 @@ func (h *ProjectsHandler) listDeployments(w http.ResponseWriter, r *http.Request
 			SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
 			       d.deployment_url, d.is_default, d.reference, d.creator_user_id, d.created_at,
 			       d.adopted,
-			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote
+			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote,
+			       d.cpus, d.memory_mb
 			  FROM deployments d
 			  LEFT JOIN hosts h ON h.id = d.host_id
 			 WHERE d.project_id = $1 AND d.status <> 'deleted'
@@ -762,7 +763,8 @@ func (h *ProjectsHandler) listDeployments(w http.ResponseWriter, r *http.Request
 			SELECT d.id, d.project_id, d.name, d.deployment_type, d.status,
 			       d.deployment_url, d.is_default, d.reference, d.creator_user_id, d.created_at,
 			       d.adopted,
-			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote
+			       d.host_id::text, h.name, h.tailnet_addr, h.is_remote,
+			       d.cpus, d.memory_mb
 			  FROM deployments d
 			  LEFT JOIN hosts h ON h.id = d.host_id
 			 WHERE d.project_id = $1
@@ -785,7 +787,8 @@ func (h *ProjectsHandler) listDeployments(w http.ResponseWriter, r *http.Request
 		var url, ref, creator, hostName, hostTailnet *string
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Name, &d.DeploymentType, &d.Status,
 			&url, &d.IsDefault, &ref, &creator, &d.CreatedAt, &d.Adopted,
-			&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote); err != nil {
+			&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote,
+			&d.CPUs, &d.MemoryMB); err != nil {
 			logErr("scan deployment", err)
 			writeError(w, http.StatusInternalServerError, "internal", "Failed to scan deployments")
 			return

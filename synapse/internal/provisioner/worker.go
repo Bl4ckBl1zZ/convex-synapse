@@ -620,6 +620,10 @@ type claimedJob struct {
 	OperationStepID  string
 	DeploymentStatus string
 	Adopted          bool
+
+	// Resource limits (v1.25+, migration 000034). nil = unlimited.
+	CPUs     *float64
+	MemoryMB *int64
 }
 
 // Storage carries the per-deployment Postgres + S3 connection info that
@@ -673,7 +677,7 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 		       j.healthcheck_via_network,
 		       d.host_id::text, h.is_remote, COALESCE(h.tailnet_addr, ''), h.ssh_user, h.ssh_port,
 		       COALESCE(j.reconcile_action, ''), j.operation_run_id::text, j.operation_step_id::text,
-		       d.status, d.adopted
+		       d.status, d.adopted, d.cpus, d.memory_mb
 		  FROM provisioning_jobs j
 		  JOIN deployments d ON d.id = j.deployment_id
 		  JOIN hosts       h ON h.id = d.host_id
@@ -689,7 +693,7 @@ func (w *Worker) claimNext(ctx context.Context, logger *slog.Logger, cfg Config)
 		&j.HealthcheckViaNetwork,
 		&j.HostID, &j.HostIsRemote, &j.HostTailnetAddr, &j.HostSSHUser, &j.HostSSHPort,
 		&j.ReconcileAction, &operationRunID, &operationStepID,
-		&j.DeploymentStatus, &j.Adopted)
+		&j.DeploymentStatus, &j.Adopted, &j.CPUs, &j.MemoryMB)
 	_ = replicaID
 	if operationRunID != nil {
 		j.OperationRunID = *operationRunID
@@ -950,6 +954,12 @@ func (w *Worker) buildSpec(ctx context.Context, j claimedJob) dockerprov.Deploym
 			BucketExports:   j.Storage.BucketExports,
 			BucketSnapshots: j.Storage.BucketSnapshots,
 		}
+	}
+	if j.CPUs != nil {
+		spec.CPUs = *j.CPUs
+	}
+	if j.MemoryMB != nil {
+		spec.MemoryMB = *j.MemoryMB
 	}
 	return spec
 }

@@ -278,14 +278,16 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 		adopted        bool
 		haEnabled      bool
 		status         string
+		cpus           *float64
+		memoryMB       *int64
 	)
 	err := h.DB.QueryRow(ctx, `
 		SELECT instance_secret, project_id, deployment_type, host_port,
-		       adopted, ha_enabled, status
+		       adopted, ha_enabled, status, cpus, memory_mb
 		  FROM deployments
 		 WHERE id = $1
 	`, deploymentID).Scan(&instanceSecret, &projectID, &depType, &hostPort,
-		&adopted, &haEnabled, &status)
+		&adopted, &haEnabled, &status, &cpus, &memoryMB)
 	if err != nil {
 		logger.Warn("rebuild cors: load deployment failed",
 			"deployment_id", deploymentID, "name", deploymentName, "err", err)
@@ -364,6 +366,14 @@ func (h *DeploymentsHandler) rebuildCORSAndRestart(ctx context.Context, deployme
 		HealthcheckViaNetwork: h.HealthcheckViaNetwork,
 		PublicURL:             publicOrigin,
 		SiteURL:               siteOrigin,
+	}
+	// Recreate replaces the container, so the persisted resource limits
+	// must ride along or a domain rebake would silently uncap it.
+	if cpus != nil {
+		spec.CPUs = *cpus
+	}
+	if memoryMB != nil {
+		spec.MemoryMB = *memoryMB
 	}
 
 	logger.Info("rebuild cors: recreating container",
@@ -620,9 +630,14 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 	}, h.lookupActiveSiteDomain(ctx, deploymentID))
 
 	// Project id for the synapse.project_id container label (best-effort; the
-	// synapse.deployment_id label is the one drift correlates on).
+	// synapse.deployment_id label is the one drift correlates on). Resource
+	// limits ride the same lookup — replicas are recreated here, so the
+	// persisted caps must be reapplied or the rebuild would uncap them.
 	var projectID string
-	_ = h.DB.QueryRow(ctx, `SELECT project_id::text FROM deployments WHERE id = $1`, deploymentID).Scan(&projectID)
+	var cpus *float64
+	var memoryMB *int64
+	_ = h.DB.QueryRow(ctx, `SELECT project_id::text, cpus, memory_mb FROM deployments WHERE id = $1`, deploymentID).
+		Scan(&projectID, &cpus, &memoryMB)
 
 	for _, r := range replicas {
 		spec := dockerprov.DeploymentSpec{
@@ -638,6 +653,12 @@ func (h *DeploymentsHandler) rebuildHACORSAndRestart(ctx context.Context, deploy
 			Storage:               storage,
 			PublicURL:             publicOrigin,
 			SiteURL:               siteOrigin,
+		}
+		if cpus != nil {
+			spec.CPUs = *cpus
+		}
+		if memoryMB != nil {
+			spec.MemoryMB = *memoryMB
 		}
 		logger.Info("rebuild cors: recreating HA replica",
 			"deployment_id", deploymentID, "name", deploymentName,
@@ -898,6 +919,7 @@ func (h *DeploymentsHandler) Routes() chi.Router {
 		r.Get("/", h.getDeployment)
 		r.Post("/delete", h.deleteDeployment)
 		r.Post("/restart", h.restartDeployment)
+		r.Post("/update_resources", h.updateResources)
 		r.Get("/auth", h.deploymentAuth)
 		r.Get("/cli_credentials", h.deploymentCLICredentials)
 		r.Get("/backend_version", h.getBackendVersion)
@@ -1051,6 +1073,7 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 		       d.ha_enabled, d.replica_count, d.last_deploy_at,
 		       d.host_id::text, h.name, h.tailnet_addr, h.is_remote,
 		       COALESCE(h.ssh_user, ''), COALESCE(h.ssh_port, 22),
+		       d.cpus, d.memory_mb,
 		       p.id, p.team_id, p.name, p.slug, p.is_demo, p.created_at,
 		       t.id, t.name, t.slug, t.creator_user_id, t.default_region, t.suspended, t.created_at
 		  FROM deployments d
@@ -1066,6 +1089,7 @@ func loadDeployment(ctx context.Context, db *pgxpool.Pool, name string) (*models
 		&d.HAEnabled, &d.ReplicaCount, &d.LastDeployAt,
 		&d.HostID, &hostName, &hostTailnet, &d.HostIsRemote,
 		&d.HostSSHUser, &d.HostSSHPort,
+		&d.CPUs, &d.MemoryMB,
 		&p.ID, &p.TeamID, &p.Name, &p.Slug, &p.IsDemo, &p.CreatedAt,
 		&t.ID, &t.Name, &t.Slug, &t.CreatorUserID, &t.DefaultRegion, &t.Suspended, &t.CreatedAt,
 	)
@@ -1353,6 +1377,37 @@ type createDeploymentReq struct {
 	// existing host that isn't draining; remote hosts additionally
 	// require a stored SSH key (re-run install-agent.sh otherwise).
 	HostID string `json:"hostId,omitempty"`
+
+	// CPUs / MemoryMB cap the container via Docker's HostConfig.Resources
+	// (v1.25+ resource limits — the self-hosted answer to Cloud's
+	// deployment classes). Absent/null = unlimited. Bounds enforced by
+	// validateResourceLimits.
+	CPUs     *float64 `json:"cpus,omitempty"`
+	MemoryMB *int     `json:"memoryMb,omitempty"`
+}
+
+// Resource-limit bounds. The floor keeps a container from being throttled
+// into a state where the Convex backend can't even boot (0.1 CPU / 128 MB
+// is already tight); the ceiling is an obvious-typo guard, not capacity
+// planning.
+const (
+	minCPUs     = 0.1
+	maxCPUs     = 64
+	minMemoryMB = 128
+	maxMemoryMB = 1048576 // 1 TiB
+)
+
+// validateResourceLimits bounds-checks optional cpus/memoryMb. Returns a
+// human message ("" = valid). Shared by create_deployment and
+// update_resources so the two surfaces can't drift.
+func validateResourceLimits(cpus *float64, memoryMB *int) string {
+	if cpus != nil && (*cpus < minCPUs || *cpus > maxCPUs) {
+		return fmt.Sprintf("cpus must be between %g and %g (fractions allowed, e.g. 0.5)", float64(minCPUs), float64(maxCPUs))
+	}
+	if memoryMB != nil && (*memoryMB < minMemoryMB || *memoryMB > maxMemoryMB) {
+		return fmt.Sprintf("memoryMb must be between %d and %d", minMemoryMB, maxMemoryMB)
+	}
+	return ""
 }
 
 type haOverrides struct {
@@ -1411,6 +1466,10 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 		req.Type = models.DeploymentTypeDev
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_type", "deploymentType must be dev|prod|preview|custom")
+		return
+	}
+	if msg := validateResourceLimits(req.CPUs, req.MemoryMB); msg != "" {
+		writeError(w, http.StatusBadRequest, "invalid_resources", msg)
 		return
 	}
 	if req.HA {
@@ -1514,6 +1573,8 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 	d.CreatorUserID = uid
 	d.HAEnabled = req.HA
 	d.ReplicaCount = replicaCount
+	d.CPUs = req.CPUs
+	d.MemoryMB = req.MemoryMB
 
 	var name string
 	var ports []int
@@ -1550,12 +1611,13 @@ func (h *DeploymentsHandler) createDeployment(w http.ResponseWriter, r *http.Req
 		if txErr = tx.QueryRow(r.Context(), `
 			INSERT INTO deployments (project_id, name, deployment_type, status, host_port,
 			                          admin_key, instance_secret, is_default, reference,
-			                          creator_user_id, ha_enabled, replica_count, host_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13)
+			                          creator_user_id, ha_enabled, replica_count, host_id,
+			                          cpus, memory_mb)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10, $11, $12, $13, $14, $15)
 			RETURNING id, created_at
 		`, projectID, name, req.Type, models.DeploymentStatusProvisioning, primaryPort,
 			adminKey, instanceSecret, req.IsDefault, req.Reference, uid,
-			req.HA, replicaCount, hostID,
+			req.HA, replicaCount, hostID, req.CPUs, req.MemoryMB,
 		).Scan(&d.ID, &d.CreatedAt); txErr != nil {
 			return txErr
 		}
@@ -2678,6 +2740,102 @@ func (h *DeploymentsHandler) restartDeployment(w http.ResponseWriter, r *http.Re
 		Metadata:   map[string]any{"name": d.Name},
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"name": d.Name, "status": "restarted"})
+}
+
+// ---------- POST /v1/deployments/{name}/update_resources ----------
+//
+// Resize: persists new CPU/RAM limits and recreates the container so Docker
+// actually enforces them (HostConfig is fixed at create time — a restart
+// keeps the old caps). Both fields absent = back to unlimited; the body is
+// the full desired state, not a patch. Data survives: Recreate keeps the
+// SQLite volume. v1 limitations, each with a stable code: adopted (no
+// managed container), HA (needs a rolling per-replica recreate — tracked),
+// remote hosts (Recreate only dispatches to the local daemon today), and
+// non-running rows (nothing live to recreate).
+func (h *DeploymentsHandler) updateResources(w http.ResponseWriter, r *http.Request) {
+	d, _, t, role, ok := h.loadDeploymentForRequest(w, r)
+	if !ok {
+		return
+	}
+	if !canEditProject(role) {
+		writeError(w, http.StatusForbidden, "forbidden", "You do not have permission to resize this deployment")
+		return
+	}
+	var req struct {
+		CPUs     *float64 `json:"cpus"`
+		MemoryMB *int     `json:"memoryMb"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if msg := validateResourceLimits(req.CPUs, req.MemoryMB); msg != "" {
+		writeError(w, http.StatusBadRequest, "invalid_resources", msg)
+		return
+	}
+	if d.Adopted {
+		writeError(w, http.StatusConflict, "cannot_resize_adopted",
+			"Adopted (external) deployments aren't managed by Synapse and can't be resized here")
+		return
+	}
+	if d.HAEnabled {
+		writeError(w, http.StatusConflict, "ha_resize_not_supported",
+			"Resizing an HA deployment isn't supported yet — recreate it with the desired limits")
+		return
+	}
+	if d.HostIsRemote {
+		writeError(w, http.StatusConflict, "remote_resize_not_supported",
+			"Resizing a deployment on a remote host isn't supported yet")
+		return
+	}
+	if d.Status != models.DeploymentStatusRunning {
+		writeError(w, http.StatusConflict, "deployment_not_running",
+			"The deployment must be running to resize it (the container is recreated with the new limits)")
+		return
+	}
+
+	if _, err := h.DB.Exec(r.Context(),
+		`UPDATE deployments SET cpus = $1, memory_mb = $2 WHERE id = $3`,
+		req.CPUs, req.MemoryMB, d.ID); err != nil {
+		logErr("update resources", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to save resource limits")
+		return
+	}
+
+	// Recreate with the fresh row state (env vars, domains, and now the
+	// new limits all come from the DB) — same path domain rebakes use.
+	if !h.rebuildCORSAndRestart(r.Context(), d.ID, d.Name, slog.Default()) {
+		writeError(w, http.StatusInternalServerError, "resize_failed",
+			"Limits were saved but the container recreate failed — restart the deployment to apply them")
+		return
+	}
+
+	uid, _ := auth.UserID(r.Context())
+	meta := map[string]any{"name": d.Name}
+	if req.CPUs != nil {
+		meta["cpus"] = *req.CPUs
+	}
+	if req.MemoryMB != nil {
+		meta["memoryMb"] = *req.MemoryMB
+	}
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		TeamID:     t.ID,
+		ActorID:    uid,
+		Action:     audit.ActionUpdateDeploymentResources,
+		TargetType: audit.TargetDeployment,
+		TargetID:   d.ID,
+		Metadata:   meta,
+	})
+
+	fresh, _, _, err := loadDeployment(r.Context(), h.DB, d.Name)
+	if err != nil {
+		logErr("reload after resize", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Resized but failed to re-read")
+		return
+	}
+	fresh.DeploymentURL = h.publicDeploymentURL(r.Context(), fresh)
+	fresh.SiteURL = h.siteDeploymentURL(r.Context(), fresh)
+	writeJSON(w, http.StatusOK, fresh)
 }
 
 // ---------- GET /v1/deployments/{name}/auth ----------

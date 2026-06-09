@@ -85,6 +85,13 @@ type DeploymentSpec struct {
 	// published. Computed by deploymenturl.Computer.Site. See
 	// docs/CONVEX_SITE_ORIGIN.md.
 	SiteURL string
+
+	// CPUs / MemoryMB cap the container via HostConfig.Resources (v1.25+
+	// per-deployment limits). Zero = unlimited — the pre-feature behavior.
+	// Applied at container-create time only: restarts keep whatever the
+	// container was created with; a resize must go through Recreate.
+	CPUs     float64
+	MemoryMB int64
 }
 
 // StorageEnv carries the per-deployment Postgres + S3 configuration.
@@ -444,6 +451,14 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 			Name:              container.RestartPolicyUnlessStopped,
 			MaximumRetryCount: 0,
 		},
+	}
+	// Per-deployment resource limits (v1.25+). Zero = unlimited. NanoCPUs
+	// is Docker's --cpus equivalent (1e9 = one core); Memory is bytes.
+	if spec.CPUs > 0 {
+		hostCfg.Resources.NanoCPUs = int64(spec.CPUs * 1e9)
+	}
+	if spec.MemoryMB > 0 {
+		hostCfg.Resources.Memory = spec.MemoryMB << 20
 	}
 	// SQLite path → mount a per-replica data volume. Postgres + S3 path
 	// (Storage != nil) keeps everything in shared storage, so no volume

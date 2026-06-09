@@ -141,6 +141,11 @@ const (
 	ActionUpdateEmailSettings = "email_settings.updated"
 	ActionClearEmailSettings  = "email_settings.cleared"
 
+	// ActionUpdateDeploymentResources records a resize (v1.25+ per-
+	// deployment CPU/RAM limits). Metadata carries {name, cpus?, memoryMb?}
+	// — absent keys mean unlimited.
+	ActionUpdateDeploymentResources = "updateDeploymentResources"
+
 	// Instance alert settings (v1.25+, migration 000032). Deployment-down
 	// notification channels set/cleared from the dashboard's admin area;
 	// metadata carries {emailEnabled, webhookConfigured} — never the

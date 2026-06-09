@@ -1231,4 +1231,21 @@ export const ptBR: Record<string, string> = {
   "This page only works from the link in a reset email. Request a new one below.":
     "Esta página só funciona a partir do link de um email de redefinição. Solicite um novo abaixo.",
   "Request a reset link": "Solicitar um link de redefinição",
+
+  // Resource limits (v1.25) — create dialog + row badge + resize dialog.
+  "CPU limit": "Limite de CPU",
+  "Memory limit (MB)": "Limite de memória (MB)",
+  "e.g. 0.5": "ex. 0.5",
+  "e.g. 512": "ex. 512",
+  "Leave blank for unlimited. The self-hosted version of deployment classes — caps the container via Docker resource limits.":
+    "Deixe em branco para ilimitado. A versão self-hosted das deployment classes — limita o container via limites de recursos do Docker.",
+  "Resource limits applied to the container (Docker)": "Limites de recursos aplicados ao container (Docker)",
+  "Resize": "Redimensionar",
+  "Resize {name}": "Redimensionar {name}",
+  "Resize deployment {name}": "Redimensionar o deployment {name}",
+  "Caps the container's CPU and RAM via Docker resource limits. Applying recreates the container — brief downtime, no data loss. Leave a field blank for unlimited.":
+    "Limita a CPU e a RAM do container via limites de recursos do Docker. Aplicar recria o container — breve indisponibilidade, sem perda de dados. Deixe um campo em branco para ilimitado.",
+  "Apply (recreates container)": "Aplicar (recria o container)",
+  "Applying...": "Aplicando...",
+  "Could not resize deployment": "Não foi possível redimensionar o deployment",
 };

@@ -198,6 +198,7 @@ If you're tempted to add one, move it to the roadmap and discuss first.
 | Teams + invites (multi-user via opaque tokens) | `internal/api/teams.go`, `internal/api/invites.go` |
 | Projects + env vars (CRUD, batch updates) | `internal/api/projects.go` |
 | Deployments (provision real Convex backends, ~1s) | `internal/api/deployments.go`, `internal/provisioner/` |
+| **Resource limits (v1.25)**: `cpus`/`memoryMb` opcionais no create_deployment → `DeploymentSpec.CPUs/MemoryMB` → `HostConfig.Resources` (NanoCPUs/Memory); NULL = ilimitado (migration 000034). Recreates (domain rebake) recarregam os limites do row — rebake nunca destampa um container. Resize: `POST /v1/deployments/{name}/update_resources` (full desired state, recria o container, volume preservado); adopted/HA/remote → 409 com códigos estáveis. Badge + dialog de Resize na row do projeto | `internal/api/deployments.go::updateResources/validateResourceLimits`, `internal/docker/provisioner.go` (HostConfig), `internal/provisioner/worker.go::buildSpec`, migration 000034 |
 | Adopt existing (register an external Convex backend) | `internal/api/deployments.go::adoptDeployment` |
 | Pagination on listings (`?limit&?cursor` + `X-Next-Cursor`) | `internal/api/pagination.go` |
 | `npx convex` CLI compatibility | `internal/api/deployments.go::deploymentCLICredentials` |

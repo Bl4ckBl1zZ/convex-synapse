@@ -180,6 +180,10 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
 
   const [open, setOpen] = useState(false);
   const [type, setType] = useState<"dev" | "prod">("dev");
+  // Resource limits (v1.25+). Kept as strings so the inputs can be blank
+  // (= unlimited); parsed to numbers only on submit.
+  const [createCpus, setCreateCpus] = useState("");
+  const [createMemoryMb, setCreateMemoryMb] = useState("");
   // HA mode. Off by default — single-replica deployments are the common
   // path. When the backend has SYNAPSE_HA_ENABLED=false (most clusters),
   // submitting with this on returns 400 ha_disabled which we surface
@@ -212,10 +216,14 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
         type,
         ha: haMode || undefined,
         hostId: hostId || undefined,
+        cpus: createCpus.trim() ? Number(createCpus) : undefined,
+        memoryMb: createMemoryMb.trim() ? Number(createMemoryMb) : undefined,
       });
       setOpen(false);
       setHAMode(false);
       setHostId("");
+      setCreateCpus("");
+      setCreateMemoryMb("");
       // v1.9.7: the topology panel below uses its own SWR key, so the
       // deployments-list mutate() above doesn't invalidate it. Force a
       // refetch by signalling the global cache — the panel re-renders
@@ -288,6 +296,44 @@ await Promise.all([
 
   const [deletingName, setDeletingName] = useState<string | null>(null);
   const [restartingName, setRestartingName] = useState<string | null>(null);
+
+  // Resize dialog (v1.25+ resource limits). The form carries the FULL
+  // desired state — blank = unlimited — because the API treats the body
+  // as a replacement, not a patch. Applying recreates the container
+  // (brief downtime, data volume kept), which the dialog copy spells out.
+  const [resizeTarget, setResizeTarget] = useState<Deployment | null>(null);
+  const [resizeCpus, setResizeCpus] = useState("");
+  const [resizeMemoryMb, setResizeMemoryMb] = useState("");
+  const [resizePending, setResizePending] = useState(false);
+  const [resizeError, setResizeError] = useState<string | null>(null);
+
+  const openResize = (d: Deployment) => {
+    setResizeError(null);
+    setResizeCpus(d.cpus != null ? String(d.cpus) : "");
+    setResizeMemoryMb(d.memoryMb != null ? String(d.memoryMb) : "");
+    setResizeTarget(d);
+  };
+
+  const submitResize = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resizeTarget) return;
+    setResizeError(null);
+    setResizePending(true);
+    try {
+      await api.deployments.updateResources(resizeTarget.name, {
+        cpus: resizeCpus.trim() ? Number(resizeCpus) : undefined,
+        memoryMb: resizeMemoryMb.trim() ? Number(resizeMemoryMb) : undefined,
+      });
+      setResizeTarget(null);
+      await mutate();
+    } catch (err) {
+      setResizeError(
+        err instanceof ApiError ? err.message : t("Could not resize deployment"),
+      );
+    } finally {
+      setResizePending(false);
+    }
+  };
   const [copiedName, setCopiedName] = useState<string | null>(null);
 
   // v1.9.4: renameOpen/transferOpen/deletingProject state + their
@@ -575,6 +621,20 @@ await Promise.all([
                           {t("on {hostName}", { hostName: d.hostName })}
                         </Badge>
                       )}
+                      {(d.cpus || d.memoryMb) && (
+                        <Badge
+                          tone="neutral"
+                          title={t("Resource limits applied to the container (Docker)")}
+                          data-testid={`deployment-limits-${d.name}`}
+                        >
+                          {[
+                            d.cpus ? `${d.cpus} CPU` : null,
+                            d.memoryMb ? `${d.memoryMb} MB` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </Badge>
+                      )}
                     </div>
                     {(d.deploymentUrl || d.url) && (
                       <div className="mt-1 space-y-0.5">
@@ -688,6 +748,16 @@ await Promise.all([
                     >
                       {restartingName === d.name ? t("Restarting...") : t("Restart")}
                     </Button>
+                    {!d.adopted && !d.haEnabled && !d.hostIsRemote && d.status === "running" && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => openResize(d)}
+                        aria-label={t("Resize deployment {name}", { name: d.name })}
+                      >
+                        {t("Resize")}
+                      </Button>
+                    )}
                     <Button
                       variant="danger"
                       size="sm"
@@ -834,6 +904,45 @@ await Promise.all([
               {t("Defaults to the host running Synapse. Remote hosts appear once an operator runs install-agent.sh on them.")}
             </p>
           </div>
+          {/* Resource limits (v1.25+). Blank = unlimited — the pre-v1.25
+              behavior. Caps land in Docker's HostConfig at create time. */}
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label htmlFor="create-cpus" className="mb-1 block text-xs text-neutral-400">
+                  {t("CPU limit")}
+                </label>
+                <Input
+                  id="create-cpus"
+                  type="number"
+                  step="0.1"
+                  min={0.1}
+                  max={64}
+                  placeholder={t("e.g. 0.5")}
+                  value={createCpus}
+                  onChange={(e) => setCreateCpus(e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="create-memory-mb" className="mb-1 block text-xs text-neutral-400">
+                  {t("Memory limit (MB)")}
+                </label>
+                <Input
+                  id="create-memory-mb"
+                  type="number"
+                  step={128}
+                  min={128}
+                  max={1048576}
+                  placeholder={t("e.g. 512")}
+                  value={createMemoryMb}
+                  onChange={(e) => setCreateMemoryMb(e.target.value)}
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-neutral-500">
+              {t("Leave blank for unlimited. The self-hosted version of deployment classes — caps the container via Docker resource limits.")}
+            </p>
+          </div>
           {formError && <p className="text-xs text-red-400">{formError}</p>}
           <div className="flex justify-end gap-2">
             <Button
@@ -846,6 +955,66 @@ await Promise.all([
             </Button>
             <Button type="submit" disabled={pending}>
               {pending ? t("Creating...") : t("Create")}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
+      <Dialog
+        open={resizeTarget !== null}
+        onClose={() => setResizeTarget(null)}
+        title={t("Resize {name}", { name: resizeTarget?.name ?? "" })}
+      >
+        <form onSubmit={submitResize} className="space-y-4" data-testid="resize-form">
+          <p className="text-xs text-neutral-400">
+            {t(
+              "Caps the container's CPU and RAM via Docker resource limits. Applying recreates the container — brief downtime, no data loss. Leave a field blank for unlimited.",
+            )}
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="resize-cpus" className="mb-1 block text-xs text-neutral-400">
+                {t("CPU limit")}
+              </label>
+              <Input
+                id="resize-cpus"
+                type="number"
+                step="0.1"
+                min={0.1}
+                max={64}
+                placeholder={t("e.g. 0.5")}
+                value={resizeCpus}
+                onChange={(e) => setResizeCpus(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="resize-memory-mb" className="mb-1 block text-xs text-neutral-400">
+                {t("Memory limit (MB)")}
+              </label>
+              <Input
+                id="resize-memory-mb"
+                type="number"
+                step={128}
+                min={128}
+                max={1048576}
+                placeholder={t("e.g. 512")}
+                value={resizeMemoryMb}
+                onChange={(e) => setResizeMemoryMb(e.target.value)}
+              />
+            </div>
+          </div>
+          {resizeError && <p className="text-xs text-red-400">{resizeError}</p>}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setResizeTarget(null)}
+              disabled={resizePending}
+            >
+              {t("Cancel")}
+            </Button>
+            <Button type="submit" disabled={resizePending} data-testid="resize-apply">
+              {resizePending ? t("Applying...") : t("Apply (recreates container)")}
             </Button>
           </div>
         </form>

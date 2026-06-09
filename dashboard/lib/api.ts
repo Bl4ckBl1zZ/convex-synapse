@@ -137,6 +137,9 @@ export type Deployment = {
   hostName?: string;
   hostTailnetAddr?: string;
   hostIsRemote?: boolean;
+  // Resource limits (v1.25+). Absent = unlimited.
+  cpus?: number;
+  memoryMb?: number;
 };
 
 // RemoteSetupBundle is the one-click "Setup remote install" payload
@@ -1639,6 +1642,10 @@ export const api = {
         // self-host. Backend returns 400 host_not_found / host_draining
         // / host_not_provisioned on misconfiguration.
         hostId?: string;
+        // Resource limits (v1.25+). Omit for unlimited. Bounds enforced
+        // server-side (400 invalid_resources).
+        cpus?: number;
+        memoryMb?: number;
       }
     ): Promise<Deployment> {
       return request<Deployment>(
@@ -1924,6 +1931,19 @@ export const api = {
       return request<{ name: string; status: string }>(
         `/v1/deployments/${encodeURIComponent(name)}/restart`,
         { method: "POST", body: {} },
+      );
+    },
+    // Resize (v1.25+): persists new CPU/RAM limits and recreates the
+    // container (data volume kept). The body is the full desired state —
+    // omit a field for unlimited. 409 for adopted / HA / remote /
+    // non-running rows.
+    updateResources(
+      name: string,
+      body: { cpus?: number; memoryMb?: number },
+    ): Promise<Deployment> {
+      return request<Deployment>(
+        `/v1/deployments/${encodeURIComponent(name)}/update_resources`,
+        { method: "POST", body },
       );
     },
     // Deployment-scoped tokens (scope=deployment). Strictest scope —

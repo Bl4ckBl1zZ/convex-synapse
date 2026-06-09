@@ -1,7 +1,7 @@
 # Roadmap
 
-Current test inventory as of 2026-06-09: 721 Go test functions (574
-integration in `internal/test`), 142 Playwright e2e tests across 42 specs,
+Current test inventory as of 2026-06-09: 729 Go test functions (582
+integration in `internal/test`), 143 Playwright e2e tests across 43 specs,
 and 396 bats cases. Historical milestone counts below are left as per-PR
 deltas, not the current totals.
 
@@ -157,6 +157,21 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
 
 ### ✅ Shipped this milestone
 
+- [x] **Per-deployment resource limits (v1.25)** — the self-hosted answer
+  to Cloud's deployment classes. `create_deployment` accepts optional
+  `cpus` (0.1–64, fractions) + `memoryMb` (128–1 TiB) that land in
+  Docker's `HostConfig.Resources` (NanoCPUs / Memory); NULL = unlimited =
+  pre-feature behavior, nothing rewritten on upgrade. Limits persist on
+  the row (migration 000034), ride every recreate (domain rebakes reload
+  them — a rebake can't silently uncap a container), and HA creates apply
+  them to both replicas. Resize: `POST
+  /v1/deployments/{name}/update_resources` recreates the container with
+  the new caps (data volume kept); adopted/HA/remote refused with stable
+  codes for now. Dashboard: optional CPU/memory fields in the create
+  dialog, a "0.5 CPU · 512 MB" badge on the row, and a Resize dialog.
+  Tests: +8 Go integration, +1 Playwright that docker-inspects the REAL
+  container to prove NanoCpus/Memory are enforced end-to-end (gap 3 of 4
+  from the Convex Cloud comparison — next: per-deployment backups).
 - [x] **Password reset (v1.25)** — self-service forgot-password flow;
   before this, a forgotten password meant asking the instance admin to
   poke the DB. `POST /v1/auth/forgot_password` always answers the same

@@ -58,6 +58,8 @@ type deploymentResp struct {
 	HostName        string     `json:"hostName,omitempty"`
 	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
 	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
+	CPUs            *float64   `json:"cpus,omitempty"`
+	MemoryMB        *int       `json:"memoryMb,omitempty"`
 }
 
 type deploymentAuthResp struct {

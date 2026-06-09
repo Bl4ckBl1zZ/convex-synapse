@@ -127,6 +127,11 @@ type Deployment struct {
 	HostSSHUser string     `json:"-"`
 	HostSSHPort int        `json:"-"`
 	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	// CPUs / MemoryMB are the per-deployment resource limits (v1.25+,
+	// migration 000034) applied to the container via Docker's
+	// HostConfig.Resources. nil = unlimited (every pre-v1.25 deployment).
+	CPUs     *float64 `json:"cpus,omitempty"`
+	MemoryMB *int     `json:"memoryMb,omitempty"`
 }
 
 // DeploymentReplicaStatus enumerates the per-replica lifecycle states.

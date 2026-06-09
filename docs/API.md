@@ -482,11 +482,19 @@ Lists the caller's app-scoped tokens for this project.
 
 ### `POST /v1/projects/{id}/create_deployment` ✅ (admins only)
 
-Body: `{type:"dev"|"prod"|"preview"|"custom", reference?, isDefault?}`.
-Allocates a name, picks a free host port from the configured range,
-provisions a Convex backend container via Docker, and returns the
-`Deployment` row once `/version` responds (or after a 60s healthcheck
-warning, whichever comes first).
+Body: `{type:"dev"|"prod"|"preview"|"custom", reference?, isDefault?,
+cpus?, memoryMb?}`. Allocates a name, picks a free host port from the
+configured range, provisions a Convex backend container via Docker, and
+returns the `Deployment` row once `/version` responds (or after a 60s
+healthcheck warning, whichever comes first).
+
+**Resource limits (v1.25+):** `cpus` (0.1–64, fractions allowed) and
+`memoryMb` (128–1048576) cap the container via Docker's
+`HostConfig.Resources` — the self-hosted answer to Cloud's deployment
+classes. Absent = unlimited (pre-v1.25 behavior). Out-of-range values are
+`400 invalid_resources`. The limits persist on the row, ride every
+recreate (domain rebakes, resizes), and surface as `cpus`/`memoryMb` in
+GET/list responses.
 
 ### `POST /v1/projects/{id}/adopt_deployment` 🔧 (admins only)
 
@@ -573,6 +581,21 @@ container), `409 deployment_provisioning`, `409 deployment_deleted`,
 `500 restart_failed` (self-host) / `502 restart_failed` (remote host
 unreachable — bounded, never hangs). The DB status is untouched; the health
 worker reconciles.
+
+### `POST /v1/deployments/{name}/update_resources` 🔧 (members+, v1.25+)
+
+Resize: persists new CPU/RAM limits and **recreates the container** so
+Docker actually enforces them (HostConfig is fixed at create time — a
+plain restart keeps the old caps; the data volume survives). Body
+`{cpus?, memoryMb?}` is the FULL desired state, not a patch — omit a
+field for unlimited. Same bounds as create (`400 invalid_resources`).
+Returns the updated `Deployment`. Audited as
+`updateDeploymentResources`. Refusals, each with a stable code:
+`409 cannot_resize_adopted` (no managed container),
+`409 ha_resize_not_supported` (rolling per-replica recreate not shipped
+yet — HA limits are set at create), `409 remote_resize_not_supported`
+(recreate only dispatches to the local daemon today), and
+`409 deployment_not_running`.
 
 ### `GET /v1/deployments/{name}/auth` 🔧 (members only)
 
@@ -963,3 +986,4 @@ they bump the `--upgrade` target.
 | v1.19.0 | dashboard-driven Remote Hosts setup — `GET /v1/admin/headscale`, `POST /v1/admin/headscale/configure`, `GET /v1/admin/headscale/status/{jobID}` (instance-admin gated; same admin_jobs pattern as host-domain); proxy resolves remote deployments to `<tailnet_addr>:<host_port>` automatically; remote site-routing returns `ErrSiteUnsupported` (3211 not published over tailnet) |
 | v1.20.0 | Remote Hosts end-to-end. Host removal — `POST /v1/hosts/{id}/delete` (instance-admin, registry-only): refuses `409 cannot_remove_self_host` / `host_has_deployments` / `host_has_pending_jobs`; on success cascades agent/token/state rows and audits `deleteHost` (does NOT deregister the Headscale node or clean the on-VPS agent — see `docs/REMOTE_HOSTS.md#removing-a-host`). `POST /v1/deployments/{name}/delete?force=true` drops a record stranded on an unreachable host; the bounded teardown now returns `502 remote_teardown_failed` / `restart_failed` instead of hanging. No new surface for the provision/proxy/register fixes that finally make a remote deployment provision, stay running, and route through the central proxy (installer + health reconciler + Headscale ACL only). |
 | v1.21.0 | Dashboard full Portuguese (pt-BR) localization. The entire dashboard UI is translatable via a lightweight in-house "English-as-key" i18n layer (`dashboard/lib/i18n/`): every user-facing string is wrapped in `t("English source")`, with a 1157-key `pt-BR` dictionary and automatic fallback to the English source for any missing key. Locale is resolved server-side (cookie → `Accept-Language` → default `en`) so the first paint is already in the right language; an `EN \| PT` switcher in the TopBar + auth pages persists the choice to the `synapse_locale` cookie. English stays the default, so the rendered DOM is byte-identical to before (no change to API consumers or e2e text assertions). No `/v1` API surface change. |
+| v1.25.0 | Convex-Cloud gap closers, wave 1: deployment-down alerts — `GET/POST/DELETE /v1/admin/alert_settings` (instance-admin; masked webhook hint, never the URL); self-service password reset — anonymous `POST /v1/auth/forgot_password` + `POST /v1/auth/reset_password`, and `/v1/auth/refresh` now refuses refresh JWTs issued before the last password change; per-deployment resource limits — `cpus`/`memoryMb` accepted on `create_deployment`, surfaced on deployment JSON, plus `POST /v1/deployments/{name}/update_resources` (resize via container recreate) |
