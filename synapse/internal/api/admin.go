@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -118,6 +119,13 @@ type AdminHandler struct {
 	cachedLatest  *latestRelease
 	cachedAt      time.Time
 	cachedFromAPI bool
+	// Failure memory (v1.27.2): after a failed GitHub fetch, polls
+	// within githubFailureBackoff get the remembered error instantly
+	// instead of re-hanging for the full fetch timeout — without this,
+	// every dashboard poll and every chip click on a host with broken
+	// egress burned 6+ seconds and re-painted the raw error.
+	lastFailAt  time.Time
+	lastFailErr string
 }
 
 const (
@@ -127,9 +135,39 @@ const (
 	// versionCheckCacheTTL keeps GitHub fetches off the critical path
 	// for dashboards that poll every minute.
 	versionCheckCacheTTL = 15 * time.Minute
-	// githubFetchTimeout: avoid hanging a request behind a slow GitHub.
+	// githubFetchTimeout caps EACH attempt (there are up to
+	// githubFetchAttempts of them) — avoid hanging a request behind a
+	// slow GitHub.
 	githubFetchTimeout = 6 * time.Second
+	// githubFetchAttempts: transient network errors get one retry.
+	// HTTP-level answers (rate limit, 404) never retry — GitHub spoke,
+	// repeating the question won't change the answer.
+	githubFetchAttempts = 2
+	// githubFailureBackoff: how long a failed fetch short-circuits
+	// subsequent automatic checks. The manual refresh button bypasses
+	// it (force=true) so an operator can re-test immediately after
+	// fixing their network.
+	githubFailureBackoff = 60 * time.Second
 )
+
+// githubHTTPClient is tuned for the failure mode real installs hit:
+// VPS/docker hosts with a half-configured IPv6 stack. api.github.com
+// publishes AAAA records; with the default transport a black-holed
+// IPv6 route eats the whole deadline before IPv4 is ever tried, and
+// every check ends in "context deadline exceeded". An aggressive
+// Happy-Eyeballs fallback (150ms) plus explicit dial/TLS timeouts
+// makes the IPv4 path win immediately on those machines.
+var githubHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:       5 * time.Second,
+			FallbackDelay: 150 * time.Millisecond,
+		}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 6 * time.Second,
+	},
+}
 
 func (h *AdminHandler) Routes() chi.Router {
 	r := chi.NewRouter()
@@ -247,9 +285,13 @@ type versionCheckResp struct {
 }
 
 func (h *AdminHandler) versionCheck(w http.ResponseWriter, r *http.Request) {
+	h.versionCheckWithForce(w, r, false)
+}
+
+func (h *AdminHandler) versionCheckWithForce(w http.ResponseWriter, r *http.Request, force bool) {
 	resp := versionCheckResp{Current: trimVersion(h.Version)}
 
-	latest, fetchedAt, fromCache, err := h.fetchLatestRelease(r.Context())
+	latest, fetchedAt, fromCache, err := h.fetchLatestReleaseForce(r.Context(), force)
 	if err != nil && latest == nil {
 		// Never fetched and now offline — return current-only with the
 		// error so the dashboard can still display "you're on v1.X.Y".
@@ -297,16 +339,33 @@ func (h *AdminHandler) versionCheckRefresh(w http.ResponseWriter, r *http.Reques
 	h.cachedAt = time.Time{}
 	h.cacheMu.Unlock()
 
-	h.versionCheck(w, r)
+	// force: the operator explicitly asked — bypass the failure
+	// backoff so "I just fixed my network, test again" works
+	// immediately instead of replaying the remembered error.
+	h.versionCheckWithForce(w, r, true)
 }
 
 func (h *AdminHandler) fetchLatestRelease(ctx context.Context) (*latestRelease, time.Time, bool, error) {
+	return h.fetchLatestReleaseForce(ctx, false)
+}
+
+func (h *AdminHandler) fetchLatestReleaseForce(ctx context.Context, force bool) (*latestRelease, time.Time, bool, error) {
 	h.cacheMu.Lock()
 	if h.cachedLatest != nil && time.Since(h.cachedAt) < versionCheckCacheTTL {
 		latest := h.cachedLatest
 		at := h.cachedAt
 		h.cacheMu.Unlock()
 		return latest, at, true, nil
+	}
+	// Failure backoff: a fetch just failed, so don't burn another
+	// timeout-worth of seconds on every poll — answer with the
+	// remembered error immediately. Manual refresh (force) bypasses.
+	if !force && h.lastFailErr != "" && time.Since(h.lastFailAt) < githubFailureBackoff {
+		latest := h.cachedLatest
+		at := h.cachedAt
+		msg := h.lastFailErr
+		h.cacheMu.Unlock()
+		return latest, at, latest != nil, errors.New(msg)
 	}
 	h.cacheMu.Unlock()
 
@@ -320,44 +379,99 @@ func (h *AdminHandler) fetchLatestRelease(ctx context.Context) (*latestRelease, 
 	}
 	apiURL := strings.TrimRight(base, "/") + "/repos/" + repo + "/releases/latest"
 
-	cctx, cancel := context.WithTimeout(ctx, githubFetchTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return h.lastKnownLatest(), time.Time{}, false, err
+	// Transient NETWORK errors get a retry; an HTTP answer of any kind
+	// doesn't (GitHub spoke — asking again won't change a rate limit).
+	var release *latestRelease
+	var lastErr error
+	for attempt := 0; attempt < githubFetchAttempts; attempt++ {
+		var retryable bool
+		release, retryable, lastErr = h.fetchReleaseOnce(ctx, apiURL)
+		if lastErr == nil {
+			break
+		}
+		if !retryable || ctx.Err() != nil {
+			break
+		}
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return h.lastKnownLatest(), time.Time{}, false, fmt.Errorf("github fetch: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		return h.lastKnownLatest(), time.Time{}, false, fmt.Errorf("github rate-limited (HTTP %d)", resp.StatusCode)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return h.lastKnownLatest(), time.Time{}, false, fmt.Errorf("github HTTP %d", resp.StatusCode)
-	}
-
-	var release latestRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return h.lastKnownLatest(), time.Time{}, false, fmt.Errorf("decode release: %w", err)
-	}
-	if release.Draft || release.Prerelease {
-		// /releases/latest already filters these out, but defense-in-depth:
-		// a misclick on Make Latest could still show up here.
-		return h.lastKnownLatest(), time.Time{}, false, errors.New("latest is prerelease/draft")
+	if lastErr != nil {
+		msg := classifyGitHubError(lastErr)
+		now := time.Now()
+		h.cacheMu.Lock()
+		h.lastFailAt = now
+		h.lastFailErr = msg
+		h.cacheMu.Unlock()
+		return h.lastKnownLatest(), time.Time{}, false, errors.New(msg)
 	}
 
 	now := time.Now()
 	h.cacheMu.Lock()
-	h.cachedLatest = &release
+	h.cachedLatest = release
 	h.cachedAt = now
 	h.cachedFromAPI = true
+	h.lastFailErr = ""
+	h.lastFailAt = time.Time{}
 	h.cacheMu.Unlock()
-	return &release, now, false, nil
+	return release, now, false, nil
+}
+
+// fetchReleaseOnce performs a single GitHub API attempt with its own
+// timeout. `retryable` is true only for transport-level failures
+// (dial/TLS/timeout) — the cases where a second attempt through the
+// already-warmed IPv4 path tends to succeed.
+func (h *AdminHandler) fetchReleaseOnce(ctx context.Context, apiURL string) (*latestRelease, bool, error) {
+	cctx, cancel := context.WithTimeout(ctx, githubFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := githubHTTPClient.Do(req)
+	if err != nil {
+		return nil, true, fmt.Errorf("github fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		return nil, false, fmt.Errorf("github rate-limited (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("github HTTP %d", resp.StatusCode)
+	}
+	var release latestRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, false, fmt.Errorf("decode release: %w", err)
+	}
+	if release.Draft || release.Prerelease {
+		// /releases/latest already filters these out, but defense-in-depth:
+		// a misclick on Make Latest could still show up here.
+		return nil, false, errors.New("latest is prerelease/draft")
+	}
+	return &release, false, nil
+}
+
+// classifyGitHubError turns transport noise into one actionable line.
+// The raw Go error ("Get \"https://api.github.com/...\": context
+// deadline exceeded") leaked straight into the dashboard chip and told
+// the operator nothing about WHAT to do.
+func classifyGitHubError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()):
+		return fmt.Sprintf(
+			"GitHub didn't answer within %ds (tried twice). This server's egress to api.github.com is slow or blocked — a broken IPv6 route is the usual culprit on VPSes. Retrying automatically; use the refresh button to re-test now.",
+			int(githubFetchTimeout.Seconds()))
+	case strings.Contains(err.Error(), "no such host"):
+		return "DNS for api.github.com failed on this server — check the host's resolver (/etc/resolv.conf) and outbound DNS."
+	case strings.Contains(err.Error(), "connection refused"):
+		return "Connection to api.github.com was refused — an egress firewall or proxy on this server is likely blocking it."
+	default:
+		return err.Error()
+	}
 }
 
 func (h *AdminHandler) lastKnownLatest() *latestRelease {

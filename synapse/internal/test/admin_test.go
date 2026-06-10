@@ -54,6 +54,44 @@ func stubGitHub(t *testing.T, tag string, fail bool) (*httptest.Server, *int64) 
 	return srv, &hits
 }
 
+// stubFlakyGitHub kills the TCP connection on the first N
+// /releases/latest hits (a transport-level failure, NOT an HTTP
+// answer), then serves a valid release. Exercises the v1.27.2 retry:
+// one transient network error must not surface to the dashboard.
+func stubFlakyGitHub(t *testing.T, tag string, failFirst int) (*httptest.Server, *int64) {
+	t.Helper()
+	var hits int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/", func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&hits, 1)
+		if int(n) <= failFirst {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatalf("test server doesn't support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("hijack: %v", err)
+			}
+			_ = conn.Close() // slam the connection — transport error on the client
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.github+json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name":     tag,
+			"name":         "Synapse " + tag,
+			"html_url":     "https://example.com/releases/" + tag,
+			"published_at": "2026-05-02T12:00:00Z",
+			"body":         "release notes for " + tag,
+			"prerelease":   false,
+			"draft":        false,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
 // stubUpdater spins up an httptest.Server pretending to be the
 // synapse-updater daemon (v1.5.1+ TCP+bearer protocol). It generates
 // a random bearer token, asserts every incoming request carries it,
@@ -164,6 +202,74 @@ func TestAdmin_VersionCheck_CacheHit(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(hits); got != 1 {
 		t.Errorf("expected exactly 1 GitHub fetch across 5 requests, got %d", got)
+	}
+}
+
+// TestAdmin_VersionCheck_RetryOnTransientNetworkError (v1.27.2): a
+// connection that dies at the transport level gets one silent retry —
+// a single dropped packet must not paint "GitHub unreachable" in the
+// dashboard chip.
+func TestAdmin_VersionCheck_RetryOnTransientNetworkError(t *testing.T) {
+	gh, hits := stubFlakyGitHub(t, "v9.9.9", 1)
+	h := SetupWithOpts(t, SetupOpts{
+		GitHubRepo:    "Iann29/convex-synapse",
+		GitHubAPIBase: gh.URL,
+	})
+	owner := makeAdminUser(t, h)
+
+	var got versionCheckResp
+	h.DoJSON(http.MethodGet, "/v1/admin/version_check",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if got.Error != "" {
+		t.Fatalf("transient failure should be retried away, got error %q", got.Error)
+	}
+	if got.Latest != "9.9.9" {
+		t.Errorf("latest: got %q want 9.9.9", got.Latest)
+	}
+	if n := atomic.LoadInt64(hits); n != 2 {
+		t.Errorf("hits: got %d want 2 (dropped connection + successful retry)", n)
+	}
+}
+
+// TestAdmin_VersionCheck_FailureBackoff (v1.27.2): after GitHub answers
+// with an error, polls inside the backoff window are served from the
+// failure memory — no new upstream hit, no multi-second hang per poll.
+// The manual refresh button bypasses the backoff so "I fixed my
+// network, test again NOW" works.
+func TestAdmin_VersionCheck_FailureBackoff(t *testing.T) {
+	gh, hits := stubGitHub(t, "ignored", true) // every hit answers 503
+	h := SetupWithOpts(t, SetupOpts{
+		GitHubRepo:    "Iann29/convex-synapse",
+		GitHubAPIBase: gh.URL,
+	})
+	owner := makeAdminUser(t, h)
+
+	var got versionCheckResp
+	h.DoJSON(http.MethodGet, "/v1/admin/version_check",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if got.Error == "" {
+		t.Fatalf("expected an error from the 503 stub")
+	}
+	if n := atomic.LoadInt64(hits); n != 1 {
+		t.Fatalf("hits after first failure: got %d want 1 (HTTP answers never retry)", n)
+	}
+
+	// Poll again immediately: the backoff serves the remembered error
+	// without touching GitHub.
+	h.DoJSON(http.MethodGet, "/v1/admin/version_check",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if got.Error == "" {
+		t.Fatalf("expected the remembered error during backoff")
+	}
+	if n := atomic.LoadInt64(hits); n != 1 {
+		t.Errorf("hits during backoff: got %d want still 1", n)
+	}
+
+	// The explicit refresh bypasses the backoff and re-tests live.
+	h.DoJSON(http.MethodPost, "/v1/admin/version_check/refresh",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if n := atomic.LoadInt64(hits); n != 2 {
+		t.Errorf("hits after forced refresh: got %d want 2", n)
 	}
 }
 
