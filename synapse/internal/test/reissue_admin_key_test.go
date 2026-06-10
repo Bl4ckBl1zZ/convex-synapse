@@ -80,8 +80,9 @@ func TestReissueAdminKey_AdoptedDeployment_Refused(t *testing.T) {
 		t.Fatalf("mark adopted: %v", err)
 	}
 
+	// 409 since v1.27 — consistent with every other adopted refusal.
 	env := h.AssertStatus(http.MethodPost, "/v1/deployments/re-adopted/reissue_admin_key",
-		owner.AccessToken, map[string]any{}, http.StatusBadRequest)
+		owner.AccessToken, map[string]any{}, http.StatusConflict)
 	if env.Code != "cannot_reissue_adopted" {
 		t.Fatalf("code: got %q want cannot_reissue_adopted", env.Code)
 	}

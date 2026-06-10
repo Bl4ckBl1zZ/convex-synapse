@@ -42,16 +42,35 @@ func NewHTTPBackendProbe() *HTTPBackendProbe {
 	return &HTTPBackendProbe{Client: &http.Client{Timeout: 3 * time.Second}}
 }
 
+// adoptedVersionClient fetches /version from adopted deployments'
+// external URLs. Redirects refused — consistent with probeAdoptedBackend
+// and the health worker's adopted probe.
+var adoptedVersionClient = &http.Client{
+	Timeout: 3 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func (p *HTTPBackendProbe) Probe(ctx context.Context, name string, replicaIndex int, ha bool) (string, error) {
 	if p.Client == nil {
 		p.Client = &http.Client{Timeout: 3 * time.Second}
 	}
-	url := "http://" + dockerprov.ContainerName(name, replicaIndex, ha) + ":3210/version"
+	base := "http://" + dockerprov.ContainerName(name, replicaIndex, ha) + ":3210"
+	return fetchVersionFromURL(ctx, p.Client, base)
+}
+
+// fetchVersionFromURL GETs <base>/version and extracts the version
+// string. Shared by HTTPBackendProbe (managed deployments, addressed by
+// docker-DNS container name) and the adopted path in getBackendVersion
+// (addressed by the operator-supplied external URL).
+func fetchVersionFromURL(ctx context.Context, client *http.Client, base string) (string, error) {
+	url := strings.TrimRight(base, "/") + "/version"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
-	resp, err := p.Client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -73,7 +92,7 @@ func (p *HTTPBackendProbe) Probe(ctx context.Context, name string, replicaIndex 
 	// first non-empty line. Reuse the body we may have partially
 	// consumed by re-fetching — cheaper than buffering a tee'd reader.
 	req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	resp2, err := p.Client.Do(req2)
+	resp2, err := client.Do(req2)
 	if err != nil {
 		return "", err
 	}
@@ -172,14 +191,6 @@ func (h *DeploymentsHandler) getBackendVersion(w http.ResponseWriter, r *http.Re
 		FetchedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Adopted deployments aren't reachable via Docker DNS — we have no
-	// container to probe. Return the row metadata and skip the probe.
-	if d.Adopted {
-		resp.Error = "adopted_deployment"
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-
 	if cached, ok := h.versionCache.get(d.ID); ok {
 		resp.Version = cached.version
 		resp.FromCache = true
@@ -191,13 +202,30 @@ func (h *DeploymentsHandler) getBackendVersion(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	probe := h.BackendProbe
-	if probe == nil {
-		probe = NewHTTPBackendProbe()
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
-	version, err := probe.Probe(ctx, d.Name, 0, d.HAEnabled)
+	var version string
+	var err error
+	if d.Adopted {
+		// No container, no Docker DNS — but the row stores the external
+		// URL the operator registered, and its /version answers the same
+		// way (the adopt-time probe already proved it once). Same
+		// no-redirect posture as every other server-side fetch of an
+		// operator-supplied URL.
+		base := strings.TrimRight(d.DeploymentURL, "/")
+		if base == "" {
+			resp.Error = "no_deployment_url"
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		version, err = fetchVersionFromURL(ctx, adoptedVersionClient, base)
+	} else {
+		probe := h.BackendProbe
+		if probe == nil {
+			probe = NewHTTPBackendProbe()
+		}
+		version, err = probe.Probe(ctx, d.Name, 0, d.HAEnabled)
+	}
 	now := time.Now()
 	h.versionCache.put(d.ID, backendVersionCacheEntry{
 		version:  version,

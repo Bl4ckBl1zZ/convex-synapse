@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { truncateAll } from "./helpers/db";
 import { deleteDeploymentViaDialog } from "./helpers/delete-deployment";
+import { expandDeployment } from "./helpers/expand";
 import {
   listSynapseContainerNames,
   pruneSynapseContainers,
@@ -149,6 +150,42 @@ test("adopt an existing Convex backend via the dashboard", async ({ page }) => {
   // The provisioned container is still the only managed container —
   // adopting did NOT spin up a new one.
   expect(listSynapseContainerNames()).toEqual([`convex-${provisionedName}`]);
+
+  // ---- Adopted-row affordances (v1.27) ----------------------------
+  // Expand the adopted card: actions Synapse can't perform (Restart,
+  // Resize, deploy keys, custom domains, backups) are hidden, replaced
+  // by an explanatory note + the Edit URL / key button.
+  await expandDeployment(page, "imported-app");
+  await expect(page.getByTestId("adopted-note-imported-app")).toBeVisible();
+  await expect(
+    page.getByTestId("deployment-edit-adopted-imported-app"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Restart deployment imported-app" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Resize deployment imported-app" }),
+  ).toHaveCount(0);
+
+  // ---- Edit URL / key flow (update_adopted) ------------------------
+  // Wrong key → server rejects via the re-probe, modal stays open.
+  await page.getByTestId("deployment-edit-adopted-imported-app").click();
+  let editDialog = page.getByRole("dialog");
+  await expect(editDialog).toBeVisible();
+  await expect(editDialog.locator("#edit-adopt-url")).toHaveValue(
+    `http://convex-${provisionedName}:3210`,
+  );
+  await editDialog.locator("#edit-adopt-admin-key").fill("definitely-wrong-key");
+  await editDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editDialog.getByText(/rejected/i)).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Blank key = keep the stored one; the re-probe passes against the
+  // live backend and the dialog closes.
+  await editDialog.locator("#edit-adopt-admin-key").fill("");
+  await editDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editDialog).toBeHidden({ timeout: 15_000 });
 
   // Deleting the adopted row must NOT remove the container — it isn't ours.
   // v1.7.2+: adopted deployments inherit deployment_type from the create

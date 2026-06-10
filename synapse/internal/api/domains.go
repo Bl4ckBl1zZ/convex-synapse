@@ -343,6 +343,15 @@ func (h *DomainsHandler) createDomain(w http.ResponseWriter, r *http.Request) {
 			"Viewers cannot manage domains; ask a project admin or member")
 		return
 	}
+	// Custom domains route through Synapse's proxy/Caddy, and adopted
+	// deployments have nothing to route to (no replica, no container) —
+	// a domain here would mint a TLS cert and then 502 every request.
+	// The operator should point DNS at the external backend directly.
+	if d.Adopted {
+		writeError(w, http.StatusConflict, "domains_unsupported_for_adopted",
+			"Adopted (external) deployments aren't routed by Synapse; point your domain's DNS at the backend directly")
+		return
+	}
 
 	var req createDomainReq
 	if err := readJSON(r, &req); err != nil {

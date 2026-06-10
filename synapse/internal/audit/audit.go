@@ -83,6 +83,10 @@ const (
 	// Adopted = registered an existing external Convex backend rather than
 	// provisioning a new one. Synapse-original; no Cloud equivalent.
 	ActionAdoptDeployment = "adoptDeployment"
+	// Update adopted = re-pointed an adopted deployment's stored URL /
+	// admin key in place (v1.27+). Metadata records WHICH fields changed,
+	// never key material. Synapse-original.
+	ActionUpdateAdoptedDeployment = "updateAdoptedDeployment"
 	// Upgrade = converted an existing single-replica deployment to HA.
 	// Synapse-original; emitted at endpoint-enqueue time. The worker
 	// emits no separate audit event today — operators trace progress via

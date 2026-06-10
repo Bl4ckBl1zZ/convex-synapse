@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -33,14 +35,62 @@ type deploymentJSON struct {
 	HostName        string     `json:"hostName,omitempty"`
 	HostTailnetAddr string     `json:"hostTailnetAddr,omitempty"`
 	HostIsRemote    bool       `json:"hostIsRemote,omitempty"`
+	CPUs            *float64   `json:"cpus,omitempty"`
+	MemoryMB        *int       `json:"memoryMb,omitempty"`
+	BackupSchedule  string     `json:"backupSchedule,omitempty"`
+	BackupRetention int        `json:"backupRetention,omitempty"`
 }
 
 // fakeConvexBackend stands in for a real Convex backend during adoption
 // tests. It answers /version and /api/check_admin_key — the two endpoints
 // the probe depends on. The configured admin key is the only one accepted.
+// Mutable behind a mutex so tests can rotate the key (update_adopted) or
+// take the backend "down" (adopted health probe) mid-test.
 type fakeConvexBackend struct {
 	server *httptest.Server
-	want   string // admin key to accept
+
+	mu    sync.Mutex
+	want  string // admin key to accept
+	down  bool   // /version answers 503 while true (simulated outage)
+	failN int    // fail the next N /version calls, then recover (blip)
+}
+
+func (f *fakeConvexBackend) setKey(k string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.want = k
+}
+
+func (f *fakeConvexBackend) setDown(v bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = v
+}
+
+func (f *fakeConvexBackend) failNextVersions(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failN = n
+}
+
+// versionShouldFail consumes one blip credit / reads the down flag.
+func (f *fakeConvexBackend) versionShouldFail() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down {
+		return true
+	}
+	if f.failN > 0 {
+		f.failN--
+		return true
+	}
+	return false
+}
+
+func (f *fakeConvexBackend) acceptKey() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.want
 }
 
 func newFakeConvexBackend(t *testing.T, acceptKey string) *fakeConvexBackend {
@@ -49,6 +99,10 @@ func newFakeConvexBackend(t *testing.T, acceptKey string) *fakeConvexBackend {
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/version":
+			if f.versionShouldFail() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"version":"0.1-test"}`))
 		case "/api/check_admin_key":
@@ -64,7 +118,7 @@ func newFakeConvexBackend(t *testing.T, acceptKey string) *fakeConvexBackend {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			if authz[len(prefix):] != f.want {
+			if authz[len(prefix):] != f.acceptKey() {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -310,6 +364,174 @@ func TestAdopt_HealthWorkerSkipsAdopted(t *testing.T) {
 		if id == adopted.ID {
 			t.Errorf("health worker query returned adopted deployment %s", id)
 		}
+	}
+}
+
+// TestAdopt_InvalidName: user-supplied names must be lowercase DNS labels —
+// they become /d/{name} route segments, wildcard subdomain candidates, and
+// CONVEX_DEPLOYMENT values. Adopt is the only door where a name arrives
+// from user input (create auto-generates), so it's where the gate lives.
+func TestAdopt_InvalidName(t *testing.T) {
+	h := Setup(t)
+	u := h.RegisterRandomUser()
+	_, projID := projectFor(t, h, u, "AdoptCo8", "App8")
+
+	backend := newFakeConvexBackend(t, "k8")
+	for _, bad := range []string{
+		"My App",          // space + uppercase
+		"UPPER",           // uppercase
+		"-leading",        // leading hyphen
+		"trailing-",       // trailing hyphen
+		"dotted.name",     // dot (would break single-label wildcard routing)
+		strings.Repeat("a", 64), // longer than a DNS label
+	} {
+		env := h.AssertStatus(http.MethodPost, "/v1/projects/"+projID+"/adopt_deployment", u.AccessToken,
+			map[string]any{
+				"deploymentUrl": backend.server.URL,
+				"adminKey":      "k8",
+				"name":          bad,
+			},
+			http.StatusBadRequest)
+		if env.Code != "invalid_name" {
+			t.Errorf("name %q: expected invalid_name, got %q", bad, env.Code)
+		}
+	}
+
+	// A generator-shaped name still passes.
+	var d deploymentJSON
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projID+"/adopt_deployment", u.AccessToken,
+		map[string]any{
+			"deploymentUrl": backend.server.URL,
+			"adminKey":      "k8",
+			"name":          "ok-name-1234",
+		},
+		http.StatusCreated, &d)
+	if d.Name != "ok-name-1234" {
+		t.Errorf("valid name rejected: got %q", d.Name)
+	}
+}
+
+// TestAdopt_RedirectRefused: the probe must not follow redirects (SSRF
+// hardening) — a /version that answers 3xx fails the probe instead of
+// bouncing the prober somewhere else.
+func TestAdopt_RedirectRefused(t *testing.T) {
+	h := Setup(t)
+	u := h.RegisterRandomUser()
+	_, projID := projectFor(t, h, u, "AdoptCo9", "App9")
+
+	real := newFakeConvexBackend(t, "k9")
+	bouncer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, real.server.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(bouncer.Close)
+
+	env := h.AssertStatus(http.MethodPost, "/v1/projects/"+projID+"/adopt_deployment", u.AccessToken,
+		map[string]any{
+			"deploymentUrl": bouncer.URL,
+			"adminKey":      "k9",
+		},
+		http.StatusBadGateway)
+	if env.Code != "probe_failed" {
+		t.Errorf("expected probe_failed for redirecting URL, got %q", env.Code)
+	}
+}
+
+// TestAdopt_BackendVersion: adopted deployments report their backend
+// version via the stored external URL (v1.27+; used to be a hardcoded
+// "adopted_deployment" error).
+func TestAdopt_BackendVersion(t *testing.T) {
+	h := Setup(t)
+	u := h.RegisterRandomUser()
+	_, projID := projectFor(t, h, u, "AdoptCo10", "App10")
+
+	backend := newFakeConvexBackend(t, "k10")
+	var d deploymentJSON
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projID+"/adopt_deployment", u.AccessToken,
+		map[string]any{"deploymentUrl": backend.server.URL, "adminKey": "k10"},
+		http.StatusCreated, &d)
+
+	var got struct {
+		Version      string     `json:"version,omitempty"`
+		LastDeployAt *time.Time `json:"lastDeployAt,omitempty"`
+		FetchedAt    string     `json:"fetchedAt"`
+		FromCache    bool       `json:"fromCache"`
+		Error        string     `json:"error,omitempty"`
+	}
+	h.DoJSON(http.MethodGet, "/v1/deployments/"+d.Name+"/backend_version", u.AccessToken,
+		nil, http.StatusOK, &got)
+	if got.Error != "" {
+		t.Fatalf("expected no probe error, got %q", got.Error)
+	}
+	if got.Version != "0.1-test" {
+		t.Errorf("version: got %q want 0.1-test", got.Version)
+	}
+}
+
+// TestAdopt_DeployKeysListRefused: GET /deploy_keys 409s for adopted rows
+// (v1.27+; used to silently return [] which let UIs render a panel whose
+// every action would fail).
+func TestAdopt_DeployKeysListRefused(t *testing.T) {
+	h := Setup(t)
+	u := h.RegisterRandomUser()
+	_, projID := projectFor(t, h, u, "AdoptCo11", "App11")
+
+	backend := newFakeConvexBackend(t, "k11")
+	var d deploymentJSON
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projID+"/adopt_deployment", u.AccessToken,
+		map[string]any{"deploymentUrl": backend.server.URL, "adminKey": "k11"},
+		http.StatusCreated, &d)
+
+	env := h.AssertStatus(http.MethodGet, "/v1/deployments/"+d.Name+"/deploy_keys",
+		u.AccessToken, nil, http.StatusConflict)
+	if env.Code != "deploy_keys_unsupported_for_adopted" {
+		t.Errorf("expected deploy_keys_unsupported_for_adopted, got %q", env.Code)
+	}
+}
+
+// TestAdopt_DomainsRefused: custom domains can't front an adopted
+// deployment (the proxy has no container to route to), so POST /domains
+// 409s instead of registering a domain that would only ever 502.
+func TestAdopt_DomainsRefused(t *testing.T) {
+	h := Setup(t)
+	u := h.RegisterRandomUser()
+	_, projID := projectFor(t, h, u, "AdoptCo12", "App12")
+
+	backend := newFakeConvexBackend(t, "k12")
+	var d deploymentJSON
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projID+"/adopt_deployment", u.AccessToken,
+		map[string]any{"deploymentUrl": backend.server.URL, "adminKey": "k12"},
+		http.StatusCreated, &d)
+
+	env := h.AssertStatus(http.MethodPost, "/v1/deployments/"+d.Name+"/domains",
+		u.AccessToken, map[string]any{"domain": "api.adopted.example.com"}, http.StatusConflict)
+	if env.Code != "domains_unsupported_for_adopted" {
+		t.Errorf("expected domains_unsupported_for_adopted, got %q", env.Code)
+	}
+}
+
+// TestAdopt_TLSAskRejectsAdopted: the on-demand TLS gate must not approve
+// wildcard certs for adopted deployments — the proxy can't route them, so
+// a cert would only front a permanent 502.
+func TestAdopt_TLSAskRejectsAdopted(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{BaseDomain: "synapse.example.com"})
+	u := h.RegisterRandomUser()
+	_, projID := projectFor(t, h, u, "AdoptCo13", "App13")
+
+	backend := newFakeConvexBackend(t, "k13")
+	var d deploymentJSON
+	h.DoJSON(http.MethodPost, "/v1/projects/"+projID+"/adopt_deployment", u.AccessToken,
+		map[string]any{
+			"deploymentUrl": backend.server.URL,
+			"adminKey":      "k13",
+			"name":          "adopted-tls-1234",
+		},
+		http.StatusCreated, &d)
+
+	q := url.Values{"domain": {"adopted-tls-1234.synapse.example.com"}}
+	resp := h.Do(http.MethodGet, "/v1/internal/tls_ask?"+q.Encode(), "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("tls_ask adopted wildcard: status=%d want 404", resp.StatusCode)
 	}
 }
 

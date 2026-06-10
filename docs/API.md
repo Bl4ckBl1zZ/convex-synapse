@@ -500,10 +500,13 @@ GET/list responses.
 
 Registers an existing Convex backend (running outside Synapse) under this
 project. Synapse stores the URL + admin key as a regular deployment row
-flagged `adopted=true`. The dashboard, CLI credentials endpoint, and
-reverse proxy all work as if Synapse had provisioned it — but Synapse
-never touches the underlying container: `delete` only unregisters the
-row, the health worker skips adopted rows, and there is no auto-restart.
+flagged `adopted=true`. The dashboard and CLI credentials endpoint work
+as if Synapse had provisioned it — but Synapse never touches the
+underlying container: `delete` only unregisters the row and there is no
+auto-restart. The health worker monitors adopted rows over HTTP (v1.27+):
+each sweep probes `GET <url>/version` and reconciles `running` ↔
+`stopped` (two consecutive failures take it down; deployment-down alerts
+fire on the transition, exactly once).
 
 Body:
 
@@ -521,26 +524,68 @@ Body:
 - `deploymentUrl` (required) — http or https; trailing slash is stripped.
 - `adminKey` (required) — must succeed against `<url>/api/check_admin_key`.
 - `deploymentType` (default `dev`) — one of `dev|prod|preview|custom`.
-- `name` (optional) — externally-facing identifier. If omitted, Synapse
-  allocates a `friendly-cat-1234`-style name. If provided and a collision
-  exists, returns `409 name_taken`.
+- `name` (optional) — externally-facing identifier; must be a lowercase
+  DNS label (`a-z`, `0-9`, hyphens not at the edges, max 63 chars). If
+  omitted, Synapse allocates a `friendly-cat-1234`-style name. If
+  provided and a collision exists, returns `409 name_taken`.
 - `isDefault`, `reference` — optional, same semantics as `create_deployment`.
 
 Before inserting the row, Synapse hits `GET <url>/version` (proves the URL
 is a live Convex backend) and `GET <url>/api/check_admin_key` with
-`Authorization: Convex <adminKey>` (proves the key works). Failures map to
-client errors:
+`Authorization: Convex <adminKey>` (proves the key works). The probes
+never follow redirects — a `/version` answering 3xx fails the probe.
+Failures map to client errors:
 
 | code | status | meaning |
 |---|---|---|
 | `missing_url` / `missing_admin_key` | 400 | required field empty |
 | `invalid_url` | 400 | not http/https, or unparseable |
+| `invalid_name` | 400 | `name` isn't a lowercase DNS label |
 | `invalid_admin_key` | 400 | the deployment rejected the key |
-| `probe_failed` | 502 | URL didn't respond, or returned non-2xx |
+| `probe_failed` | 502 | URL didn't respond, redirected, or returned non-2xx |
 | `name_taken` | 409 | `name` collides with another deployment |
 
 Response (201): the `Deployment` row, with `status: "running"`,
 `adopted: true`, and the supplied URL.
+
+Adopted rows refuse the operations that need a Synapse-managed container,
+all with stable 409 codes: `cannot_restart_adopted`,
+`cannot_resize_adopted`, `cannot_backup_adopted`, `cannot_upgrade_adopted`,
+`cannot_reissue_adopted`, `deploy_keys_unsupported_for_adopted` (create,
+list and revoke), and `domains_unsupported_for_adopted` (custom domains —
+the proxy has nothing to route to; `tls_ask` also refuses wildcard certs
+for adopted names). What still works: CLI credentials, the embedded
+dashboard, function env-var sync, `backend_version` (probed via the
+external URL), and `update_adopted` below.
+
+### `POST /v1/deployments/{name}/update_adopted` 🔧 (admins only)
+
+Re-points an adopted deployment's stored URL and/or admin key **in
+place** — name, project, and everything referencing the deployment stay
+intact. This is the supported answer to "the admin key rotated on the
+source side" and "the backend moved": delete + re-adopt can never reuse
+the original name (soft delete keeps the row; `deployments.name` is
+UNIQUE), so it would break `CONVEX_DEPLOYMENT` references.
+
+Body (at least one field required; omitted fields keep their stored
+value):
+
+```json
+{
+  "deploymentUrl": "https://convex.new-host.example:3210",
+  "adminKey": "rotated-admin-key-…"
+}
+```
+
+The effective (URL, key) pair is re-probed exactly like
+`adopt_deployment` before anything is written; probe failures return the
+same `invalid_url` / `invalid_admin_key` / `probe_failed` codes and leave
+the row untouched. A successful update also promotes a `stopped` row back
+to `running` (the probe just proved it alive). `409 not_adopted` for
+managed deployments. Audited as `updateAdoptedDeployment` (records which
+fields changed — never key material).
+
+Response (200): the updated `Deployment` row.
 
 ### `GET /v1/projects/{id}/deployment` ✅
 
@@ -697,7 +742,7 @@ Errors:
 |---|---|---|
 | `ha_disabled` | 400 | HA is disabled on this Synapse instance |
 | `ha_misconfigured` | 400 | HA storage or encryption config is incomplete |
-| `cannot_upgrade_adopted` | 400 | adopted deployments are managed externally |
+| `cannot_upgrade_adopted` | 409 | adopted deployments are managed externally |
 | `already_ha` | 409 | deployment is already HA |
 | `deployment_not_running` | 409 | deployment must be running before migration |
 | `upgrade_already_in_progress` | 409 | pending/claimed upgrade job already exists |

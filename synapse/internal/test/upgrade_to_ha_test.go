@@ -39,8 +39,9 @@ func TestUpgradeToHA_RefusedOnAdopted(t *testing.T) {
 		t.Fatalf("flip adopted: %v", err)
 	}
 
+	// 409 since v1.27 — consistent with every other adopted refusal.
 	env := h.AssertStatus(http.MethodPost, "/v1/deployments/adopt-up-3300/upgrade_to_ha",
-		owner.AccessToken, map[string]any{}, http.StatusBadRequest)
+		owner.AccessToken, map[string]any{}, http.StatusConflict)
 	if env.Code != "cannot_upgrade_adopted" {
 		t.Errorf("expected cannot_upgrade_adopted, got %q", env.Code)
 	}

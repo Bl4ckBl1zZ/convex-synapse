@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -925,6 +926,12 @@ func (h *DeploymentsHandler) Routes() chi.Router {
 		r.Post("/delete", h.deleteDeployment)
 		r.Post("/restart", h.restartDeployment)
 		r.Post("/update_resources", h.updateResources)
+		// update_adopted (v1.27+): re-point an adopted deployment's stored
+		// URL / admin key in place. The operator escape hatch for "the
+		// admin key rotated on the source side" — without it the only fix
+		// was delete + re-adopt, which can never reuse the original name
+		// (soft delete keeps the row; deployments.name is UNIQUE).
+		r.Post("/update_adopted", h.updateAdopted)
 		// Per-deployment snapshot backups (v1.26+, handlers in backups.go).
 		r.Get("/backups", h.listBackups)
 		r.Post("/backups", h.createBackup)
@@ -1780,6 +1787,12 @@ func missingHAClusterFields(c HAConfig) string {
 
 // ---------- POST /v1/projects/{id}/adopt_deployment ----------
 
+// deploymentNameRe is the shape of a user-supplied deployment name: a
+// lowercase DNS label (max 63 chars, hyphens not at the edges). Matches
+// what dockerprov.GenerateDeploymentName produces so adopted and managed
+// names are interchangeable everywhere a name is used as a slug.
+var deploymentNameRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
 // adoptDeploymentReq registers an existing Convex backend (running outside
 // Synapse) into Synapse's catalog. Synapse stores the URL + admin key, never
 // touches the container, and skips Docker calls in delete / health flows.
@@ -1862,6 +1875,17 @@ func (h *DeploymentsHandler) adoptDeployment(w http.ResponseWriter, r *http.Requ
 	case models.DeploymentTypeDev, models.DeploymentTypeProd, models.DeploymentTypePreview, models.DeploymentTypeCustom:
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_type", "deploymentType must be dev|prod|preview|custom")
+		return
+	}
+	// Adopt is the only door where a deployment name arrives from user
+	// input (create always auto-generates "adj-animal-1234"). The name is
+	// load-bearing far beyond display: it's the /d/{name} route segment,
+	// the <name>.<base-domain> wildcard candidate, the CONVEX_DEPLOYMENT
+	// value, and the /embed/{name} slug — so it must be a valid lowercase
+	// DNS label, same shape the generator produces.
+	if req.Name != "" && !deploymentNameRe.MatchString(req.Name) {
+		writeError(w, http.StatusBadRequest, "invalid_name",
+			"name must be a lowercase DNS label: a-z, 0-9 and hyphens (not leading/trailing), max 63 chars")
 		return
 	}
 
@@ -1987,8 +2011,24 @@ func (e *adoptProbeError) Error() string { return e.code + ": " + e.message }
 // this a live Convex backend?) and POST /api/check_admin_key (does the supplied
 // key work?). Either failure is mapped to a 4xx for the caller — we never want
 // to record an adopted row that points at a bad URL or a wrong key.
+//
+// SSRF posture (deliberate): this is a server-side fetch of an operator-
+// supplied URL, and we do NOT block private/loopback ranges — adopting a
+// backend on the same docker network or LAN ("http://convex-foo:3210",
+// "http://10.0.0.5:3210") is the primary use case, so an IP denylist would
+// break the feature it protects. The exposure is bounded instead: the
+// endpoint requires project-admin, response bodies are never echoed back
+// (only status-code classes), and redirects are NOT followed (a redirect
+// fails the probe), so the URL can't bounce the prober somewhere else.
+// Operators who run Synapse with untrusted project admins should restrict
+// the API container's egress at the network layer.
 func probeAdoptedBackend(ctx context.Context, baseURL, adminKey string) error {
-	client := &http.Client{Timeout: 4 * time.Second}
+	client := &http.Client{
+		Timeout: 4 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	// /version — quick reachability check. Convex backends respond with
 	// {"version": "0.x.y"}; we don't parse, just want a 2xx so we know the
@@ -2030,6 +2070,136 @@ func probeAdoptedBackend(ctx context.Context, baseURL, adminKey string) error {
 		return &adoptProbeError{http.StatusBadGateway, "probe_failed",
 			"deploymentUrl /api/check_admin_key returned HTTP " + http.StatusText(resp.StatusCode)}
 	}
+}
+
+// ---------- POST /v1/deployments/{name}/update_adopted ----------
+
+// updateAdoptedReq carries the new coordinates for an adopted deployment.
+// Both fields are optional but at least one must be present; an omitted
+// field keeps its stored value. The effective (URL, key) pair is re-probed
+// exactly like adopt_deployment before anything is written.
+type updateAdoptedReq struct {
+	DeploymentURL string `json:"deploymentUrl,omitempty"`
+	AdminKey      string `json:"adminKey,omitempty"`
+}
+
+// updateAdopted re-points an adopted deployment's stored URL and/or admin
+// key in place — name, project, type, and every reference to the deployment
+// stay intact. This is the supported answer to "the admin key rotated on
+// the source side" and "the backend moved to a new address": the old
+// guidance of delete + re-adopt could never reuse the original name
+// (deployments.name is UNIQUE across soft-deleted rows too) and so silently
+// broke CONVEX_DEPLOYMENT references and CI scripts.
+//
+// A successful probe also promotes a 'stopped' row back to 'running' —
+// the caller just proved the backend is alive, no reason to wait for the
+// next health sweep.
+func (h *DeploymentsHandler) updateAdopted(w http.ResponseWriter, r *http.Request) {
+	d, _, t, role, ok := h.loadDeploymentForRequest(w, r)
+	if !ok {
+		return
+	}
+	if !canAdminProject(role) {
+		writeError(w, http.StatusForbidden, "forbidden", "Only project admins can update adopted deployments")
+		return
+	}
+	if !d.Adopted {
+		writeError(w, http.StatusConflict, "not_adopted",
+			"Only adopted (external) deployments can be re-pointed; managed deployments own their URL and key")
+		return
+	}
+
+	var req updateAdoptedReq
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	req.DeploymentURL = strings.TrimRight(strings.TrimSpace(req.DeploymentURL), "/")
+	req.AdminKey = strings.TrimSpace(req.AdminKey)
+	if req.DeploymentURL == "" && req.AdminKey == "" {
+		writeError(w, http.StatusBadRequest, "missing_fields", "Provide deploymentUrl, adminKey, or both")
+		return
+	}
+	if req.DeploymentURL != "" &&
+		!strings.HasPrefix(req.DeploymentURL, "http://") && !strings.HasPrefix(req.DeploymentURL, "https://") {
+		writeError(w, http.StatusBadRequest, "invalid_url", "deploymentUrl must be http:// or https://")
+		return
+	}
+
+	// Effective pair = request value where present, stored value otherwise.
+	// d.DeploymentURL here is the raw column (loadDeployment doesn't
+	// rewrite), which for adopted rows is exactly the operator-supplied URL.
+	effURL := d.DeploymentURL
+	if req.DeploymentURL != "" {
+		effURL = req.DeploymentURL
+	}
+	effKey := d.AdminKey
+	if req.AdminKey != "" {
+		effKey = req.AdminKey
+	}
+
+	probeCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := probeAdoptedBackend(probeCtx, effURL, effKey); err != nil {
+		var perr *adoptProbeError
+		if errors.As(err, &perr) {
+			writeError(w, perr.status, perr.code, perr.message)
+			return
+		}
+		logErr("probe adopted backend (update)", err)
+		writeError(w, http.StatusBadGateway, "probe_failed", "Failed to reach the deployment URL")
+		return
+	}
+
+	// The adopted guard in WHERE is defense-in-depth against a re-check
+	// race (the row can't become managed, but cheap insurance). Promoting
+	// to 'running' is safe even mid-health-sweep: the sweep's own UPDATE
+	// guards on the status it read.
+	tag, err := h.DB.Exec(r.Context(), `
+		UPDATE deployments
+		   SET deployment_url = $1,
+		       admin_key = $2,
+		       status = 'running'
+		 WHERE id = $3
+		   AND adopted = true
+		   AND status <> 'deleted'
+	`, effURL, effKey, d.ID)
+	if err != nil {
+		logErr("update adopted deployment", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Failed to update deployment")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "deployment_not_found", "Deployment not found")
+		return
+	}
+
+	uid, _ := auth.UserID(r.Context())
+	_ = audit.Record(r.Context(), h.DB, audit.Options{
+		TeamID:     t.ID,
+		ActorID:    uid,
+		Action:     audit.ActionUpdateAdoptedDeployment,
+		TargetType: audit.TargetDeployment,
+		TargetID:   d.ID,
+		Metadata: map[string]any{
+			"name": d.Name,
+			// Log the URL (it's an address, same as adopt does) but only
+			// the FACT that the key changed — never key material.
+			"deploymentUrl":   effURL,
+			"urlChanged":      req.DeploymentURL != "",
+			"adminKeyChanged": req.AdminKey != "",
+		},
+	})
+
+	d.DeploymentURL = effURL
+	d.AdminKey = effKey
+	d.Status = models.DeploymentStatusRunning
+	// Same contract as adopt_deployment: run the URL through the shared
+	// helpers anyway (they short-circuit on Adopted) so the code paths
+	// can't drift.
+	d.DeploymentURL = h.publicDeploymentURL(r.Context(), d)
+	d.SiteURL = h.siteDeploymentURL(r.Context(), d)
+	writeJSON(w, http.StatusOK, d)
 }
 
 // ---------- GET /v1/projects/{id}/deployment ----------
@@ -2174,8 +2344,11 @@ func (h *DeploymentsHandler) reissueAdminKey(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if d.Adopted {
-		writeError(w, http.StatusBadRequest, "cannot_reissue_adopted",
-			"Adopted deployments are managed externally; rotate the admin key on the source side and re-adopt")
+		// 409 like every other "not supported for adopted" refusal — the
+		// request is well-formed, it just conflicts with what the
+		// deployment IS. (Was 400 pre-v1.27.)
+		writeError(w, http.StatusConflict, "cannot_reissue_adopted",
+			"Adopted deployments are managed externally; rotate the admin key on the source side and update it via update_adopted")
 		return
 	}
 	if d.InstanceSecret == "" {
@@ -2286,7 +2459,8 @@ func (h *DeploymentsHandler) upgradeToHA(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if d.Adopted {
-		writeError(w, http.StatusBadRequest, "cannot_upgrade_adopted",
+		// 409 for consistency with the other adopted refusals (was 400).
+		writeError(w, http.StatusConflict, "cannot_upgrade_adopted",
 			"Adopted deployments are managed externally; convert to HA on the source side and re-adopt")
 		return
 	}
@@ -2353,7 +2527,7 @@ func (h *DeploymentsHandler) upgradeToHA(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if lockedAdopted {
-		writeError(w, http.StatusBadRequest, "cannot_upgrade_adopted",
+		writeError(w, http.StatusConflict, "cannot_upgrade_adopted",
 			"Adopted deployments are managed externally; convert to HA on the source side and re-adopt")
 		return
 	}
@@ -3201,6 +3375,16 @@ func (h *DeploymentsHandler) createDeployKey(w http.ResponseWriter, r *http.Requ
 func (h *DeploymentsHandler) listDeployKeys(w http.ResponseWriter, r *http.Request) {
 	d, _, _, _, ok := h.loadDeploymentForRequest(w, r)
 	if !ok {
+		return
+	}
+	// Adopted rows 409 like create/revoke do (v1.27+; the list used to
+	// silently return [], which let UIs render a panel whose every action
+	// would fail). Deliberately NOT the full ensureDeployKeysSupported
+	// gate: HA and not-running deployments may hold keys minted earlier
+	// that are still worth listing.
+	if d.Adopted {
+		writeError(w, http.StatusConflict, "deploy_keys_unsupported_for_adopted",
+			"Deploy keys require a Synapse-managed deployment; adopted deployments use operator-supplied credentials")
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `

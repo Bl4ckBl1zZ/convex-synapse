@@ -4,6 +4,12 @@
 // host reboot, etc.) the worker flips the row to "stopped" so the dashboard
 // reflects reality and the port can be safely re-allocated.
 //
+// Adopted (external) deployments get a parallel pass with a different
+// truth source (v1.27+): Synapse owns no container for them, so each
+// sweep probes the stored deployment URL over HTTP (GET /version) and
+// reconciles running↔stopped from the answer. Same Alerter contract,
+// no auto-restart (the operator owns the lifecycle).
+//
 // Two optional hooks ride the reconciliation: AutoRestart (Config flag +
 // Restarter) bounces a replica whose container merely exited, and Alerter
 // (v1.26+) notifies team admins / a webhook when a deployment-level status
@@ -16,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -106,6 +114,11 @@ type Config struct {
 	// the row back to "running"; failure leaves it at "failed". Implementer
 	// must also set Restarter on the worker.
 	AutoRestart bool
+	// ProbeRetryDelay is the pause before re-probing an adopted deployment
+	// whose first HTTP probe failed (anti-blip: one dropped packet or a
+	// rolling restart on the operator's side must not page anyone). Only
+	// a second consecutive failure marks the row down. Defaults to 2s.
+	ProbeRetryDelay time.Duration
 }
 
 func (c Config) sane() Config {
@@ -115,6 +128,9 @@ func (c Config) sane() Config {
 	}
 	if out.StatusTimeout <= 0 {
 		out.StatusTimeout = 5 * time.Second
+	}
+	if out.ProbeRetryDelay <= 0 {
+		out.ProbeRetryDelay = 2 * time.Second
 	}
 	return out
 }
@@ -200,10 +216,10 @@ func (w *Worker) tickWithLock(ctx context.Context, logger *slog.Logger, cfg Conf
 // one replica row each, so the iteration is structurally identical to
 // the old "iterate deployments" loop.
 func (w *Worker) sweep(ctx context.Context, logger *slog.Logger, cfg Config) {
-	// Adopted deployments are external — Synapse never started the
-	// container, never registered it with Docker, and shouldn't try to
-	// reconcile their state. The operator who registered them owns the
-	// lifecycle.
+	// Adopted deployments are excluded HERE because this loop judges
+	// health by Docker, and Synapse never started (or even knows) their
+	// container. They get their own pass — sweepAdopted, below — which
+	// probes the stored external URL over HTTP instead.
 	rows, err := w.DB.Query(ctx, `
 		SELECT r.id, d.id, d.name, r.replica_index, d.ha_enabled,
 		       COALESCE(d.host_id::text, ''), COALESCE(h.is_remote, false),
@@ -258,6 +274,144 @@ func (w *Worker) sweep(ctx context.Context, logger *slog.Logger, cfg Config) {
 	} else {
 		logger.Debug("health sweep", "checked", len(items))
 	}
+
+	w.sweepAdopted(ctx, logger, cfg)
+}
+
+// adoptedProbeClient is shared by every adopted-deployment probe. No
+// global timeout (each probe carries a ctx deadline) and redirects are
+// not followed — same posture as the adopt-time probe in the API: the
+// stored URL must answer /version itself, and a worker that re-fetches
+// operator-supplied URLs forever shouldn't be bounceable elsewhere.
+var adoptedProbeClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// sweepAdopted reconciles adopted (external) deployments by HTTP: GET
+// <deployment_url>/version, the same liveness check adopt_deployment ran
+// when the row was created. 2xx → running; anything else, confirmed by a
+// second probe ProbeRetryDelay later → stopped. Without this pass an
+// adopted row kept the status stamped at adoption forever — a dead
+// external backend stayed green on the dashboard and deployment-down
+// alerts never fired for exactly the deployments Synapse can't restart.
+//
+// Only running↔stopped transitions apply: adopted rows are never
+// 'provisioning' or 'failed', and 'deleted' is terminal. The down
+// transition uses the same UPDATE…RETURNING prev.status shape as
+// recomputeDeploymentStatus so the Alerter fires exactly once per down
+// event even with concurrent sweeps. There's no auto-restart leg —
+// Synapse doesn't own the container.
+func (w *Worker) sweepAdopted(ctx context.Context, logger *slog.Logger, cfg Config) {
+	rows, err := w.DB.Query(ctx, `
+		SELECT id, name, COALESCE(deployment_url, ''), status
+		  FROM deployments
+		 WHERE adopted = true
+		   AND status IN ('running', 'stopped')
+	`)
+	if err != nil {
+		logger.Error("health: list adopted deployments", "err", err)
+		return
+	}
+	type adoptedRow struct {
+		id, name, url, status string
+	}
+	var items []adoptedRow
+	for rows.Next() {
+		var it adoptedRow
+		if err := rows.Scan(&it.id, &it.name, &it.url, &it.status); err != nil {
+			logger.Error("health: scan adopted row", "err", err)
+			rows.Close()
+			return
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		logger.Error("health: adopted rows err", "err", err)
+		return
+	}
+
+	var changed int
+	for _, it := range items {
+		if it.url == "" {
+			// Shouldn't happen (the adopt probe requires a reachable
+			// URL) but a row we can't probe must not flap to stopped.
+			continue
+		}
+		up := w.probeAdopted(ctx, cfg, it.url)
+		if !up && it.status == "running" {
+			// Anti-blip: only a second consecutive failure takes a
+			// running deployment down. The recovery direction needs no
+			// debounce — a single good probe proves liveness.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(cfg.ProbeRetryDelay):
+			}
+			up = w.probeAdopted(ctx, cfg, it.url)
+		}
+		target := "stopped"
+		if up {
+			target = "running"
+		}
+		if target == it.status {
+			continue
+		}
+		var prevStatus string
+		err := w.DB.QueryRow(ctx, `
+			UPDATE deployments d
+			   SET status = $1
+			  FROM (SELECT id, status FROM deployments WHERE id = $2) prev
+			 WHERE d.id = prev.id
+			   AND d.adopted = true
+			   AND d.status IN ('running', 'stopped')
+			   AND d.status <> $1
+			RETURNING prev.status
+		`, target, it.id).Scan(&prevStatus)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue // raced another sweep / a delete — nothing to report
+		}
+		if err != nil {
+			logger.Error("health: update adopted status",
+				"deployment", it.name, "err", err)
+			continue
+		}
+		changed++
+		logger.Info("health: reconciled adopted deployment",
+			"deployment", it.name,
+			"old_status", prevStatus,
+			"new_status", target)
+		if w.Alerter != nil && target == "stopped" {
+			w.Alerter.DeploymentDown(ctx, it.id, prevStatus, target)
+		}
+	}
+	if changed > 0 {
+		logger.Info("health sweep (adopted)", "checked", len(items), "changed", changed)
+	} else if len(items) > 0 {
+		logger.Debug("health sweep (adopted)", "checked", len(items))
+	}
+}
+
+// probeAdopted reports whether the adopted deployment's external URL
+// answers GET /version with a 2xx within StatusTimeout. Body content is
+// ignored — reachability and a healthy status class are the contract,
+// matching what adopt_deployment validated at registration time.
+func (w *Worker) probeAdopted(ctx context.Context, cfg Config, baseURL string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, cfg.StatusTimeout)
+	defer cancel()
+	url := strings.TrimRight(baseURL, "/") + "/version"
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := adoptedProbeClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode/100 == 2
 }
 
 // reconcileReplica returns true if the replica row's status changed.

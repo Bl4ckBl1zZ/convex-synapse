@@ -211,10 +211,22 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
   const [adoptOpen, setAdoptOpen] = useState(false);
   const [adoptUrl, setAdoptUrl] = useState("");
   const [adoptAdminKey, setAdoptAdminKey] = useState("");
-  const [adoptType, setAdoptType] = useState<"dev" | "prod">("prod");
+  const [adoptType, setAdoptType] = useState<
+    "dev" | "prod" | "preview" | "custom"
+  >("prod");
   const [adoptName, setAdoptName] = useState("");
   const [adoptPending, setAdoptPending] = useState(false);
   const [adoptError, setAdoptError] = useState<string | null>(null);
+
+  // Edit-adopted modal state (v1.27+ update_adopted). Re-points the
+  // stored URL / admin key in place — the fix for "the key rotated on
+  // the source side" that used to require delete + re-adopt under a new
+  // name. Keyed by the target deployment so reopening resets cleanly.
+  const [editAdopt, setEditAdopt] = useState<Deployment | null>(null);
+  const [editAdoptUrl, setEditAdoptUrl] = useState("");
+  const [editAdoptKey, setEditAdoptKey] = useState("");
+  const [editAdoptPending, setEditAdoptPending] = useState(false);
+  const [editAdoptError, setEditAdoptError] = useState<string | null>(null);
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -285,6 +297,42 @@ await Promise.all([
       );
     } finally {
       setAdoptPending(false);
+    }
+  };
+
+  const openEditAdopt = (d: Deployment) => {
+    setEditAdoptUrl(d.deploymentUrl || d.url || "");
+    setEditAdoptKey("");
+    setEditAdoptError(null);
+    setEditAdopt(d);
+  };
+
+  const submitEditAdopt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editAdopt) return;
+    setEditAdoptError(null);
+    setEditAdoptPending(true);
+    try {
+      const key = editAdoptKey.trim();
+      // Always send the URL (the server re-probes the effective pair
+      // anyway — submitting unchanged values doubles as a "verify this
+      // backend is alive now" action that also recovers a 'stopped'
+      // status). The key only when the operator typed a new one.
+      await api.deployments.updateAdopted(editAdopt.name, {
+        deploymentUrl: editAdoptUrl.trim(),
+        ...(key ? { adminKey: key } : {}),
+      });
+      setEditAdopt(null);
+      await Promise.all([
+        mutate(),
+        globalMutate(["/activity", projectId]),
+      ]);
+    } catch (err) {
+      setEditAdoptError(
+        err instanceof ApiError ? err.message : t("Could not update deployment")
+      );
+    } finally {
+      setEditAdoptPending(false);
     }
   };
 
@@ -751,15 +799,31 @@ await Promise.all([
                         >
                           {t("Open dashboard")}
                         </Button>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => restartDeployment(d.name)}
-                          disabled={restartingName === d.name}
-                          aria-label={t("Restart deployment {name}", { name: d.name })}
-                        >
-                          {restartingName === d.name ? t("Restarting...") : t("Restart")}
-                        </Button>
+                        {/* Adopted = no Synapse-managed container, so
+                            Restart would only 409 (cannot_restart_adopted).
+                            Same gate the Resize button below already uses. */}
+                        {!d.adopted && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => restartDeployment(d.name)}
+                            disabled={restartingName === d.name}
+                            aria-label={t("Restart deployment {name}", { name: d.name })}
+                          >
+                            {restartingName === d.name ? t("Restarting...") : t("Restart")}
+                          </Button>
+                        )}
+                        {d.adopted && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => openEditAdopt(d)}
+                            aria-label={t("Edit adopted deployment {name}", { name: d.name })}
+                            data-testid={`deployment-edit-adopted-${d.name}`}
+                          >
+                            {t("Edit URL / key")}
+                          </Button>
+                        )}
                         {!d.adopted && !d.haEnabled && !d.hostIsRemote && d.status === "running" && (
                           <Button
                             variant="secondary"
@@ -805,10 +869,24 @@ await Promise.all([
                 {isOpen && (
                   <div className="space-y-2 border-t border-neutral-900 px-5 py-3">
                     <CliCredentialsPanel deploymentName={d.name} />
-                    <DeployKeysPanel deploymentName={d.name} />
-                    <CustomDomainsPanel deploymentName={d.name} />
+                    {/* Adopted deployments hold only a URL + admin key:
+                        deploy keys need the instance secret Synapse never
+                        had, and custom domains route through a proxy that
+                        has no container to reach — both would 409 on every
+                        action, so the panels hide (same treatment as
+                        BackupsPanel) and a one-liner explains why. */}
+                    {!d.adopted && <DeployKeysPanel deploymentName={d.name} />}
+                    {!d.adopted && <CustomDomainsPanel deploymentName={d.name} />}
                     {!d.adopted && !d.hostIsRemote && (
                       <BackupsPanel deploymentName={d.name} />
+                    )}
+                    {d.adopted && (
+                      <p
+                        className="text-[11px] leading-relaxed text-neutral-600"
+                        data-testid={`adopted-note-${d.name}`}
+                      >
+                        {t("Adopted deployment — Synapse stores only the URL + admin key and monitors it over HTTP. Deploy keys, custom domains, backups, restart and resize are managed on the backend itself.")}
+                      </p>
                     )}
                   </div>
                 )}
@@ -1065,7 +1143,7 @@ await Promise.all([
       >
         <form onSubmit={adopt} className="space-y-4">
           <p className="text-xs text-neutral-400">
-            {t("Register a Convex backend that's already running outside Synapse. Synapse stores the URL + admin key and skips Docker for delete / health on this row — the backend stays under your control.")}
+            {t("Register a Convex backend that's already running outside Synapse. Synapse stores the URL + admin key, monitors it over HTTP, and never touches its container — the backend stays under your control.")}
           </p>
           <div className="space-y-2">
             <label htmlFor="adopt-url" className="block text-xs text-neutral-400">
@@ -1095,18 +1173,18 @@ await Promise.all([
           <div className="space-y-2">
             <label className="block text-xs text-neutral-400">{t("Type")}</label>
             <div className="flex gap-2">
-              {(["dev", "prod"] as const).map((t) => (
+              {(["dev", "prod", "preview", "custom"] as const).map((ty) => (
                 <button
-                  key={t}
+                  key={ty}
                   type="button"
-                  onClick={() => setAdoptType(t)}
+                  onClick={() => setAdoptType(ty)}
                   className={`h-9 flex-1 rounded-md border text-sm transition-colors ${
-                    adoptType === t
+                    adoptType === ty
                       ? "border-neutral-300 bg-neutral-800 text-neutral-100"
                       : "border-neutral-700 bg-neutral-900 text-neutral-400 hover:bg-neutral-800"
                   }`}
                 >
-                  {t}
+                  {ty}
                 </button>
               ))}
             </div>
@@ -1134,6 +1212,75 @@ await Promise.all([
             </Button>
             <Button type="submit" disabled={adoptPending || !adoptUrl.trim() || !adoptAdminKey.trim()}>
               {adoptPending ? t("Verifying…") : t("Adopt")}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
+      {/* v1.27+: edit an adopted deployment's stored URL / admin key in
+          place. Re-mounts per target (key) so stale input never leaks
+          between deployments. */}
+      <Dialog
+        key={editAdopt?.name ?? "edit-adopted-closed"}
+        open={!!editAdopt}
+        onClose={() => setEditAdopt(null)}
+        title={t("Update adopted deployment")}
+      >
+        <form onSubmit={submitEditAdopt} className="space-y-4">
+          <p className="text-xs text-neutral-400">
+            {t("Re-point this adopted deployment without losing its name. Synapse re-verifies the URL + admin key (same checks as adopting) before saving — and marks the deployment running again if it was down.")}
+          </p>
+          <div className="space-y-2">
+            <label
+              htmlFor="edit-adopt-url"
+              className="block text-xs text-neutral-400"
+            >
+              {t("Deployment URL")}
+            </label>
+            <Input
+              id="edit-adopt-url"
+              value={editAdoptUrl}
+              onChange={(e) => setEditAdoptUrl(e.target.value)}
+              placeholder="https://convex.example.com:3210"
+              required
+              autoFocus
+            />
+          </div>
+          <div className="space-y-2">
+            <label
+              htmlFor="edit-adopt-admin-key"
+              className="block text-xs text-neutral-400"
+            >
+              {t("Admin key")}{" "}
+              <span className="text-neutral-600">
+                {t("(leave blank to keep the current key)")}
+              </span>
+            </label>
+            <Input
+              id="edit-adopt-admin-key"
+              type="password"
+              value={editAdoptKey}
+              onChange={(e) => setEditAdoptKey(e.target.value)}
+              placeholder="••••••••"
+            />
+          </div>
+          {editAdoptError && (
+            <p className="text-xs text-red-400">{editAdoptError}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setEditAdopt(null)}
+              disabled={editAdoptPending}
+            >
+              {t("Cancel")}
+            </Button>
+            <Button
+              type="submit"
+              disabled={editAdoptPending || !editAdoptUrl.trim()}
+            >
+              {editAdoptPending ? t("Verifying…") : t("Save")}
             </Button>
           </div>
         </form>

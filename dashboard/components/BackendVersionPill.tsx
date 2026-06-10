@@ -18,8 +18,8 @@ import { useT } from "@/lib/i18n";
 //
 // Fails gracefully: probe errors land in `data.error` and we render a
 // muted "—" instead of a broken "couldn't load" pill. Adopted
-// deployments report error="adopted_deployment" since we can't reach
-// the operator's external backend over our docker network.
+// deployments are probed too (v1.27+): the server fetches /version from
+// the stored external URL instead of the docker-DNS container name.
 export function BackendVersionPill({
   deploymentName,
 }: {

@@ -129,7 +129,10 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// (B) Custom-domain path — accept any host with an active row in
-	// deployment_domains pointing at a non-deleted deployment.
+	// deployment_domains pointing at a non-deleted deployment. Adopted
+	// deployments are excluded: the proxy has nothing to route to for
+	// them, so issuing a cert would only enable a permanent 502 (also
+	// covers legacy rows created before createDomain refused adopted).
 	var domainExists bool
 	err := h.DB.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -139,6 +142,7 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			 WHERE dd.domain = $1
 			   AND dd.status = 'active'
 			   AND d.status <> 'deleted'
+			   AND d.adopted = false
 		)`, host).Scan(&domainExists)
 	if err != nil {
 		http.Error(w, "db error", http.StatusServiceUnavailable)
@@ -155,16 +159,19 @@ func (h *TLSAskHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "domain not registered", http.StatusNotFound)
 }
 
-// approveIfDeploymentExists writes 200 when a non-deleted deployment
-// named `name` exists, 404 when it doesn't, and 503 on a db blip.
-// Shared by the cloud ("<name>.<base>") and site ("<name>.site.<base>")
-// wildcard branches so the existence check stays in one place.
+// approveIfDeploymentExists writes 200 when a non-deleted, non-adopted
+// deployment named `name` exists, 404 when it doesn't, and 503 on a db
+// blip. Shared by the cloud ("<name>.<base>") and site
+// ("<name>.site.<base>") wildcard branches so the existence check stays
+// in one place. Adopted deployments don't get wildcard certs: their URL
+// is external and the proxy can't route them, so a cert would only
+// front a permanent 502.
 func (h *TLSAskHandler) approveIfDeploymentExists(ctx context.Context, w http.ResponseWriter, name string) {
 	var exists bool
 	err := h.DB.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM deployments
-			WHERE name = $1 AND status <> 'deleted'
+			WHERE name = $1 AND status <> 'deleted' AND adopted = false
 		)`, name).Scan(&exists)
 	if err != nil {
 		http.Error(w, "db error", http.StatusServiceUnavailable)

@@ -1951,6 +1951,20 @@ export const api = {
         { method: "POST", body: {} },
       );
     },
+    // Re-point an adopted deployment's stored URL / admin key in place
+    // (v1.27+). At least one field required; omitted fields keep their
+    // stored value. The server re-probes the effective pair (same checks
+    // as adopt) before writing, and promotes a 'stopped' row back to
+    // 'running'. 409 not_adopted for managed deployments.
+    updateAdopted(
+      name: string,
+      body: { deploymentUrl?: string; adminKey?: string },
+    ): Promise<Deployment> {
+      return request<Deployment>(
+        `/v1/deployments/${encodeURIComponent(name)}/update_adopted`,
+        { method: "POST", body },
+      );
+    },
     // Resize (v1.26+): persists new CPU/RAM limits and recreates the
     // container (data volume kept). The body is the full desired state —
     // omit a field for unlimited. 409 for adopted / HA / remote /

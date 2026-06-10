@@ -117,11 +117,14 @@ func TestBackendVersion_ProbeErrorSurfacesGracefully(t *testing.T) {
 	}
 }
 
-// TestBackendVersion_AdoptedDeploymentSkipsProbe: adopted backends
-// aren't reachable via Docker DNS — the handler must short-circuit and
-// return a special-cased "adopted_deployment" error string instead of
-// emitting a probe call that would always fail.
-func TestBackendVersion_AdoptedDeploymentSkipsProbe(t *testing.T) {
+// TestBackendVersion_AdoptedProbesExternalURL: adopted backends are
+// probed via their stored external URL, NOT the docker-DNS BackendProbe
+// (v1.27+; pre-v1.27 the handler short-circuited with a hardcoded
+// "adopted_deployment" error). Here the stored URL points at a dead
+// port, so the response carries a real probe error — and the docker
+// probe stays untouched. The happy path (live external URL → version)
+// is covered by TestAdopt_BackendVersion in adopt_test.go.
+func TestBackendVersion_AdoptedProbesExternalURL(t *testing.T) {
 	probe := &stubBackendProbe{version: "should not be called"}
 	h := SetupWithOpts(t, SetupOpts{BackendProbe: probe})
 	owner := h.RegisterRandomUser()
@@ -129,7 +132,7 @@ func TestBackendVersion_AdoptedDeploymentSkipsProbe(t *testing.T) {
 	proj := createProject(t, h, owner.AccessToken, team.Slug, "AdoptProj")
 	h.SeedDeployment(proj.ID, "ext-eagle-4444", "dev", "running", true, owner.ID, 3214, "")
 	if _, err := h.DB.Exec(h.rootCtx,
-		`UPDATE deployments SET adopted = true WHERE name = $1`,
+		`UPDATE deployments SET adopted = true, deployment_url = 'http://127.0.0.1:1' WHERE name = $1`,
 		"ext-eagle-4444"); err != nil {
 		t.Fatalf("flip adopted: %v", err)
 	}
@@ -138,14 +141,17 @@ func TestBackendVersion_AdoptedDeploymentSkipsProbe(t *testing.T) {
 	h.DoJSON(http.MethodGet, "/v1/deployments/ext-eagle-4444/backend_version",
 		owner.AccessToken, nil, http.StatusOK, &got)
 
-	if got.Error != "adopted_deployment" {
-		t.Errorf("error: got %q want %q", got.Error, "adopted_deployment")
+	if got.Error == "" {
+		t.Errorf("expected a probe error for the dead external URL, got empty")
+	}
+	if got.Error == "adopted_deployment" {
+		t.Errorf("legacy short-circuit error returned; adopted should probe the external URL")
 	}
 	if got.Version != "" {
-		t.Errorf("version should be empty for adopted deployment, got %q", got.Version)
+		t.Errorf("version should be empty for unreachable adopted backend, got %q", got.Version)
 	}
 	if atomic.LoadInt32(&probe.calls) != 0 {
-		t.Errorf("expected 0 probe calls for adopted deployment, got %d", probe.calls)
+		t.Errorf("expected 0 docker-probe calls for adopted deployment, got %d", probe.calls)
 	}
 }
 
