@@ -115,6 +115,10 @@ type RouterDeps struct {
 	// GitHub fetch without network.
 	GitHubAPIBase string
 
+	// GitHubWebBase is the matching seam for the no-API release-page
+	// redirect fallback — defaults to https://github.com.
+	GitHubWebBase string
+
 	// PublicIP (v1.1+) is the IPv4 the operator publishes in DNS for
 	// per-deployment custom domains. The /domains create + verify
 	// handlers gate status='active' on a successful A-record match.
@@ -580,6 +584,7 @@ func NewRouter(d RouterDeps) http.Handler {
 				UpdaterToken:              d.UpdaterToken,
 				GitHubRepo:                d.GitHubRepo,
 				GitHubAPIBase:             d.GitHubAPIBase,
+				GitHubWebBase:             d.GitHubWebBase,
 				PublicURL:                 d.PublicURL,
 				BaseDomain:                d.BaseDomain,
 				PublicIP:                  d.PublicIP,

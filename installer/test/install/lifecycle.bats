@@ -101,6 +101,46 @@ EOF
     assert_output "main"
 }
 
+@test "resolve_target_ref: web redirect rescues the tag when the API is unreachable" {
+    # Real-world case (v1.27.3): a provider's route to the regional
+    # api.github.com edge is black-holed while github.com works. The
+    # resolver must read the tag off the release page's 302 Location
+    # instead of silently degrading to main (which stamps
+    # SYNAPSE_VERSION=main and breaks the dashboard's semver banner).
+    cat >"$SYN_MOCK_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        http://api.fake/*)
+            exit 22 ;;
+        http://web.fake/*)
+            printf 'HTTP/2 302 \r\nlocation: https://github.com/Iann29/convex-synapse/releases/tag/v9.9.9\r\n\r\n'
+            exit 0 ;;
+    esac
+done
+exit 22
+EOF
+    chmod +x "$SYN_MOCK_BIN/curl"
+    LIFECYCLE_CURL="$SYN_MOCK_BIN/curl" \
+    LIFECYCLE_GITHUB_API="http://api.fake" \
+    LIFECYCLE_GITHUB_WEB="http://web.fake" \
+        run lifecycle::resolve_target_ref ""
+    assert_success
+    assert_output "v9.9.9"
+}
+
+@test "resolve_target_ref: falls back to main when API and web both fail" {
+    cat >"$SYN_MOCK_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 22
+EOF
+    chmod +x "$SYN_MOCK_BIN/curl"
+    LIFECYCLE_CURL="$SYN_MOCK_BIN/curl" \
+        run lifecycle::resolve_target_ref ""
+    assert_success
+    assert_output "main"
+}
+
 # ---- current_version ------------------------------------------------
 
 @test "current_version: returns SYNAPSE_VERSION from .env" {

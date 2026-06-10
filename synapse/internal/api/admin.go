@@ -48,6 +48,10 @@ type AdminHandler struct {
 	// with its own release stream can override.
 	GitHubRepo string
 
+	// GitHubWebBase overrides https://github.com for the no-API
+	// release-page redirect fallback — a test seam, like GitHubAPIBase.
+	GitHubWebBase string
+
 	// GitHubAPIBase overrides https://api.github.com — primarily a test
 	// seam (httptest.Server pretends to be the GitHub API). Production
 	// keeps the default; empty falls through to the official endpoint.
@@ -166,6 +170,16 @@ var githubHTTPClient = &http.Client{
 		}).DialContext,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ResponseHeaderTimeout: 6 * time.Second,
+	},
+}
+
+// githubWebClient fetches github.com (NOT the API) and never follows
+// redirects — the redirect IS the payload (releases/latest answers
+// 302 with Location: .../releases/tag/<tag>).
+var githubWebClient = &http.Client{
+	Transport: githubHTTPClient.Transport,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
 	},
 }
 
@@ -383,14 +397,29 @@ func (h *AdminHandler) fetchLatestReleaseForce(ctx context.Context, force bool) 
 	// doesn't (GitHub spoke — asking again won't change a rate limit).
 	var release *latestRelease
 	var lastErr error
+	apiUnreachable := false
 	for attempt := 0; attempt < githubFetchAttempts; attempt++ {
 		var retryable bool
 		release, retryable, lastErr = h.fetchReleaseOnce(ctx, apiURL)
 		if lastErr == nil {
 			break
 		}
+		apiUnreachable = retryable
 		if !retryable || ctx.Err() != nil {
 			break
+		}
+	}
+	// api.github.com and github.com sit on different edges, and real
+	// installs exist where a provider's route to the regional API edge
+	// is black-holed while github.com works (the git fetches prove it).
+	// When the API is UNREACHABLE (transport error, not an HTTP answer),
+	// read the tag off the public release page's redirect instead — no
+	// API, no rate limit, different network path. Release notes aren't
+	// available this way; the dashboard renders without them.
+	if lastErr != nil && apiUnreachable && ctx.Err() == nil {
+		if rel, werr := h.fetchReleaseViaWebRedirect(ctx, repo); werr == nil {
+			release = rel
+			lastErr = nil
 		}
 	}
 	if lastErr != nil {
@@ -449,6 +478,43 @@ func (h *AdminHandler) fetchReleaseOnce(ctx context.Context, apiURL string) (*la
 		return nil, false, errors.New("latest is prerelease/draft")
 	}
 	return &release, false, nil
+}
+
+// fetchReleaseViaWebRedirect resolves the latest tag WITHOUT the GitHub
+// API: github.com/<repo>/releases/latest answers 302 with
+// Location: .../releases/tag/<tag>. Returns a sparse latestRelease
+// (tag + URL; no notes, no publish date).
+func (h *AdminHandler) fetchReleaseViaWebRedirect(ctx context.Context, repo string) (*latestRelease, error) {
+	base := h.GitHubWebBase
+	if base == "" {
+		base = "https://github.com"
+	}
+	webURL := strings.TrimRight(base, "/") + "/" + repo + "/releases/latest"
+	cctx, cancel := context.WithTimeout(ctx, githubFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodHead, webURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := githubWebClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("github web fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 3 {
+		return nil, fmt.Errorf("github web returned HTTP %d (expected a redirect)", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	const marker = "/releases/tag/"
+	i := strings.Index(loc, marker)
+	if i < 0 {
+		return nil, fmt.Errorf("github web redirect has no tag: %q", loc)
+	}
+	tag := strings.TrimSpace(loc[i+len(marker):])
+	if tag == "" {
+		return nil, fmt.Errorf("github web redirect has empty tag: %q", loc)
+	}
+	return &latestRelease{TagName: tag, HTMLURL: loc}, nil
 }
 
 // classifyGitHubError turns transport noise into one actionable line.

@@ -231,6 +231,43 @@ func TestAdmin_VersionCheck_RetryOnTransientNetworkError(t *testing.T) {
 	}
 }
 
+// TestAdmin_VersionCheck_WebRedirectFallback (v1.27.3): when
+// api.github.com is UNREACHABLE at the transport level (black-holed
+// route — seen on a real BR install where the provider couldn't reach
+// the regional API edge while github.com worked), the handler reads
+// the latest tag off the public release page's 302 redirect instead.
+func TestAdmin_VersionCheck_WebRedirectFallback(t *testing.T) {
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Iann29/convex-synapse/releases/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Location", "https://github.com/Iann29/convex-synapse/releases/tag/v7.7.7")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(web.Close)
+
+	h := SetupWithOpts(t, SetupOpts{
+		GitHubRepo:    "Iann29/convex-synapse",
+		GitHubAPIBase: "http://127.0.0.1:1", // nothing listens — transport error
+		GitHubWebBase: web.URL,
+	})
+	owner := makeAdminUser(t, h)
+
+	var got versionCheckResp
+	h.DoJSON(http.MethodGet, "/v1/admin/version_check",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if got.Error != "" {
+		t.Fatalf("web fallback should have answered, got error %q", got.Error)
+	}
+	if got.Latest != "7.7.7" {
+		t.Errorf("latest: got %q want 7.7.7 (from the redirect)", got.Latest)
+	}
+	if got.ReleaseURL != "https://github.com/Iann29/convex-synapse/releases/tag/v7.7.7" {
+		t.Errorf("releaseUrl: got %q", got.ReleaseURL)
+	}
+}
+
 // TestAdmin_VersionCheck_FailureBackoff (v1.27.2): after GitHub answers
 // with an error, polls inside the backoff window are served from the
 // failure memory — no new upstream hit, no multi-second hang per poll.

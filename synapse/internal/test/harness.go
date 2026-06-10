@@ -217,11 +217,13 @@ type SetupOpts struct {
 	// configured" path.
 	UpdaterURL   string
 	UpdaterToken string
-	// GitHubRepo + GitHubAPIBase let admin tests redirect the
-	// /version_check fetch at an httptest.Server that pretends to be
-	// GitHub. Production wiring leaves both empty (defaults apply).
+	// GitHubRepo + GitHubAPIBase + GitHubWebBase let admin tests
+	// redirect the /version_check fetch (and its web-redirect fallback)
+	// at httptest.Servers that pretend to be GitHub. Production wiring
+	// leaves them empty (defaults apply).
 	GitHubRepo    string
 	GitHubAPIBase string
+	GitHubWebBase string
 	// AlertWebhookURL mirrors api.RouterDeps.AlertWebhookURL — the .env
 	// fallback (SYNAPSE_ALERT_WEBHOOK_URL) the alert_settings handler
 	// reports as source="env" when no DB row exists.
@@ -485,6 +487,15 @@ func setup(t *testing.T, haEnabled bool, opts SetupOpts) *Harness {
 		UpdaterToken:          opts.UpdaterToken,
 		GitHubRepo:            opts.GitHubRepo,
 		GitHubAPIBase:         opts.GitHubAPIBase,
+		// Default the web-fallback seam to the API stub when only the
+		// latter is set: a test that exercises a transport-level API
+		// failure must never fall through to the REAL github.com.
+		GitHubWebBase: func() string {
+			if opts.GitHubWebBase != "" {
+				return opts.GitHubWebBase
+			}
+			return opts.GitHubAPIBase
+		}(),
 		AlertWebhookURL:       opts.AlertWebhookURL,
 		BackupDir:             opts.BackupDir,
 		PublicIP:              opts.PublicIP,

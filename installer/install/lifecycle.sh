@@ -23,6 +23,7 @@
 # tags don't have to round-trip through GitHub during CI.
 LIFECYCLE_REPO_URL="${LIFECYCLE_REPO_URL:-https://github.com/Iann29/convex-synapse.git}"
 LIFECYCLE_GITHUB_API="${LIFECYCLE_GITHUB_API:-https://api.github.com}"
+LIFECYCLE_GITHUB_WEB="${LIFECYCLE_GITHUB_WEB:-https://github.com}"
 LIFECYCLE_REPO_SLUG="${LIFECYCLE_REPO_SLUG:-Iann29/convex-synapse}"
 LIFECYCLE_HEALTH_TIMEOUT="${LIFECYCLE_HEALTH_TIMEOUT:-180}"
 
@@ -32,7 +33,15 @@ LIFECYCLE_HEALTH_TIMEOUT="${LIFECYCLE_HEALTH_TIMEOUT:-180}"
 # Echoes the git ref to fetch. Priority:
 #   1. explicit override (operator passed --ref=X) — used verbatim
 #   2. GitHub Releases /latest tag_name (auth-less public API)
-#   3. fallback to "main"
+#   3. the release page's redirect (github.com/<repo>/releases/latest
+#      → Location: .../releases/tag/<tag>). api.github.com and
+#      github.com sit on DIFFERENT edges — real installs exist where a
+#      provider's route to the regional api.github.com edge is black-
+#      holed while github.com works fine (the same git fetch the
+#      upgrade does proves it). Without this rung those installs fell
+#      through to "main" and got stamped SYNAPSE_VERSION=main, which
+#      breaks the dashboard's semver update banner forever after.
+#   4. fallback to "main"
 #
 # A 5-second timeout on the API call keeps the upgrade snappy when
 # api.github.com is unreachable; we don't want the operator staring
@@ -54,6 +63,21 @@ lifecycle::resolve_target_ref() {
         tag="$(printf '%s' "$body" | "$jq_cmd" -r '.tag_name // empty' 2>/dev/null || true)"
         if [[ -n "$tag" ]]; then
             printf '%s' "$tag"
+            return 0
+        fi
+    fi
+    # API unreachable — read the tag off the public release page's
+    # redirect instead (no API, no rate limit, different edge).
+    local headers
+    if headers="$("$curl_cmd" -sI --max-time 8 \
+            "$LIFECYCLE_GITHUB_WEB/$LIFECYCLE_REPO_SLUG/releases/latest" \
+            2>/dev/null)"; then
+        local web_tag
+        web_tag="$(printf '%s' "$headers" | tr -d '\r' \
+            | awk 'tolower($1) == "location:" { print $2 }' \
+            | sed -n 's#.*/releases/tag/##p' | head -n1)"
+        if [[ -n "$web_tag" ]]; then
+            printf '%s' "$web_tag"
             return 0
         fi
     fi
