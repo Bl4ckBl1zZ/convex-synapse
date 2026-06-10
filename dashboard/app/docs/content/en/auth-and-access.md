@@ -84,9 +84,20 @@ Delete the row. From the dashboard: open `/me`, find the row, hit "Delete". From
 
 There is no "rotate" verb — create a fresh token, paste it into your CI / scripts, then delete the old one.
 
+## Password reset (v1.26+)
+
+Forgot a password? The login page has a **Forgot password?** link — no more asking the instance admin to poke the database. The flow:
+
+1. `POST /v1/auth/forgot_password {email}` — **always** answers the identical `200 {ok:true}`, whether the account exists or not (no user-enumeration oracle; even the email send is detached so response timing can't leak it).
+2. If the account exists **and** email is configured (Admin → Email) **and** `SYNAPSE_PUBLIC_URL` is set, a single-use `syn_reset_…` link is emailed — SHA-256 stored, **1-hour expiry**, max 3 active per account.
+3. `/reset-password?token=…` asks for the new password (8-char minimum, same policy as register). A typo-weak password does **not** consume the link.
+4. On success: the hash is swapped, the account's other outstanding reset links die, and **refresh tokens issued before the change are refused** — a reset signs out old sessions. Audited as `passwordReset`.
+
+No email configured? The endpoint still answers 200 but mints nothing — the instance admin remains the manual fallback. Personal access tokens deliberately survive a password reset (they're separate credentials, GitHub-style).
+
 ## What about SSO / OIDC?
 
-OIDC is on the roadmap but not yet shipped. Synapse stays email + password JWT until then; the operator owns the auth boundary completely (no WorkOS, no SAML, no third-party identity providers).
+OIDC is on the roadmap but not yet shipped. Synapse stays email + password JWT (now with self-service reset) until then; the operator owns the auth boundary completely (no WorkOS, no SAML, no third-party identity providers).
 
 For now, the practical pattern for teams:
 

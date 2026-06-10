@@ -82,6 +82,17 @@ export const SECTIONS: DocSection[] = [
         title: { en: "Deploy keys", "pt-BR": "Deploy keys" },
       },
       {
+        slug: "deployment-backups",
+        title: { en: "Backups", "pt-BR": "Backups" },
+      },
+      {
+        slug: "resource-limits",
+        title: {
+          en: "CPU/RAM limits",
+          "pt-BR": "Limites de CPU/RAM",
+        },
+      },
+      {
         slug: "convex-dashboard-integration",
         title: {
           en: "Convex Dashboard integration",
@@ -124,6 +135,13 @@ export const SECTIONS: DocSection[] = [
       {
         slug: "auto-update",
         title: { en: "Auto-update", "pt-BR": "Auto-update" },
+      },
+      {
+        slug: "deployment-alerts",
+        title: {
+          en: "Deployment-down alerts",
+          "pt-BR": "Alertas de deployment caído",
+        },
       },
       {
         slug: "audit-log",

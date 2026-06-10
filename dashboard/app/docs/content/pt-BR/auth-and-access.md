@@ -84,9 +84,20 @@ Delete a linha. Pelo dashboard: `/me`, acha a linha, "Delete". Pela API: `POST /
 
 Não tem "rotate" — cria token novo, cola no CI/scripts, deleta o velho.
 
+## Redefinição de senha (v1.26+)
+
+Esqueceu uma senha? A página de login tem o link **Esqueceu a senha?** — chega de pedir pro admin da instância mexer no banco. O fluxo:
+
+1. `POST /v1/auth/forgot_password {email}` — **sempre** responde o mesmo `200 {ok:true}`, exista a conta ou não (sem oráculo de enumeração de usuário; até o envio do email é destacado, então nem o tempo de resposta vaza nada).
+2. Se a conta existe **e** o email está configurado (Admin → Email) **e** o `SYNAPSE_PUBLIC_URL` está definido, um link de uso único `syn_reset_…` é enviado — guardado como SHA-256, **expira em 1 hora**, máximo de 3 ativos por conta.
+3. `/reset-password?token=…` pede a senha nova (mínimo de 8 caracteres, mesma política do registro). Uma senha fraca por erro de digitação **não** consome o link.
+4. No sucesso: o hash é trocado, os outros links de reset pendentes da conta morrem, e **refresh tokens emitidos antes da troca são recusados** — um reset desloga sessões antigas. Auditado como `passwordReset`.
+
+Sem email configurado? O endpoint ainda responde 200 mas não cria nada — o admin da instância continua sendo o fallback manual. Tokens de acesso pessoais sobrevivem de propósito a um reset de senha (são credenciais separadas, estilo GitHub).
+
 ## E SSO / OIDC?
 
-OIDC está no roadmap mas não foi shipped ainda. O Synapse continua com email + senha + JWT até lá; o operador é dono completo do limite de auth (sem WorkOS, sem SAML, sem provedor externo).
+OIDC está no roadmap mas não foi shipped ainda. O Synapse continua com email + senha + JWT (agora com reset self-service) até lá; o operador é dono completo do limite de auth (sem WorkOS, sem SAML, sem provedor externo).
 
 Por enquanto, o pattern prático pra times:
 

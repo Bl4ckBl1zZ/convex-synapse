@@ -141,7 +141,7 @@ The single non-team-scoped referral endpoint. Referral programs only make sense 
 
 | Prefix | Why cut |
 |---|---|
-| `/v1/cloud_backups` | Replaced by `setup.sh --backup [--to-s3=…]` |
+| `/v1/cloud_backups` | Replaced by per-deployment snapshot backups (`/v1/deployments/{name}/backups`, v1.26 — download / restore / daily schedule / retention) plus `setup.sh --backup [--to-s3=…]` for the whole instance |
 | `/v1/discord` | Cloud-only Discord webhook / integration surface |
 | `/v1/profile_emails` | Cloud-only email management (verified secondary emails, etc) — Synapse uses a single login email |
 | `/v1/vercel` | Cloud-only Vercel integration |

@@ -131,5 +131,5 @@ The same `AuditLogView` component also renders project activity at `/teams/<ref>
 ## Tier-1 honesty
 
 - **No tamper-evident chain.** `audit_events` is an append-only insert pattern, but Postgres `UPDATE`/`DELETE` privileges still let `postgres` rewrite history.
-- **No real-time alerting.** No "email me when a deploy key is revoked" hook. The data is there if you want to wire your own log shipper.
+- **No per-audit-event alerting.** There's no "email me when a deploy key is revoked" hook — the data is there if you want to wire your own log shipper. (Deployment **down** alerting is a separate, real feature since v1.26 — see the **Deployment-down alerts** page.)
 - **Audit log is admin-only on the team route.** A project member who wants project-scoped events uses `/teams/<ref>/<project>/settings/audit` (member-visible).

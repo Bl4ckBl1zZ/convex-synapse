@@ -50,7 +50,9 @@ Bad cursors → `400 invalid_cursor`. Bogus limits → `400 invalid_limit`.
 |---|---|---|
 | `POST /v1/auth/register` | none | Create user. Response: `{accessToken, refreshToken, tokenType:"Bearer", expiresIn, user}`. First user → `isInstanceAdmin=true`. Errors: `400 invalid_email`, `400 weak_password`, `409 email_taken` |
 | `POST /v1/auth/login` | none | Exchange email+password for token pair. Errors: `401 invalid_credentials` |
-| `POST /v1/auth/refresh` | refresh token | Mint a fresh access token. Errors: `401 invalid_refresh`, `401 user_not_found` |
+| `POST /v1/auth/refresh` | refresh token | Mint a fresh access token. Refuses refresh JWTs issued before the account's last password change. Errors: `401 invalid_refresh`, `401 user_not_found` |
+| `POST /v1/auth/forgot_password` | none | `{email}`. **Always** `200 {ok:true}` (no user-enumeration oracle). Mints + emails a single-use reset link when the account exists, email is configured and `SYNAPSE_PUBLIC_URL` is set (v1.26+) |
+| `POST /v1/auth/reset_password` | none | `{token, newPassword}`. Swaps the hash, kills the account's other reset links, revokes pre-reset refresh tokens. Errors: `400 invalid_token`, `400 weak_password` (token NOT consumed) |
 
 No logout endpoint — JWTs are stateless; PATs revoked via `POST /v1/delete_personal_access_token`.
 
@@ -128,7 +130,7 @@ Endpoints at both `/v1/me/*` and at the top-level `/v1/*`. The `/v1/profile/*` a
 
 | Method + Path | Auth | Description |
 |---|---|---|
-| `POST /v1/projects/{id}/create_deployment` | project member+ | `{type, reference?, isDefault?, ha?, haOverrides?}`. Type: dev/prod/preview/custom (default dev). 201 with `status:"provisioning"`. Errors: `400 invalid_type`, `400 ha_disabled`, `400 ha_misconfigured`, `403 forbidden`, `404 project_not_found` |
+| `POST /v1/projects/{id}/create_deployment` | project member+ | `{type, reference?, isDefault?, ha?, haOverrides?, cpus?, memoryMb?}` (v1.26+: optional CPU/RAM caps, `400 invalid_resources` outside 0.1–64 / 128–1048576). Type: dev/prod/preview/custom (default dev). 201 with `status:"provisioning"`. Errors: `400 invalid_type`, `400 ha_disabled`, `400 ha_misconfigured`, `403 forbidden`, `404 project_not_found` |
 | `POST /v1/projects/{id}/adopt_deployment` | project admin | `{deploymentUrl, adminKey, deploymentType?, name?, isDefault?, reference?}`. Probes `/version` + `/api/check_admin_key` first. Errors: `400 missing_url`, `400 missing_admin_key`, `400 invalid_url`, `400 invalid_admin_key`, `409 name_taken`, `502 probe_failed` |
 | `GET /v1/deployments/{name}` | viewer+ | Return the deployment |
 | `POST /v1/deployments/{name}/delete` | project admin | Tear down container + volume, mark deleted |
@@ -137,6 +139,13 @@ Endpoints at both `/v1/me/*` and at the top-level `/v1/*`. The `/v1/profile/*` a
 | `GET /v1/deployments/{name}/cli_credentials` | viewer+ | `{deploymentName, convexUrl, adminKey, envSnippet, exportSnippet}` for `npx convex` |
 | `GET /v1/deployments/{name}/backend_version` | viewer+ | Live `{version, fetchedAt, fromCache, lastDeployAt, error?}` probe |
 | `POST /v1/deployments/{name}/upgrade_to_ha` | project admin | `{haOverrides?}`. 202 `{deploymentName, status:"queued", jobId}`. Errors: `400 ha_disabled`, `400 cannot_upgrade_adopted`, `409 already_ha`, `409 deployment_not_running`, `409 upgrade_already_in_progress` |
+| `POST /v1/deployments/{name}/update_resources` | member+ | `{cpus?, memoryMb?}` — FULL desired state (absent = unlimited); persists + recreates the container with the new caps (volume kept). Errors: `400 invalid_resources`, `409 cannot_resize_adopted` / `ha_resize_not_supported` / `remote_resize_not_supported` / `deployment_not_running` (v1.26+) |
+| `GET /v1/deployments/{name}/backups` | viewer+ | List snapshot backups, newest first: `{id, status, sizeBytes?, error?, requestedBy?, createTime, completedAt?, restoredAt?}` (v1.26+) |
+| `POST /v1/deployments/{name}/backups` | member+ | Request a backup (real `convex export` zip). 202 with the pending row. Errors: `409 backup_in_progress` / `cannot_backup_adopted` / `remote_backup_not_supported` / `deployment_not_running`, `503 backups_not_configured` |
+| `GET /v1/deployments/{name}/backups/{id}/download` | member+ | Streams the zip (`Content-Disposition: attachment`). `409 backup_not_complete`, `404 archive_missing` |
+| `POST /v1/deployments/{name}/backups/{id}/restore` | project admin | Destructive `convex import --replace`. 202; worker stamps `restoredAt`. `409 backup_not_complete` |
+| `POST /v1/deployments/{name}/backups/{id}/delete` | project admin | Removes archive + row. `409 backup_in_progress` |
+| `POST /v1/deployments/{name}/backup_settings` | project admin | `{schedule:"none"\|"daily", retention:1..90}` — server-side daily scheduler + retention pruning |
 | `POST /v1/deployments/{name}/reissue_admin_key` | project admin | Re-mint admin_key from current instance_secret (no rotation). Errors: `400 cannot_reissue_adopted`, `409 missing_instance_secret` |
 | `POST /v1/deployments/{name}/deploy_keys` | project admin | `{name}` (≤64 chars). 201 with full key (shown ONCE). Errors: `400 missing_name`, `400 name_too_long`, `409 name_in_use`, `409 deploy_keys_unsupported_for_adopted`, `409 deploy_keys_unsupported_for_ha`, `409 deployment_not_running` |
 | `GET /v1/deployments/{name}/deploy_keys` | viewer+ | List active (metadata only) |
@@ -234,6 +243,9 @@ Mounted under `/v1/admin/*`; every route gated by `requireInstanceAdmin` (`users
 | `GET /v1/admin/dns_credentials` | List instance-wide DNS credentials (metadata only) |
 | `POST /v1/admin/dns_credentials/cloudflare` | `{token, label}` — verifies token by listing zones, encrypts via `SYNAPSE_STORAGE_KEY`. Errors: `503 dns_credentials_unavailable`, `400 invalid_token` |
 | `DELETE /v1/admin/dns_credentials/{id}` | 204 |
+| `GET /v1/admin/alert_settings` | Deployment-down alert config: `{source:"db"\|"env"\|"default", emailEnabled, webhookConfigured, webhookHint, updatedAt}`. The full webhook URL is never returned (v1.26+) |
+| `POST /v1/admin/alert_settings` | `{emailEnabled, webhookUrl?}` — absent webhookUrl keeps the stored one, empty clears it (silences the `.env` fallback too). `400 invalid_webhook_url` |
+| `DELETE /v1/admin/alert_settings` | Revert to defaults (email on, webhook from `SYNAPSE_ALERT_WEBHOOK_URL`) |
 
 ## Install status
 

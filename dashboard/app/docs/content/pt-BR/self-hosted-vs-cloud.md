@@ -141,7 +141,7 @@ O único endpoint de referral fora de team. Programa de indicação só faz sent
 
 | Prefixo | Por que foi cortado |
 |---|---|
-| `/v1/cloud_backups` | Substituído por `setup.sh --backup [--to-s3=…]` |
+| `/v1/cloud_backups` | Substituído pelos backups de snapshot por deployment (`/v1/deployments/{name}/backups`, v1.26 — download / restore / agendamento diário / retenção) mais `setup.sh --backup [--to-s3=…]` pra instância inteira |
 | `/v1/discord` | Webhook / integração Discord, Cloud-only |
 | `/v1/profile_emails` | Gestão de emails (secundários verificados, etc) Cloud-only — no Synapse cada conta tem um único email de login |
 | `/v1/vercel` | Integração Vercel Cloud-only |

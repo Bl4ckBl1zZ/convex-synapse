@@ -135,10 +135,16 @@ docker compose -f /opt/synapse/docker-compose.yml exec -T postgres \
   pg_dump -U synapse synapse | gzip > /backups/synapse-$(date +%F).sql.gz
 ```
 
-For the Convex backend data itself: the SQLite file lives in
-`synapse-data-<deployment>` per-deployment volume. Snapshot the volume
-or use `npx convex export` against each deployment if you need
-portable dumps.
+For the Convex backend data itself, prefer the built-in
+**per-deployment snapshot backups** (v1.26+): each deployment's
+dashboard card has a Backups panel with back-up-now, download, restore,
+a daily schedule and retention (1-90 kept), all driven by real
+`convex export` zips stored on the `synapse-backups` volume. See
+`docs/API.md` ("Backups") or the in-dashboard docs page. The manual
+fallbacks still work: snapshot the `synapse-data-<deployment>` volume
+or run `npx convex export` by hand. Note the archives live ON the box —
+download them (or include the volume in the instance backup below) for
+off-site copies.
 
 Current installs should use `./setup.sh --backup` and
 `./setup.sh --restore=<archive|s3://...>`. The built-in flow packages
@@ -187,8 +193,10 @@ the upgraded stack fails its health check.
 - Automated `upgrade_to_ha` for existing SQLite deployments. HA works at
   create time; safe upgrade still needs a snapshot export/import worker.
 - Multi-region replication (out of scope; lease design forbids it upstream).
-- Scheduled backup retention. `setup.sh --backup [--to-s3=...]` exists;
-  operators still provide cron/systemd timers and retention policy.
+- Scheduled retention for the INSTANCE-level backup. `setup.sh --backup
+  [--to-s3=...]` exists; operators still provide cron/systemd timers and
+  retention policy for it. (Per-deployment backups DO have server-side
+  daily scheduling + retention since v1.26.)
 - A K8s / Helm install path.
 - Billing, SSO/SAML, Vercel/Discord integrations, and other Convex Cloud
   account features intentionally cut from the self-hosted subset.
