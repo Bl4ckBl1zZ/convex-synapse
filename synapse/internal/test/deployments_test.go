@@ -877,6 +877,40 @@ func TestRestartDeployment(t *testing.T) {
 	}
 }
 
+// A crashed (stopped) deployment that the operator restarts must come
+// back as 'running' in the DB immediately — the health sweep only
+// reconciles replicas it believes are running, so nothing else ever
+// promotes the row back (the v1.26.1 wedge: container up, dashboard
+// stuck on "stopped" forever).
+func TestRestartDeployment_PromotesStoppedBackToRunning(t *testing.T) {
+	h := Setup(t)
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "Restart Promote Team")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "promote-proj")
+	h.SeedDeployment(proj.ID, "downed-elk-4040", "dev", "stopped", false, owner.ID, 3211, "")
+
+	h.DoJSON(http.MethodPost, "/v1/deployments/downed-elk-4040/restart",
+		owner.AccessToken, map[string]any{}, http.StatusOK, &map[string]string{})
+
+	var got deploymentResp
+	h.DoJSON(http.MethodGet, "/v1/deployments/downed-elk-4040",
+		owner.AccessToken, nil, http.StatusOK, &got)
+	if got.Status != "running" {
+		t.Errorf("deployment status after restart = %q, want running", got.Status)
+	}
+	var replicaStatus string
+	if err := h.DB.QueryRow(h.rootCtx, `
+		SELECT r.status FROM deployment_replicas r
+		  JOIN deployments d ON d.id = r.deployment_id
+		 WHERE d.name = 'downed-elk-4040'
+	`).Scan(&replicaStatus); err != nil {
+		t.Fatalf("read replica: %v", err)
+	}
+	if replicaStatus != "running" {
+		t.Errorf("replica status after restart = %q, want running", replicaStatus)
+	}
+}
+
 // ---------- v1.18.0 Phase 4: Remote Hosts placement ----------
 
 // seedRemoteHost inserts a hosts row that looks like one registered via

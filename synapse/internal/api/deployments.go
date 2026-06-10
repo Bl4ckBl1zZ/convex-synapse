@@ -2742,6 +2742,24 @@ func (h *DeploymentsHandler) restartDeployment(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// A successful restart means the container is up again — reflect that
+	// immediately. Nothing else ever would: the health sweep only
+	// reconciles replicas it believes are 'running', so a row that
+	// crashed to stopped/failed and was then restarted here stayed wedged
+	// at the old status forever (v1.26.1 fix). If the container crashes
+	// again, the next sweep flips it back down — and fires a fresh
+	// deployment-down alert, which is exactly right.
+	if _, err := h.DB.Exec(r.Context(),
+		`UPDATE deployment_replicas SET status = 'running' WHERE deployment_id = $1`,
+		d.ID); err != nil {
+		logErr("post-restart replica status", err)
+	}
+	if _, err := h.DB.Exec(r.Context(),
+		`UPDATE deployments SET status = 'running' WHERE id = $1 AND status <> 'deleted'`,
+		d.ID); err != nil {
+		logErr("post-restart deployment status", err)
+	}
+
 	uid, _ := auth.UserID(r.Context())
 	_ = audit.Record(r.Context(), h.DB, audit.Options{
 		TeamID:     t.ID,
