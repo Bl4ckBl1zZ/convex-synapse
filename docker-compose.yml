@@ -221,6 +221,13 @@ services:
       # explicitly stamped an override in .env — clobbering the
       # form pre-fill.
       SYNAPSE_HEADSCALE_DOMAIN: ${SYNAPSE_HEADSCALE_DOMAIN:-}
+      # Deployment-down alerts (v1.26+): .env fallback webhook. The DB
+      # row (Admin → Alerts) wins entirely over this when present.
+      SYNAPSE_ALERT_WEBHOOK_URL: ${SYNAPSE_ALERT_WEBHOOK_URL:-}
+      # Per-deployment snapshot backups (v1.26+): where the api (and the
+      # transient CLI containers it spawns) read/write backup zips. Must
+      # agree with the synapse-backups volume mount below.
+      SYNAPSE_BACKUP_DIR: ${SYNAPSE_BACKUP_DIR:-/backups}
     volumes:
       # Synapse provisions sibling containers via the host docker daemon.
       # This mount is unavoidable for the v0 architecture; the alternative is
