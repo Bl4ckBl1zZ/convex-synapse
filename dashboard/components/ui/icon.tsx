@@ -53,6 +53,15 @@ export function IconKey(props: Props) {
   );
 }
 
+// Chevron (down) — expand/collapse affordances. Rotate via className.
+export function IconChevronDown(props: Props) {
+  return (
+    <Svg {...props}>
+      <polyline points="6 9 12 15 18 9" />
+    </Svg>
+  );
+}
+
 // Archive box — backups panel.
 export function IconArchive(props: Props) {
   return (

@@ -10,6 +10,7 @@
 
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { truncateAll } from "./helpers/db";
+import { expandDeployment } from "./helpers/expand";
 
 const DEP_NAME = "bright-raccoon-5185";
 
@@ -99,6 +100,8 @@ test("force-delete removes a deployment stranded on an unreachable remote host",
 
   // Re-render the project page so the mocked list_deployments takes effect.
   await page.reload();
+  // The Delete button lives behind the card's expand chevron (v1.25).
+  await expandDeployment(page, DEP_NAME);
   const deleteBtn = page.getByRole("button", {
     name: new RegExp(`delete deployment ${DEP_NAME}`, "i"),
   });

@@ -42,11 +42,11 @@ test("wizard end-to-end: admin → demo team + project + deployment", async ({ p
 
   // The project page renders the freshly-provisioned deployment row.
   await expect(page).toHaveURL(/\/teams\/[^/]+\/[^/]+\b/);
-  // The "Show CLI credentials" button proves the deployment row
-  // rendered. The credentials values themselves are reveal-on-click —
-  // cli_credentials.spec.ts covers that flow separately.
+  // The per-row expand chevron proves the deployment row rendered (the
+  // CLI-credentials button lives behind it since the v1.25 collapse —
+  // cli_credentials.spec.ts covers that flow separately).
   await expect(
-    page.getByRole("button", { name: /Show CLI credentials/i }).first()
+    page.locator('[data-testid^="deployment-expand-"]').first()
   ).toBeVisible({ timeout: 30_000 });
 });
 

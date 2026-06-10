@@ -108,17 +108,18 @@ test("provision three deployments, then delete them all", async ({ page }) => {
   await createDeployment(page, "prod");
   await createDeployment(page, "dev");
 
-  // Three rows visible — each row exposes a per-row Delete button whose
-  // aria-label is "Delete deployment <name>". v1.9.6+ TopologyPanel and
+  // Three rows visible — each row exposes an expand chevron whose
+  // data-testid is "deployment-expand-<name>" (the Delete button only
+  // exists once a card is expanded, v1.25). v1.9.6+ TopologyPanel and
   // v1.10.0+ ActivityFeed both render the deployment name too, so a
-  // page-wide text match for the name pattern over-counts; the Delete
-  // button is unique to the live deployment row.
-  const deleteBtns = page.getByRole("button", { name: /^Delete deployment / });
-  await expect(deleteBtns).toHaveCount(3, { timeout: 30_000 });
+  // page-wide text match for the name pattern over-counts; the chevron
+  // is unique to the live deployment row.
+  const expandBtns = page.locator('[data-testid^="deployment-expand-"]');
+  await expect(expandBtns).toHaveCount(3, { timeout: 30_000 });
 
-  const names = (await deleteBtns.evaluateAll((els) =>
+  const names = (await expandBtns.evaluateAll((els) =>
     els.map((el) =>
-      (el.getAttribute("aria-label") ?? "").replace(/^Delete deployment /, ""),
+      (el.getAttribute("data-testid") ?? "").replace(/^deployment-expand-/, ""),
     ),
   )).map((s) => s.trim());
   expect(new Set(names).size).toBe(3);

@@ -129,10 +129,11 @@ test("adopt an existing Convex backend via the dashboard", async ({ page }) => {
   // v1.10.0+ the project page also renders the deployment name inside the
   // ActivityFeed event ("Op adopted imported-app") and v1.9.6+ inside the
   // TopologyPanel grouping — so a page-wide exact-text match resolves to
-  // multiple elements. Confirm presence via the per-row Delete-button's
-  // aria-label, which is unique to the deployments list.
+  // multiple elements. Confirm presence via the per-row expand chevron's
+  // testid, which is unique to the deployments list (the Delete button
+  // only exists once the card is expanded, v1.25).
   await expect(
-    page.getByRole("button", { name: "Delete deployment imported-app" }),
+    page.getByTestId("deployment-expand-imported-app"),
   ).toBeVisible({ timeout: 10_000 });
   await expect(
     page.getByRole("listitem").filter({ hasText: "imported-app" }).getByText("adopted").first(),
@@ -157,9 +158,9 @@ test("adopt an existing Convex backend via the dashboard", async ({ page }) => {
   // After deletion, the row disappears from the deployments list. The
   // ActivityFeed still keeps the "adopted imported-app" event around, so
   // a page-wide hidden check would fail; assert via the row-specific
-  // Delete button instead.
+  // expand chevron instead.
   await expect(
-    page.getByRole("button", { name: "Delete deployment imported-app" }),
+    page.getByTestId("deployment-expand-imported-app"),
   ).toBeHidden({ timeout: 10_000 });
 
   // Container is still alive (the original provisioned one).

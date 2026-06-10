@@ -6,6 +6,7 @@ import {
   type Route,
 } from "@playwright/test";
 import { truncateAll } from "./helpers/db";
+import { expandDeployment } from "./helpers/expand";
 import { pruneSynapseContainers } from "./helpers/docker";
 
 // DNS auto-configuration UI — exercises:
@@ -327,6 +328,8 @@ async function provisionDeployment(page: Page): Promise<string> {
 }
 
 async function openDomainsPanel(page: Page, deploymentName: string) {
+  // The panel toggle lives behind the card's expand chevron (v1.25).
+  await expandDeployment(page, deploymentName);
   await page
     .getByRole("button", {
       name: `Manage custom domains for ${deploymentName}`,

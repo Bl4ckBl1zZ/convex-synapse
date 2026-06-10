@@ -1277,4 +1277,8 @@ export const ptBR: Record<string, string> = {
   "Keep last": "Manter os últimos",
   "Daily backups run server-side; older complete backups beyond the retention count are pruned automatically.":
     "Backups diários rodam no servidor; backups completos antigos além do limite de retenção são removidos automaticamente.",
+
+  // Collapsible deployment cards (v1.25 UI polish).
+  "Expand deployment {name}": "Expandir o deployment {name}",
+  "Collapse deployment {name}": "Recolher o deployment {name}",
 };

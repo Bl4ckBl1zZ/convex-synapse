@@ -8,6 +8,7 @@
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import { Client } from "pg";
+import { expandDeployment } from "./expand";
 
 const DB_URL =
   process.env.SYNAPSE_DB_URL ||
@@ -49,6 +50,8 @@ export async function deleteDeploymentViaDialog(
 ): Promise<void> {
   const type = kind ?? (await lookupType(deploymentName));
 
+  // The Delete button lives behind the card's expand chevron (v1.25).
+  await expandDeployment(page, deploymentName);
   await page
     .getByRole("button", {
       name: new RegExp(`delete deployment ${deploymentName}`, "i"),

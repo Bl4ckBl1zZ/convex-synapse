@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { truncateAll } from "./helpers/db";
 import { deleteDeploymentViaDialog } from "./helpers/delete-deployment";
+import { expandDeployment } from "./helpers/expand";
 import {
   listSynapseContainerNames,
   pruneSynapseContainers,
@@ -155,10 +156,9 @@ test("deploy key revoke prompt explains credential rotation", async ({ page }) =
   await seedDeploymentWithDeployKey(projectId!, deploymentName);
   await page.reload();
   // v1.9.6+ TopologyPanel renders the name too — strict-mode getByText
-  // chokes on the second match. Use the per-row Delete button instead.
-  await expect(
-    page.getByRole("button", { name: `Delete deployment ${deploymentName}` }),
-  ).toBeVisible();
+  // chokes on the second match. The expand chevron is the row-unique
+  // element; the deploy-keys panel lives behind it (v1.25).
+  await expandDeployment(page, deploymentName);
 
   await page
     .getByRole("button", {

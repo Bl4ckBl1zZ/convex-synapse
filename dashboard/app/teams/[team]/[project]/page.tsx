@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
+import { IconChevronDown } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -180,6 +181,13 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
   );
 
   const [open, setOpen] = useState(false);
+  // Per-card expand state (v1.25 UI polish): cards render collapsed —
+  // name + badges + the two URLs — and the chevron reveals the action
+  // buttons, version pill, and the credential/domain/backup panels.
+  // Collapsed cards also skip the BackendVersionPill probe entirely.
+  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
+  const toggleCard = (name: string) =>
+    setExpandedCards((prev) => ({ ...prev, [name]: !prev[name] }));
   const [type, setType] = useState<"dev" | "prod">("dev");
   // Resource limits (v1.25+). Kept as strings so the inputs can be blank
   // (= unlimited); parsed to numbers only on submit.
@@ -574,6 +582,7 @@ await Promise.all([
           {deployments.map((d) => {
             const dtype = d.deploymentType ?? d.type;
             const isProd = dtype === "prod";
+            const isOpen = !!expandedCards[d.name];
             return (
               <Card
                 key={d.name}
@@ -726,58 +735,83 @@ await Promise.all([
                         )}
                       </div>
                     )}
-                    {d.status === "running" && (
+                    {isOpen && d.status === "running" && (
                       <div className="mt-2">
                         <BackendVersionPill deploymentName={d.name} />
                       </div>
                     )}
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => openDashboard(d.name)}
-                    >
-                      {t("Open dashboard")}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => restartDeployment(d.name)}
-                      disabled={restartingName === d.name}
-                      aria-label={t("Restart deployment {name}", { name: d.name })}
-                    >
-                      {restartingName === d.name ? t("Restarting...") : t("Restart")}
-                    </Button>
-                    {!d.adopted && !d.haEnabled && !d.hostIsRemote && d.status === "running" && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => openResize(d)}
-                        aria-label={t("Resize deployment {name}", { name: d.name })}
-                      >
-                        {t("Resize")}
-                      </Button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {isOpen && (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => openDashboard(d.name)}
+                        >
+                          {t("Open dashboard")}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => restartDeployment(d.name)}
+                          disabled={restartingName === d.name}
+                          aria-label={t("Restart deployment {name}", { name: d.name })}
+                        >
+                          {restartingName === d.name ? t("Restarting...") : t("Restart")}
+                        </Button>
+                        {!d.adopted && !d.haEnabled && !d.hostIsRemote && d.status === "running" && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => openResize(d)}
+                            aria-label={t("Resize deployment {name}", { name: d.name })}
+                          >
+                            {t("Resize")}
+                          </Button>
+                        )}
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => setPendingDelete(d)}
+                          disabled={deletingName === d.name}
+                          aria-label={t("Delete deployment {name}", { name: d.name })}
+                        >
+                          {deletingName === d.name ? t("Deleting...") : t("Delete")}
+                        </Button>
+                      </>
                     )}
                     <Button
-                      variant="danger"
+                      variant="ghost"
                       size="sm"
-                      onClick={() => setPendingDelete(d)}
-                      disabled={deletingName === d.name}
-                      aria-label={t("Delete deployment {name}", { name: d.name })}
+                      onClick={() => toggleCard(d.name)}
+                      aria-expanded={isOpen}
+                      aria-label={
+                        isOpen
+                          ? t("Collapse deployment {name}", { name: d.name })
+                          : t("Expand deployment {name}", { name: d.name })
+                      }
+                      data-testid={`deployment-expand-${d.name}`}
                     >
-                      {deletingName === d.name ? t("Deleting...") : t("Delete")}
+                      <IconChevronDown
+                        className={clsx(
+                          "transition-transform duration-150",
+                          isOpen && "rotate-180",
+                        )}
+                      />
                     </Button>
                   </div>
                 </CardBody>
-                <div className="space-y-2 border-t border-neutral-900 px-5 py-3">
-                  <CliCredentialsPanel deploymentName={d.name} />
-                  <DeployKeysPanel deploymentName={d.name} />
-                  <CustomDomainsPanel deploymentName={d.name} />
-                  {!d.adopted && !d.hostIsRemote && (
-                    <BackupsPanel deploymentName={d.name} />
-                  )}
-                </div>
+                {isOpen && (
+                  <div className="space-y-2 border-t border-neutral-900 px-5 py-3">
+                    <CliCredentialsPanel deploymentName={d.name} />
+                    <DeployKeysPanel deploymentName={d.name} />
+                    <CustomDomainsPanel deploymentName={d.name} />
+                    {!d.adopted && !d.hostIsRemote && (
+                      <BackupsPanel deploymentName={d.name} />
+                    )}
+                  </div>
+                )}
               </Card>
             );
           })}

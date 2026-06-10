@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { truncateAll } from "./helpers/db";
 import { pruneSynapseContainers } from "./helpers/docker";
+import { expandDeployment } from "./helpers/expand";
 
 // CLI credentials panel — exercises components/CliCredentialsPanel.tsx end to
 // end: register → team → project → deployment → reveal credentials → copy →
@@ -82,6 +83,9 @@ test("CLI credentials panel: reveal, copy to clipboard, hide", async ({
   await expect(nameLocator).toBeVisible({ timeout: 90_000 });
   const deploymentName = (await nameLocator.textContent())?.trim() ?? "";
   expect(deploymentName).toMatch(/^[a-z]+-[a-z]+-\d{4}$/);
+
+  // The panels live behind the card's expand chevron (v1.25).
+  await expandDeployment(page, deploymentName);
 
   // Reveal: aria-label is "Show CLI credentials for {name}", set in the
   // panel's hidden state. After click, the snippet block should appear.

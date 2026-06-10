@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { truncateAll } from "./helpers/db";
 import { pruneSynapseContainers } from "./helpers/docker";
+import { expandDeployment } from "./helpers/expand";
 
 // Per-deployment backups (v1.25+) — the REAL machinery end-to-end: a live
 // Convex deployment, an actual `npx convex export` run in the transient
@@ -55,9 +56,10 @@ test("real backup → complete with size → real restore stamps restoredAt", as
   await expect(nameLocator).toBeVisible({ timeout: 90_000 });
   const name = (await nameLocator.textContent())?.trim() ?? "";
 
-  // The Restart button doubles as the "running" signal (renders for any
-  // non-deleted row, but the backup gate needs running — wait for the
-  // resize button which only renders at status running).
+  // The action buttons + panels live behind the card's expand chevron
+  // (v1.25); the Resize button (running-only) is the "running" signal
+  // the backup gate needs.
+  await expandDeployment(page, name);
   await expect(
     page.getByRole("button", { name: `Resize deployment ${name}` }),
   ).toBeVisible({ timeout: 90_000 });
