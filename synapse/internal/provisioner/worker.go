@@ -181,7 +181,7 @@ type Worker struct {
 	Docker           Provisioner
 	SnapshotMigrator SnapshotMigrator
 	// Backups runs snapshot export/import in transient CLI containers
-	// (kind='backup'/'restore' jobs, v1.25+). *dockerprov.Client
+	// (kind='backup'/'restore' jobs, v1.26+). *dockerprov.Client
 	// implements it; nil fails those jobs with a clear error.
 	Backups BackupRunner
 	Config  Config
@@ -307,7 +307,7 @@ func EnqueueReconcile(ctx context.Context, db queryRower, deploymentID, action, 
 }
 
 // EnqueueBackup inserts a snapshot-export job for an existing
-// deployment_backups row (v1.25+). The caller creates the row (status
+// deployment_backups row (v1.26+). The caller creates the row (status
 // 'pending', file_path set) in the same transaction.
 func EnqueueBackup(ctx context.Context, db Execer, deploymentID, backupID string) error {
 	_, err := db.Exec(ctx, `
@@ -658,7 +658,7 @@ type claimedJob struct {
 	DeploymentStatus string
 	Adopted          bool
 
-	// Resource limits (v1.25+, migration 000034). nil = unlimited.
+	// Resource limits (v1.26+, migration 000034). nil = unlimited.
 	CPUs     *float64
 	MemoryMB *int64
 

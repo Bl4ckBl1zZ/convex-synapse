@@ -13,7 +13,7 @@ type Props = {
   deploymentName: string;
 };
 
-// BackupsPanel — per-deployment snapshot backups (v1.25+), the
+// BackupsPanel — per-deployment snapshot backups (v1.26+), the
 // self-hosted answer to Cloud's Backups page. Each backup is a real
 // `npx convex export` zip stored on the synapse-backups volume; restore
 // feeds it back with `convex import --replace` (destructive, confirmed).

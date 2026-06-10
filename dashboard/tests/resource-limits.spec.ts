@@ -4,7 +4,7 @@ import { truncateAll } from "./helpers/db";
 import { pruneSynapseContainers } from "./helpers/docker";
 import { expandDeployment } from "./helpers/expand";
 
-// Per-deployment CPU/RAM limits (v1.25+). Drives the REAL stack end-to-end:
+// Per-deployment CPU/RAM limits (v1.26+). Drives the REAL stack end-to-end:
 // create with limits → row badge → docker actually enforces them (inspect
 // HostConfig) → resize through the dialog (container recreate) → clear back
 // to unlimited. Validation bounds + the 409 gates (adopted/HA/remote) are
@@ -72,7 +72,7 @@ test("limits: create → docker enforces → resize → clear to unlimited", asy
   const badge = page.getByTestId(`deployment-limits-${name}`);
   await expect(badge).toHaveText("0.5 CPU · 512 MB");
 
-  // The action buttons live behind the card's expand chevron (v1.25).
+  // The action buttons live behind the card's expand chevron (v1.26).
   await expandDeployment(page, name);
 
   // Resize only renders once the row is running (the recreate path needs a

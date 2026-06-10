@@ -1,4 +1,4 @@
--- v1.25+ — Per-deployment resource limits (the self-hosted answer to
+-- v1.26+ — Per-deployment resource limits (the self-hosted answer to
 -- Cloud's deployment classes). NULL = unlimited, which is exactly the
 -- pre-migration behavior: existing deployments keep running uncapped and
 -- nothing is rewritten on upgrade.

@@ -328,7 +328,7 @@ async function provisionDeployment(page: Page): Promise<string> {
 }
 
 async function openDomainsPanel(page: Page, deploymentName: string) {
-  // The panel toggle lives behind the card's expand chevron (v1.25).
+  // The panel toggle lives behind the card's expand chevron (v1.26).
   await expandDeployment(page, deploymentName);
   await page
     .getByRole("button", {

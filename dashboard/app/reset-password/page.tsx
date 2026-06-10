@@ -9,7 +9,7 @@ import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { ApiError, api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
-// Reset-password (v1.25+) — the page the emailed link lands on. Reads
+// Reset-password (v1.26+) — the page the emailed link lands on. Reads
 // ?token=, asks for the new password twice, and on success points back at
 // /login (the reset also invalidated refresh tokens from before the
 // change, so any old session has to sign in again anyway).

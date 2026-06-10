@@ -84,7 +84,7 @@ test("CLI credentials panel: reveal, copy to clipboard, hide", async ({
   const deploymentName = (await nameLocator.textContent())?.trim() ?? "";
   expect(deploymentName).toMatch(/^[a-z]+-[a-z]+-\d{4}$/);
 
-  // The panels live behind the card's expand chevron (v1.25).
+  // The panels live behind the card's expand chevron (v1.26).
   await expandDeployment(page, deploymentName);
 
   // Reveal: aria-label is "Show CLI credentials for {name}", set in the

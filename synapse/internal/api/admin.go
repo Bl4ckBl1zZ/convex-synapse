@@ -77,7 +77,7 @@ type AdminHandler struct {
 	// (v1.23+): the dashboard toggle for CCP apply. Same instance-admin gate.
 	ApplySettings *ApplySettingsHandler
 	// AlertSettings, when non-nil, mounts /alert_settings under /v1/admin
-	// (v1.25+, migration 000032): deployment-down notification channels.
+	// (v1.26+, migration 000032): deployment-down notification channels.
 	AlertSettings *AlertSettingsHandler
 	// HeadscaleEnabled mirrors RouterDeps: true when Synapse boot wired
 	// a non-nil headscale.Client AND a non-empty
@@ -171,7 +171,7 @@ func (h *AdminHandler) Routes() chi.Router {
 	if h.ApplySettings != nil {
 		r.Mount("/apply_settings", h.ApplySettings.Routes())
 	}
-	// Alert settings (v1.25+, migration 000032) — deployment-down alerts.
+	// Alert settings (v1.26+, migration 000032) — deployment-down alerts.
 	if h.AlertSettings != nil {
 		r.Mount("/alert_settings", h.AlertSettings.Routes())
 	}

@@ -233,7 +233,7 @@ services:
       # installer, so the relative ./install-agent.sh resolves next to
       # this compose file.
       - ./install-agent.sh:/install-agent.sh:ro
-      # Per-deployment snapshot backups (v1.25+). The transient CLI
+      # Per-deployment snapshot backups (v1.26+). The transient CLI
       # containers the backend spawns bind the SAME named volume (fixed
       # name, no compose project prefix) and write the zips; the api
       # streams downloads + prunes retention through this mount. Path

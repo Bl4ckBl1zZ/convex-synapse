@@ -14,7 +14,7 @@ import (
 	dockerprov "github.com/Iann29/synapse/internal/docker"
 )
 
-// Per-deployment snapshot backups (v1.25+). The export/import containers
+// Per-deployment snapshot backups (v1.26+). The export/import containers
 // are faked (FakeDocker.Export/ImportBackupFn); the queue, row lifecycle,
 // retention sweep, download streaming, and gates are real.
 

@@ -157,7 +157,7 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
 
 ### ✅ Shipped this milestone
 
-- [x] **Per-deployment snapshot backups (v1.25)** — the self-hosted answer
+- [x] **Per-deployment snapshot backups (v1.26)** — the self-hosted answer
   to Cloud's Pro-paywalled Backups page (gap 4 of 4 from the Convex Cloud
   comparison; closes the wave). A backup is a REAL `npx convex export`
   zip, produced by a transient node container on the deployments network
@@ -175,7 +175,7 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
   +8 Go integration, +1 Playwright that runs the REAL export+restore
   end-to-end. Compose: new fixed-name `synapse-backups` volume mounted at
   /backups.
-- [x] **Per-deployment resource limits (v1.25)** — the self-hosted answer
+- [x] **Per-deployment resource limits (v1.26)** — the self-hosted answer
   to Cloud's deployment classes. `create_deployment` accepts optional
   `cpus` (0.1–64, fractions) + `memoryMb` (128–1 TiB) that land in
   Docker's `HostConfig.Resources` (NanoCPUs / Memory); NULL = unlimited =
@@ -190,7 +190,7 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
   Tests: +8 Go integration, +1 Playwright that docker-inspects the REAL
   container to prove NanoCpus/Memory are enforced end-to-end (gap 3 of 4
   from the Convex Cloud comparison — next: per-deployment backups).
-- [x] **Password reset (v1.25)** — self-service forgot-password flow;
+- [x] **Password reset (v1.26)** — self-service forgot-password flow;
   before this, a forgotten password meant asking the instance admin to
   poke the DB. `POST /v1/auth/forgot_password` always answers the same
   `200 {ok:true}` (no user-enumeration oracle; the email send is detached
@@ -204,7 +204,7 @@ The v1.0 surface area takes Synapse from "works for one operator on a Hetzner bo
   /reset-password pages (pt-BR included). Migration 000033. Tests: +9 Go
   integration, +3 Playwright (gap 2 of 4 from the Convex Cloud
   comparison — next: deployment classes, per-deployment backups).
-- [x] **Deployment-down alerts (v1.25)** — the health worker now notifies
+- [x] **Deployment-down alerts (v1.26)** — the health worker now notifies
   somebody when a deployment transitions to `stopped`/`failed` instead of
   silently flipping the row: email to the owning team's admins (same
   Resend config as invites — DB settings win over `.env`) + a generic
@@ -306,7 +306,7 @@ focus on RBAC + API stability + picker polish:
   later milestone. Synapse stays email+password JWT until then;
   enterprise SSO is the next big request once RBAC lands.
 - **Backup follow-ups** — ~~cron-style scheduled backups, retention
-  policy~~ shipped per-deployment in v1.25 (daily schedule + retention
+  policy~~ shipped per-deployment in v1.26 (daily schedule + retention
   via the dashboard). Remaining: instance-level scheduled `setup.sh
   --backup --to-s3=...` (operators wrap it in their own cron until then)
   and S3 offload for per-deployment archives.

@@ -127,19 +127,19 @@ type Deployment struct {
 	HostSSHUser string     `json:"-"`
 	HostSSHPort int        `json:"-"`
 	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
-	// CPUs / MemoryMB are the per-deployment resource limits (v1.25+,
+	// CPUs / MemoryMB are the per-deployment resource limits (v1.26+,
 	// migration 000034) applied to the container via Docker's
-	// HostConfig.Resources. nil = unlimited (every pre-v1.25 deployment).
+	// HostConfig.Resources. nil = unlimited (every pre-v1.26 deployment).
 	CPUs     *float64 `json:"cpus,omitempty"`
 	MemoryMB *int     `json:"memoryMb,omitempty"`
-	// Backup policy (v1.25+, migration 000035). Schedule is 'none' or
+	// Backup policy (v1.26+, migration 000035). Schedule is 'none' or
 	// 'daily'; Retention bounds how many complete backups the sweeper
 	// keeps. Populated by loadDeployment (GET by name) only.
 	BackupSchedule  string `json:"backupSchedule,omitempty"`
 	BackupRetention int    `json:"backupRetention,omitempty"`
 }
 
-// DeploymentBackup is one snapshot archive of a deployment (v1.25+).
+// DeploymentBackup is one snapshot archive of a deployment (v1.26+).
 // file_path never leaves the server — downloads stream through the API.
 type DeploymentBackup struct {
 	ID           string     `json:"id"`

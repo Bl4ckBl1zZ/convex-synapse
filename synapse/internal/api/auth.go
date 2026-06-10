@@ -20,7 +20,7 @@ import (
 )
 
 // AuthHandler exposes registration, login, session refresh, and the
-// self-service password-reset flow (v1.25+).
+// self-service password-reset flow (v1.26+).
 type AuthHandler struct {
 	DB  *pgxpool.Pool
 	JWT *auth.JWTIssuer
@@ -212,7 +212,7 @@ func (h *AuthHandler) refresh(w http.ResponseWriter, r *http.Request) {
 	h.respondTokenPair(w, http.StatusOK, u)
 }
 
-// ---------- password reset (v1.25+) ----------
+// ---------- password reset (v1.26+) ----------
 
 const (
 	// resetTokenTTL bounds how long an emailed reset link works.

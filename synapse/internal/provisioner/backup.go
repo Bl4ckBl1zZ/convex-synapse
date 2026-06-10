@@ -11,7 +11,7 @@ import (
 	dockerprov "github.com/Iann29/synapse/internal/docker"
 )
 
-// BackupRunner is the snapshot export/import seam (v1.25+ per-deployment
+// BackupRunner is the snapshot export/import seam (v1.26+ per-deployment
 // backups). *dockerprov.Client implements it with transient CLI
 // containers; the test harness injects a fake.
 type BackupRunner interface {

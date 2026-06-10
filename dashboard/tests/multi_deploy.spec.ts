@@ -110,7 +110,7 @@ test("provision three deployments, then delete them all", async ({ page }) => {
 
   // Three rows visible — each row exposes an expand chevron whose
   // data-testid is "deployment-expand-<name>" (the Delete button only
-  // exists once a card is expanded, v1.25). v1.9.6+ TopologyPanel and
+  // exists once a card is expanded, v1.26). v1.9.6+ TopologyPanel and
   // v1.10.0+ ActivityFeed both render the deployment name too, so a
   // page-wide text match for the name pattern over-counts; the chevron
   // is unique to the live deployment row.

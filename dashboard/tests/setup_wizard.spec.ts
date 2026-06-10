@@ -43,7 +43,7 @@ test("wizard end-to-end: admin → demo team + project + deployment", async ({ p
   // The project page renders the freshly-provisioned deployment row.
   await expect(page).toHaveURL(/\/teams\/[^/]+\/[^/]+\b/);
   // The per-row expand chevron proves the deployment row rendered (the
-  // CLI-credentials button lives behind it since the v1.25 collapse —
+  // CLI-credentials button lives behind it since the v1.26 collapse —
   // cli_credentials.spec.ts covers that flow separately).
   await expect(
     page.locator('[data-testid^="deployment-expand-"]').first()

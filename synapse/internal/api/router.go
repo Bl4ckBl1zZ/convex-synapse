@@ -106,7 +106,7 @@ type RouterDeps struct {
 	AlertWebhookURL string
 
 	// BackupDir is this process's mount of the synapse-backups volume
-	// (SYNAPSE_BACKUP_DIR, v1.25+). The backups handlers stream downloads
+	// (SYNAPSE_BACKUP_DIR, v1.26+). The backups handlers stream downloads
 	// and prune archives through it; empty 503s the surface.
 	BackupDir string
 
@@ -298,7 +298,7 @@ func NewRouter(d RouterDeps) http.Handler {
 
 	r.Method(http.MethodGet, "/health", &HealthHandler{DB: d.DB, Version: d.Version})
 
-	// Email/Crypto/PublicURL power the password-reset flow (v1.25+): the
+	// Email/Crypto/PublicURL power the password-reset flow (v1.26+): the
 	// reset email rides the same Resend config as invites (DB settings win
 	// over .env) and the link points at <PublicURL>/reset-password.
 	authH := &AuthHandler{DB: d.DB, JWT: d.JWT, Email: d.Email, Crypto: d.DNSEnvelope, PublicURL: d.PublicURL}
@@ -603,7 +603,7 @@ func NewRouter(d RouterDeps) http.Handler {
 				EnvEnabled:   d.ApplyEnabled,
 				EnvDangerous: d.ApplyDangerous,
 			}
-			// Alert settings (v1.25+): deployment-down notification
+			// Alert settings (v1.26+): deployment-down notification
 			// channels. The Notifier itself hangs off the health worker
 			// (main.go); this is just the config surface.
 			adminH.AlertSettings = &AlertSettingsHandler{

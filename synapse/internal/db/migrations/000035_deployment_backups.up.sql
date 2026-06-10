@@ -1,4 +1,4 @@
--- v1.25+ — Per-deployment snapshot backups (the self-hosted answer to
+-- v1.26+ — Per-deployment snapshot backups (the self-hosted answer to
 -- Cloud's Backups page, which is paywalled at Pro and 404'd here as
 -- not_supported_in_self_hosted).
 --

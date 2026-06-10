@@ -457,7 +457,7 @@ func run() error {
 		}
 		go pworker.Run(rootCtx)
 
-		// Backup sweeper (v1.25+): enqueue scheduled daily backups, prune
+		// Backup sweeper (v1.26+): enqueue scheduled daily backups, prune
 		// retention, fail stale rows. Advisory-locked — one node per tick.
 		go (&backups.Sweeper{
 			DB:        pool,
@@ -492,7 +492,7 @@ func run() error {
 			DB:        pool,
 			Docker:    dockerClient,
 			Restarter: dockerClient,
-			// Deployment-down notifications (v1.25+): email to team admins
+			// Deployment-down notifications (v1.26+): email to team admins
 			// + optional webhook. Best-effort + detached — the Notifier
 			// never blocks the sweep. Channel config is re-read from
 			// alert_settings on every alert, so dashboard changes apply

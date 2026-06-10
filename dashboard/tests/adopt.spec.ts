@@ -131,7 +131,7 @@ test("adopt an existing Convex backend via the dashboard", async ({ page }) => {
   // TopologyPanel grouping — so a page-wide exact-text match resolves to
   // multiple elements. Confirm presence via the per-row expand chevron's
   // testid, which is unique to the deployments list (the Delete button
-  // only exists once the card is expanded, v1.25).
+  // only exists once the card is expanded, v1.26).
   await expect(
     page.getByTestId("deployment-expand-imported-app"),
   ).toBeVisible({ timeout: 10_000 });

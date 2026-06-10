@@ -50,7 +50,7 @@ export async function deleteDeploymentViaDialog(
 ): Promise<void> {
   const type = kind ?? (await lookupType(deploymentName));
 
-  // The Delete button lives behind the card's expand chevron (v1.25).
+  // The Delete button lives behind the card's expand chevron (v1.26).
   await expandDeployment(page, deploymentName);
   await page
     .getByRole("button", {

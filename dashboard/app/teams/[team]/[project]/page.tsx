@@ -181,7 +181,7 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
   );
 
   const [open, setOpen] = useState(false);
-  // Per-card expand state (v1.25 UI polish): cards render collapsed —
+  // Per-card expand state (v1.26 UI polish): cards render collapsed —
   // name + badges + the two URLs — and the chevron reveals the action
   // buttons, version pill, and the credential/domain/backup panels.
   // Collapsed cards also skip the BackendVersionPill probe entirely.
@@ -189,7 +189,7 @@ export default function ProjectPage({ params }: { params: Promise<Params> }) {
   const toggleCard = (name: string) =>
     setExpandedCards((prev) => ({ ...prev, [name]: !prev[name] }));
   const [type, setType] = useState<"dev" | "prod">("dev");
-  // Resource limits (v1.25+). Kept as strings so the inputs can be blank
+  // Resource limits (v1.26+). Kept as strings so the inputs can be blank
   // (= unlimited); parsed to numbers only on submit.
   const [createCpus, setCreateCpus] = useState("");
   const [createMemoryMb, setCreateMemoryMb] = useState("");
@@ -306,7 +306,7 @@ await Promise.all([
   const [deletingName, setDeletingName] = useState<string | null>(null);
   const [restartingName, setRestartingName] = useState<string | null>(null);
 
-  // Resize dialog (v1.25+ resource limits). The form carries the FULL
+  // Resize dialog (v1.26+ resource limits). The form carries the FULL
   // desired state — blank = unlimited — because the API treats the body
   // as a replacement, not a patch. Applying recreates the container
   // (brief downtime, data volume kept), which the dialog copy spells out.
@@ -942,7 +942,7 @@ await Promise.all([
               {t("Defaults to the host running Synapse. Remote hosts appear once an operator runs install-agent.sh on them.")}
             </p>
           </div>
-          {/* Resource limits (v1.25+). Blank = unlimited — the pre-v1.25
+          {/* Resource limits (v1.26+). Blank = unlimited — the pre-v1.26
               behavior. Caps land in Docker's HostConfig at create time. */}
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-2">

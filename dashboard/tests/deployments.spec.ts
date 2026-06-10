@@ -157,7 +157,7 @@ test("deploy key revoke prompt explains credential rotation", async ({ page }) =
   await page.reload();
   // v1.9.6+ TopologyPanel renders the name too — strict-mode getByText
   // chokes on the second match. The expand chevron is the row-unique
-  // element; the deploy-keys panel lives behind it (v1.25).
+  // element; the deploy-keys panel lives behind it (v1.26).
   await expandDeployment(page, deploymentName);
 
   await page

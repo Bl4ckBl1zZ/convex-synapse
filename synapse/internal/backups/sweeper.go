@@ -1,5 +1,5 @@
 // Package backups runs the periodic per-deployment backup sweeper
-// (v1.25+): enqueue one daily backup for every deployment that opted in,
+// (v1.26+): enqueue one daily backup for every deployment that opted in,
 // prune complete backups beyond each deployment's retention (files
 // included), and fail rows stuck in pending/running. Multi-node safe via
 // LockBackupSweeper — one node per tick, followers skip.

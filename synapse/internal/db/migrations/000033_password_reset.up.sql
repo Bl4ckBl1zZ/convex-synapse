@@ -1,4 +1,4 @@
--- v1.25+ — Self-service password reset (forgot-password email flow).
+-- v1.26+ — Self-service password reset (forgot-password email flow).
 --
 -- password_reset_tokens follows the GitHub-PAT storage model used by
 -- access_tokens / deploy_keys: the plaintext token (syn_reset_<random>)

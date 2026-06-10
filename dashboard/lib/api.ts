@@ -137,15 +137,15 @@ export type Deployment = {
   hostName?: string;
   hostTailnetAddr?: string;
   hostIsRemote?: boolean;
-  // Resource limits (v1.25+). Absent = unlimited.
+  // Resource limits (v1.26+). Absent = unlimited.
   cpus?: number;
   memoryMb?: number;
-  // Backup policy (v1.25+). Present on GET-by-name responses.
+  // Backup policy (v1.26+). Present on GET-by-name responses.
   backupSchedule?: "none" | "daily";
   backupRetention?: number;
 };
 
-// One snapshot archive of a deployment (v1.25+). A real `npx convex
+// One snapshot archive of a deployment (v1.26+). A real `npx convex
 // export` zip stored server-side; restore = `convex import --replace`
 // (destructive). requestedBy is empty for scheduler-minted backups.
 export type DeploymentBackup = {
@@ -509,7 +509,7 @@ export type EmailSettings = {
   updatedAt: string | null;
 };
 
-// GET/POST/DELETE /v1/admin/alert_settings (v1.25+). Deployment-down alert
+// GET/POST/DELETE /v1/admin/alert_settings (v1.26+). Deployment-down alert
 // channels: email to team admins (rides the email_settings/Resend config)
 // + a generic webhook (Slack / Discord / custom). The full webhook URL is
 // never returned — its path embeds the receiver's secret — only a masked
@@ -1446,7 +1446,7 @@ export const api = {
     return persistToken(t);
   },
 
-  // Password reset (v1.25+). forgotPassword always resolves {ok:true} —
+  // Password reset (v1.26+). forgotPassword always resolves {ok:true} —
   // the server never reveals whether the account exists; the email (when
   // the instance has Resend configured) carries the single-use link.
   forgotPassword(email: string): Promise<{ ok: boolean }> {
@@ -1660,7 +1660,7 @@ export const api = {
         // self-host. Backend returns 400 host_not_found / host_draining
         // / host_not_provisioned on misconfiguration.
         hostId?: string;
-        // Resource limits (v1.25+). Omit for unlimited. Bounds enforced
+        // Resource limits (v1.26+). Omit for unlimited. Bounds enforced
         // server-side (400 invalid_resources).
         cpus?: number;
         memoryMb?: number;
@@ -1951,7 +1951,7 @@ export const api = {
         { method: "POST", body: {} },
       );
     },
-    // Resize (v1.25+): persists new CPU/RAM limits and recreates the
+    // Resize (v1.26+): persists new CPU/RAM limits and recreates the
     // container (data volume kept). The body is the full desired state —
     // omit a field for unlimited. 409 for adopted / HA / remote /
     // non-running rows.
@@ -1964,7 +1964,7 @@ export const api = {
         { method: "POST", body },
       );
     },
-    // Per-deployment snapshot backups (v1.25+). Export/restore run async
+    // Per-deployment snapshot backups (v1.26+). Export/restore run async
     // on the server's job queue — poll list() until the row settles.
     backups: {
       list(name: string): Promise<DeploymentBackup[]> {
@@ -2622,7 +2622,7 @@ export const api = {
         });
       },
     },
-    // Deployment-down alert channels (v1.25+). The webhook URL is
+    // Deployment-down alert channels (v1.26+). The webhook URL is
     // write-only — get() returns only a masked hint. The health worker
     // re-reads the row per alert, so changes apply without restart.
     alertSettings: {

@@ -132,7 +132,7 @@ type DeploymentsHandler struct {
 	ProxyEnabled bool
 
 	// BackupDir is this process's mount of the synapse-backups volume
-	// (v1.25+). Download streams + delete pruning read it; empty
+	// (v1.26+). Download streams + delete pruning read it; empty
 	// disables the backups surface (503 backups_not_configured).
 	BackupDir string
 
@@ -925,7 +925,7 @@ func (h *DeploymentsHandler) Routes() chi.Router {
 		r.Post("/delete", h.deleteDeployment)
 		r.Post("/restart", h.restartDeployment)
 		r.Post("/update_resources", h.updateResources)
-		// Per-deployment snapshot backups (v1.25+, handlers in backups.go).
+		// Per-deployment snapshot backups (v1.26+, handlers in backups.go).
 		r.Get("/backups", h.listBackups)
 		r.Post("/backups", h.createBackup)
 		r.Get("/backups/{backupID}/download", h.downloadBackup)
@@ -1391,7 +1391,7 @@ type createDeploymentReq struct {
 	HostID string `json:"hostId,omitempty"`
 
 	// CPUs / MemoryMB cap the container via Docker's HostConfig.Resources
-	// (v1.25+ resource limits — the self-hosted answer to Cloud's
+	// (v1.26+ resource limits — the self-hosted answer to Cloud's
 	// deployment classes). Absent/null = unlimited. Bounds enforced by
 	// validateResourceLimits.
 	CPUs     *float64 `json:"cpus,omitempty"`

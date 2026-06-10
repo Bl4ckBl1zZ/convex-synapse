@@ -857,7 +857,7 @@ type FakeDocker struct {
 	}
 	Stopped    []string
 	Migrations []dockerprov.SnapshotMigrationSpec
-	// Exported / Imported record the backup runner calls (v1.25+). The
+	// Exported / Imported record the backup runner calls (v1.26+). The
 	// default ExportBackup is record-only — it writes NO archive, so the
 	// worker's stat check fails the backup; happy-path tests set
 	// ExportBackupFn to drop a file at the spec's RelPath.

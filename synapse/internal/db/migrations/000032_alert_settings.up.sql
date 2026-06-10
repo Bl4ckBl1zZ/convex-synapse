@@ -1,4 +1,4 @@
--- v1.25+ — Instance alert settings, configurable from the dashboard admin
+-- v1.26+ — Instance alert settings, configurable from the dashboard admin
 -- area. Drives the health worker's deployment-down notifications: email to
 -- the owning team's admins (via the same Resend settings the invite path
 -- uses) and/or a generic webhook POST (Slack / Discord / custom receivers).

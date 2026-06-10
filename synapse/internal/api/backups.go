@@ -17,7 +17,7 @@ import (
 	"github.com/Iann29/synapse/internal/provisioner"
 )
 
-// Per-deployment snapshot backups (v1.25+, migration 000035) — the
+// Per-deployment snapshot backups (v1.26+, migration 000035) — the
 // self-hosted answer to Cloud's Backups page. A backup is a real
 // `npx convex export` zip landed on the synapse-backups volume; restore
 // feeds it back with `convex import --replace`. Export/restore run on the

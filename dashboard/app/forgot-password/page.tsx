@@ -8,7 +8,7 @@ import { LocaleSwitcher } from "@/components/LocaleSwitcher";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
-// Forgot-password (v1.25+). Submits the email and ALWAYS lands on the same
+// Forgot-password (v1.26+). Submits the email and ALWAYS lands on the same
 // "check your inbox" state — the API never reveals whether the account
 // exists, and neither do we. The emailed link points at /reset-password.
 export default function ForgotPasswordPage() {

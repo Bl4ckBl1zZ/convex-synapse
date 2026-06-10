@@ -87,7 +87,7 @@ type DeploymentSpec struct {
 	// docs/CONVEX_SITE_ORIGIN.md.
 	SiteURL string
 
-	// CPUs / MemoryMB cap the container via HostConfig.Resources (v1.25+
+	// CPUs / MemoryMB cap the container via HostConfig.Resources (v1.26+
 	// per-deployment limits). Zero = unlimited — the pre-feature behavior.
 	// Applied at container-create time only: restarts keep whatever the
 	// container was created with; a resize must go through Recreate.
@@ -465,7 +465,7 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 			MaximumRetryCount: 0,
 		},
 	}
-	// Per-deployment resource limits (v1.25+). Zero = unlimited. NanoCPUs
+	// Per-deployment resource limits (v1.26+). Zero = unlimited. NanoCPUs
 	// is Docker's --cpus equivalent (1e9 = one core); Memory is bytes.
 	if spec.CPUs > 0 {
 		hostCfg.Resources.NanoCPUs = int64(spec.CPUs * 1e9)

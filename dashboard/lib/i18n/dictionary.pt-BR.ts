@@ -1180,7 +1180,7 @@ export const ptBR: Record<string, string> = {
   "Your Synapse identity and API access tokens.": "Sua identidade no Synapse e tokens de acesso à API.",
   "your VPS IP": "o IP do seu VPS",
 
-  // Deployment-down alerts (v1.25) — AlertSettingsPanel + admin nav.
+  // Deployment-down alerts (v1.26) — AlertSettingsPanel + admin nav.
   "Alerts": "Alertas",
   "Deployment alerts": "Alertas de deployment",
   "Get notified when a deployment goes down (stopped or failed). Email goes to the admins of the team that owns the deployment and requires the Email settings to be configured; the webhook accepts Slack and Discord URLs out of the box, or any endpoint that takes a JSON POST.":
@@ -1205,7 +1205,7 @@ export const ptBR: Record<string, string> = {
   "Reset alert settings to defaults? Email alerts turn back on and the webhook reverts to the host .env (SYNAPSE_ALERT_WEBHOOK_URL), if set.":
     "Redefinir as configurações de alerta para os padrões? Os alertas por email voltam a ficar ativados e o webhook volta para o .env do host (SYNAPSE_ALERT_WEBHOOK_URL), se definido.",
 
-  // Password reset (v1.25) — /forgot-password + /reset-password + login link.
+  // Password reset (v1.26) — /forgot-password + /reset-password + login link.
   "Forgot password?": "Esqueceu a senha?",
   "Reset your password": "Redefinir sua senha",
   "Enter your account email and we'll send a reset link.": "Informe o email da sua conta e enviaremos um link de redefinição.",
@@ -1232,7 +1232,7 @@ export const ptBR: Record<string, string> = {
     "Esta página só funciona a partir do link de um email de redefinição. Solicite um novo abaixo.",
   "Request a reset link": "Solicitar um link de redefinição",
 
-  // Resource limits (v1.25) — create dialog + row badge + resize dialog.
+  // Resource limits (v1.26) — create dialog + row badge + resize dialog.
   "CPU limit": "Limite de CPU",
   "Memory limit (MB)": "Limite de memória (MB)",
   "e.g. 0.5": "ex. 0.5",
@@ -1249,7 +1249,7 @@ export const ptBR: Record<string, string> = {
   "Applying...": "Aplicando...",
   "Could not resize deployment": "Não foi possível redimensionar o deployment",
 
-  // Per-deployment backups (v1.25) — BackupsPanel.
+  // Per-deployment backups (v1.26) — BackupsPanel.
   "Backups": "Backups",
   "Manage backups for {deploymentName}": "Gerenciar backups de {deploymentName}",
   "Back up now": "Fazer backup agora",
@@ -1278,7 +1278,7 @@ export const ptBR: Record<string, string> = {
   "Daily backups run server-side; older complete backups beyond the retention count are pruned automatically.":
     "Backups diários rodam no servidor; backups completos antigos além do limite de retenção são removidos automaticamente.",
 
-  // Collapsible deployment cards (v1.25 UI polish).
+  // Collapsible deployment cards (v1.26 UI polish).
   "Expand deployment {name}": "Expandir o deployment {name}",
   "Collapse deployment {name}": "Recolher o deployment {name}",
 };

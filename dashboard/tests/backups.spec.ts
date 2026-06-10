@@ -3,7 +3,7 @@ import { truncateAll } from "./helpers/db";
 import { pruneSynapseContainers } from "./helpers/docker";
 import { expandDeployment } from "./helpers/expand";
 
-// Per-deployment backups (v1.25+) — the REAL machinery end-to-end: a live
+// Per-deployment backups (v1.26+) — the REAL machinery end-to-end: a live
 // Convex deployment, an actual `npx convex export` run in the transient
 // node container (network + admin key + synapse-backups volume), the row
 // flipping pending → complete with a real archive size, then a REAL
@@ -57,7 +57,7 @@ test("real backup → complete with size → real restore stamps restoredAt", as
   const name = (await nameLocator.textContent())?.trim() ?? "";
 
   // The action buttons + panels live behind the card's expand chevron
-  // (v1.25); the Resize button (running-only) is the "running" signal
+  // (v1.26); the Resize button (running-only) is the "running" signal
   // the backup gate needs.
   await expandDeployment(page, name);
   await expect(

@@ -3,7 +3,7 @@ import { truncateAll } from "./helpers/db";
 
 const API_BASE = process.env.SYNAPSE_API_URL || "http://localhost:8080";
 
-// Admin → Alerts (v1.25+). Exercises components/AlertSettingsPanel.tsx at
+// Admin → Alerts (v1.26+). Exercises components/AlertSettingsPanel.tsx at
 // /admin/alerts against the REAL backend (unlike admin-email, alert
 // settings need no SYNAPSE_STORAGE_KEY, so the live handler works in the
 // compose stack). The notification side (health worker → webhook/email) is

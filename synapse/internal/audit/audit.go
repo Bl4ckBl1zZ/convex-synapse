@@ -28,7 +28,7 @@ const (
 	// Auth.
 	ActionLogin = "login"
 	// ActionPasswordReset records a completed self-service password reset
-	// (v1.25+). Only the success path is audited — the anonymous
+	// (v1.26+). Only the success path is audited — the anonymous
 	// forgot_password endpoint must not let strangers spam audit rows.
 	ActionPasswordReset = "passwordReset"
 
@@ -141,12 +141,12 @@ const (
 	ActionUpdateEmailSettings = "email_settings.updated"
 	ActionClearEmailSettings  = "email_settings.cleared"
 
-	// ActionUpdateDeploymentResources records a resize (v1.25+ per-
+	// ActionUpdateDeploymentResources records a resize (v1.26+ per-
 	// deployment CPU/RAM limits). Metadata carries {name, cpus?, memoryMb?}
 	// — absent keys mean unlimited.
 	ActionUpdateDeploymentResources = "updateDeploymentResources"
 
-	// Per-deployment snapshot backups (v1.25+, migration 000035).
+	// Per-deployment snapshot backups (v1.26+, migration 000035).
 	// requestBackup/restoreBackup record the operator's intent (the
 	// export/import itself runs async on the job queue); restore is the
 	// destructive one (`convex import --replace`). Metadata carries
@@ -156,7 +156,7 @@ const (
 	ActionDeleteBackup         = "deleteBackup"
 	ActionUpdateBackupSettings = "updateBackupSettings"
 
-	// Instance alert settings (v1.25+, migration 000032). Deployment-down
+	// Instance alert settings (v1.26+, migration 000032). Deployment-down
 	// notification channels set/cleared from the dashboard's admin area;
 	// metadata carries {emailEnabled, webhookConfigured} — never the
 	// webhook URL (its path embeds the receiver's secret).

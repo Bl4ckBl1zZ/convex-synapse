@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Per-deployment CPU/RAM limits (v1.25+) — the self-hosted answer to
+// Per-deployment CPU/RAM limits (v1.26+) — the self-hosted answer to
 // Cloud's deployment classes. Limits ride DeploymentSpec into Docker's
 // HostConfig.Resources; NULL/absent = unlimited (pre-feature behavior).
 

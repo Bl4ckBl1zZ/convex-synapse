@@ -6,7 +6,7 @@
 //
 // Two optional hooks ride the reconciliation: AutoRestart (Config flag +
 // Restarter) bounces a replica whose container merely exited, and Alerter
-// (v1.25+) notifies team admins / a webhook when a deployment-level status
+// (v1.26+) notifies team admins / a webhook when a deployment-level status
 // transitions to stopped/failed — fired exactly once per down event, and
 // never for a blip auto-restart already recovered.
 package health

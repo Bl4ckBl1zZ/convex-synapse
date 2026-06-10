@@ -7,7 +7,7 @@ const DB_URL =
   process.env.SYNAPSE_DB_URL ||
   "postgres://synapse:synapse@localhost:5432/synapse";
 
-// Password reset (v1.25+). The Go integration tests cover the email leg
+// Password reset (v1.26+). The Go integration tests cover the email leg
 // (recordingSender reads the link); the live compose stack has no Resend,
 // so this spec mints the reset token straight into postgres — exactly the
 // row forgot_password would create — and drives the UI from the link

@@ -100,7 +100,7 @@ test("force-delete removes a deployment stranded on an unreachable remote host",
 
   // Re-render the project page so the mocked list_deployments takes effect.
   await page.reload();
-  // The Delete button lives behind the card's expand chevron (v1.25).
+  // The Delete button lives behind the card's expand chevron (v1.26).
   await expandDeployment(page, DEP_NAME);
   const deleteBtn = page.getByRole("button", {
     name: new RegExp(`delete deployment ${DEP_NAME}`, "i"),
