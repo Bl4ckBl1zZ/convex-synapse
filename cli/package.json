@@ -1,6 +1,6 @@
 {
   "name": "@iann29/synapse",
-  "version": "1.12.1",
+  "version": "1.13.0",
   "description": "Thin CLI wrapper for using the official Convex CLI with Synapse-managed deployments.",
   "license": "Apache-2.0",
   "repository": {
