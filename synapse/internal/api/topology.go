@@ -123,19 +123,33 @@ func (h *TopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		replicaCounts = map[string]int{}
 	}
 
-	// Host-aware since Remote Hosts (v1.18): build one column per distinct
-	// host the project's deployments live on. The self-host's card is
-	// env/geo-derived; a remote host comes from its registry row (with geo
-	// from the public IP the agent reported, when present). Adopted
-	// deployments go under a separate "External" pseudo-host.
+	// Host-aware since Remote Hosts (v1.18); registry-complete since
+	// v1.27.1: EVERY registered host gets a column — including hosts with
+	// zero deployments from this project, which render as empty cards
+	// ("no deployments here"). Before, a freshly federated host was
+	// invisible in the topology until its first deployment, which read
+	// as "the federation didn't work". Column order mirrors the Hosts
+	// panel (self first, then registration order) so the two surfaces
+	// never disagree. The self-host's card is env/geo-derived; remote
+	// hosts come from their registry row (geo from the agent-reported
+	// public IP, when present). Adopted deployments go under a separate
+	// "External" pseudo-host.
 	//
 	// DeploymentURL is rewritten to its PUBLIC form before mapping (the DB
 	// stores the internal loopback form for the healthcheck worker) — same
 	// rewrite list_deployments does.
 	primary := h.buildPrimaryHost(r.Context())
-	remoteMeta := h.loadHostMeta(r.Context(), deployments)
-	remoteCols := map[string]*topologyHost{} // keyed by deployments.host_id
+	allHosts := h.loadAllHostMeta(r.Context())
+	remoteCols := map[string]*topologyHost{} // keyed by hosts.id
 	var remoteOrder []string
+	for _, m := range allHosts {
+		if m.isSelf {
+			continue // self-host deployments land on the primary card
+		}
+		hc := h.buildRemoteHost(r.Context(), m)
+		remoteCols[m.id] = &hc
+		remoteOrder = append(remoteOrder, m.id)
+	}
 
 	var adopted []topologyDeployment
 	for _, d := range deployments {
@@ -149,14 +163,7 @@ func (h *TopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// A remote host (non-self) gets its own column; the self-host — or an
 		// unknown/missing host_id — falls back to the primary card.
-		if meta, ok := remoteMeta[d.HostID]; ok && !meta.isSelf {
-			col := remoteCols[d.HostID]
-			if col == nil {
-				hc := h.buildRemoteHost(r.Context(), meta)
-				col = &hc
-				remoteCols[d.HostID] = col
-				remoteOrder = append(remoteOrder, d.HostID)
-			}
+		if col, ok := remoteCols[d.HostID]; ok {
 			bumpStats(col, td.Status)
 			col.Deployments = append(col.Deployments, td)
 			continue
@@ -166,11 +173,12 @@ func (h *TopologyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := topologyResp{}
-	// Primary first — shown when it has deployments, or when there's nothing
-	// else to show (keeps the empty-state "add another host" hint).
-	if len(primary.Deployments) > 0 || (len(remoteCols) == 0 && len(adopted) == 0) {
-		resp.Hosts = append(resp.Hosts, primary)
-	}
+	// Primary is always present — it's a real host even when this
+	// project has nothing on it. The dashboard's panel-level gate
+	// (hide when the project has zero deployments anywhere) lives in
+	// the frontend, which needs the full host list to render the
+	// empty columns the moment the first deployment exists.
+	resp.Hosts = append(resp.Hosts, primary)
 	for _, id := range remoteOrder {
 		resp.Hosts = append(resp.Hosts, *remoteCols[id])
 	}
@@ -202,41 +210,34 @@ type hostMeta struct {
 	tailnet  string
 }
 
-// loadHostMeta loads registry metadata for every distinct host referenced by
-// the project's non-adopted deployments, so each host can get its own column.
-func (h *TopologyHandler) loadHostMeta(ctx context.Context, deployments []models.Deployment) map[string]hostMeta {
-	ids := map[string]struct{}{}
-	for _, d := range deployments {
-		if !d.Adopted && d.HostID != "" {
-			ids[d.HostID] = struct{}{}
-		}
-	}
-	out := map[string]hostMeta{}
-	if len(ids) == 0 {
-		return out
-	}
-	list := make([]string, 0, len(ids))
-	for id := range ids {
-		list = append(list, id)
-	}
+// loadAllHostMeta loads registry metadata for EVERY host, in the same
+// order the Hosts panel lists them (self first, then registration
+// order) — the topology shows a column per registered host even when
+// it holds no deployments from this project, so a freshly federated
+// host is visible immediately. Errors degrade to an empty list: every
+// deployment then falls back to the primary card instead of 500ing
+// the whole panel.
+func (h *TopologyHandler) loadAllHostMeta(ctx context.Context) []hostMeta {
 	rows, err := h.DB.Query(ctx, `
 		SELECT id::text, name, is_synapse_host,
 		       COALESCE(public_ip::text, ''), COALESCE(region, ''),
 		       COALESCE(provider, ''), COALESCE(tailnet_addr, '')
-		  FROM hosts WHERE id::text = ANY($1)
-	`, list)
+		  FROM hosts
+		 ORDER BY is_synapse_host DESC, created_at ASC
+	`)
 	if err != nil {
 		logErr("topology: load host meta", err)
-		return out
+		return nil
 	}
 	defer rows.Close()
+	var out []hostMeta
 	for rows.Next() {
 		var m hostMeta
 		if err := rows.Scan(&m.id, &m.name, &m.isSelf, &m.publicIP, &m.region, &m.provider, &m.tailnet); err != nil {
 			logErr("topology: scan host meta", err)
 			return out
 		}
-		out[m.id] = m
+		out = append(out, m)
 	}
 	return out
 }

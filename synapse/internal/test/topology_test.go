@@ -114,6 +114,62 @@ func TestTopology_StatusAggregation(t *testing.T) {
 	}
 }
 
+// TestTopology_RegisteredHostWithoutDeploymentsAppears: every host in
+// the registry gets a topology column — including a freshly federated
+// host with zero deployments (v1.27.1; before, a host was invisible in
+// the topology until its first deployment, which read as "the
+// federation didn't work"). Order mirrors the Hosts panel: self first,
+// then registration order.
+func TestTopology_RegisteredHostWithoutDeploymentsAppears(t *testing.T) {
+	h := SetupWithOpts(t, SetupOpts{
+		PublicURL:   "https://synapsepanel.com",
+		PublicIP:    "72.60.3.159",
+		GeoResolver: &stubResolver{info: geo.Info{Country: "DE", CountryFlag: "🇩🇪", Provider: "Hetzner"}},
+	})
+	owner := h.RegisterRandomUser()
+	team := createTeam(t, h, owner.AccessToken, "EmptyHost Co")
+	proj := createProject(t, h, owner.AccessToken, team.Slug, "EmptyHostProj")
+
+	// One deployment on the self-host so the project isn't empty, plus a
+	// federated host that holds nothing.
+	h.SeedDeployment(proj.ID, "solo-otter-7001", "dev", "running", true, owner.ID, 3290, "")
+	var remoteID string
+	if err := h.DB.QueryRow(h.rootCtx, `
+		INSERT INTO hosts (name, provider, region, status, is_remote, tailnet_addr, public_ip)
+		VALUES ('vps-empty', 'Hetzner', 'fsn1', 'online', true, '100.64.0.9', '203.0.113.9')
+		RETURNING id::text
+	`).Scan(&remoteID); err != nil {
+		t.Fatalf("seed remote host: %v", err)
+	}
+
+	var resp topologyTestResp
+	h.DoJSON(http.MethodGet, "/v1/projects/"+proj.ID+"/topology",
+		owner.AccessToken, nil, http.StatusOK, &resp)
+
+	if len(resp.Hosts) != 2 {
+		t.Fatalf("hosts: got %d want 2 (primary + empty federated)", len(resp.Hosts))
+	}
+	if !resp.Hosts[0].IsPrimary {
+		t.Errorf("first host should be the primary, got %+v", resp.Hosts[0])
+	}
+	if len(resp.Hosts[0].Deployments) != 1 {
+		t.Errorf("primary deployments: got %d want 1", len(resp.Hosts[0].Deployments))
+	}
+	empty := resp.Hosts[1]
+	if empty.ID != remoteID || empty.Name != "vps-empty" {
+		t.Errorf("federated host: got %+v want id=%s name=vps-empty", empty, remoteID)
+	}
+	if len(empty.Deployments) != 0 {
+		t.Errorf("federated host deployments: got %d want 0", len(empty.Deployments))
+	}
+	if empty.Deployments == nil {
+		t.Errorf("deployments must be [] (not null) so the dashboard can map over it")
+	}
+	if empty.RunningCount != 0 || empty.ProvisioningCount != 0 || empty.FailedCount != 0 {
+		t.Errorf("empty host counters should be zero: %+v", empty)
+	}
+}
+
 func TestTopology_EmptyProject(t *testing.T) {
 	h := SetupWithOpts(t, SetupOpts{
 		PublicURL:   "https://synapsepanel.com",

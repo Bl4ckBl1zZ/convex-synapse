@@ -197,6 +197,19 @@ test("topology renders multi-deployment / mixed-status hosts", async ({ page }) 
               },
             ],
           },
+          // v1.27.1: every registered host gets a column — a freshly
+          // federated host with no deployments renders as an empty
+          // card instead of being invisible.
+          {
+            id: "host-empty-1",
+            name: "vps-empty",
+            countryFlag: "🇧🇷",
+            isPrimary: false,
+            runningCount: 0,
+            provisioningCount: 0,
+            failedCount: 0,
+            deployments: [],
+          },
         ],
       }),
     }),
@@ -210,4 +223,12 @@ test("topology renders multi-deployment / mixed-status hosts", async ({ page }) 
   const failedTile = page.getByTestId("topology-deployment-fail-1");
   await expect(failedTile).toContainText("failed");
   await expect(failedTile).toContainText("0 / 2 healthy");
+
+  // The deployment-less federated host still gets its column, with the
+  // empty-state copy instead of tiles.
+  const emptyHost = page.getByTestId("topology-host-host-empty-1");
+  await expect(emptyHost).toBeVisible();
+  await expect(emptyHost).toContainText("vps-empty");
+  await expect(emptyHost).toContainText("0 deployments");
+  await expect(emptyHost).toContainText("no deployments here");
 });
