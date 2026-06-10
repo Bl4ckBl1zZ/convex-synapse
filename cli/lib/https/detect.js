@@ -15,6 +15,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync, execSync } = require("node:child_process");
 const dns = require("node:dns").promises;
+const windowsDnsMod = require("./windows-dns");
 
 // Where the operator's per-domain certs live. Centralised so every
 // component agrees on the layout. Linux/macOS: `~/.config/dev-certs/`.
@@ -253,6 +254,35 @@ async function detectDomainResolution(domain) {
     source: "none",
     got: [...new Set([...dnsResult, ...lookupResult.map((r) => r.address)])],
   };
+}
+
+// ---- 7b. Public zone (A-record escape hatch) --------------------------
+
+// Does the domain's PARENT zone exist in public DNS? When it does
+// (dev.myproject.com under a myproject.com the operator controls),
+// there's a permanent fix that sidesteps every hosts-file pathology
+// on every machine at once: a public A record `dev → 127.0.0.1`
+// (the localtest.me trick). We only detect; the doctor/setup surface
+// it as advice. Bounded so a flaky network can't hang the scan.
+async function detectPublicZone(domain) {
+  const out = { checked: false, parent: null, hasNs: false };
+  const labels = String(domain || "").split(".").filter(Boolean);
+  // Need at least sub.domain.tld — suggesting an A record on a bare
+  // domain.tld is not our call to make.
+  if (labels.length < 3) return out;
+  const parent = labels.slice(1).join(".");
+  out.parent = parent;
+  try {
+    const ns = await Promise.race([
+      dns.resolveNs(parent),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2500)),
+    ]);
+    out.checked = true;
+    out.hasNs = Array.isArray(ns) && ns.length > 0;
+  } catch {
+    out.checked = true; // checked, no public zone (or no network) — same advice either way
+  }
+  return out;
 }
 
 // ---- 8/9/10. Hosts file ----------------------------------------------
@@ -543,7 +573,17 @@ async function scan({ domain, cwd = process.cwd() } = {}) {
     ? await detectDomainResolution(domain)
     : { resolvesToLoopback: false, source: "none", got: [] };
 
-  const hostsPath = detectHostsPath();
+  // On Windows, the registry's DataBasePath decides WHICH hosts file
+  // the resolver reads — AV/VPN products sometimes redirect it. Read
+  // it up-front (one cheap `reg query`) so the entry detection, the
+  // planner's writes, and the doctor all target the file that
+  // actually matters instead of the canonical path nobody reads.
+  let dataBasePath = null;
+  let hostsPath = detectHostsPath();
+  if (platform.id === "windows") {
+    dataBasePath = windowsDnsMod.readDataBasePath();
+    if (dataBasePath.redirected) hostsPath = dataBasePath.hostsPath;
+  }
   const hostsState = detectHostsForDomain(domain || "", hostsPath);
   const wslWindowsHostsPath = detectWslWindowsHosts();
   const wslWindowsHostsState = wslWindowsHostsPath
@@ -554,6 +594,31 @@ async function scan({ domain, cwd = process.cwd() } = {}) {
   const existingCerts = domain ? detectExistingCerts(domain) : null;
   const legacyCerts = detectLegacyCertsInCwd(cwd);
   const certStoreClash = domain ? detectDomainAlreadyInCertStore(domain) : false;
+
+  // Deep Windows DNS probes (encoding, NRPT, Dnscache service,
+  // displaydns) — only when the cheap signals show the pathological
+  // state they exist to bisect: entry present but the name doesn't
+  // resolve. They cost ~1-2s (PowerShell startup), which the happy
+  // path shouldn't pay. DataBasePath (read above) rides along either
+  // way so the planner can always target the effective hosts file.
+  const hostsHasLoopbackEntry = hostsState.matches.some(
+    (m) => m.address === "127.0.0.1" || m.address === "::1",
+  );
+  let windowsDns = null;
+  if (platform.id === "windows") {
+    windowsDns =
+      hostsHasLoopbackEntry && !resolution.resolvesToLoopback
+        ? windowsDnsMod.collectProbes(domain, hostsState.path, { dataBasePath })
+        : { dataBasePath, encoding: null, cache: null, service: null, nrpt: null, deep: false };
+  }
+
+  // Public-zone check rides the same gate plus the no-entry-yet case —
+  // it feeds the "use a public A record" advice, which only matters
+  // when local resolution is the obstacle.
+  const publicZone =
+    domain && validation.ok && !resolution.resolvesToLoopback
+      ? await detectPublicZone(domain)
+      : null;
 
   return {
     domain: domain || null,
@@ -567,6 +632,8 @@ async function scan({ domain, cwd = process.cwd() } = {}) {
     resolution,
     hosts: hostsState,
     wslWindowsHosts: wslWindowsHostsState,
+    windowsDns,
+    publicZone,
     pkg,
     existingCerts,
     legacyCerts,
@@ -589,6 +656,7 @@ module.exports = {
   detectCertutil,
   validateDomain,
   detectDomainResolution,
+  detectPublicZone,
   detectHostsPath,
   detectWslWindowsHosts,
   detectHostsForDomain,

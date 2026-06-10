@@ -213,6 +213,21 @@ Examples:
     // ---- Phase 5: VERIFY ---------------------------------------------
     const after = await detectMod.scan({ domain, cwd: ctx.cwd });
 
+    // v1.8.10 added post-execute verification; v1.13.0 makes it honest
+    // AND diagnostic. The repair step's own control probe is the
+    // freshest signal (it resolved both names INSIDE the same elevated
+    // session that wrote the file); the re-scan covers the plain
+    // add-entry path. If the domain doesn't resolve, this command must
+    // NOT print "HTTPS ready" — `npm run dev:https` is guaranteed to
+    // fail with ENOTFOUND, and pretending otherwise is how operators
+    // end up running flushdns in circles.
+    const hostsResult = results.find((r) => r.id === "hosts" && r.kind === "ok");
+    const repair = (hostsResult && hostsResult.outcome) || {};
+    const wroteHosts = !!hostsResult;
+    const verifyOk =
+      repair.domainResolved === true || after.resolution.resolvesToLoopback;
+    const verifyFailed = wroteHosts && !verifyOk && !skipHosts;
+
     const summary = {
       domain,
       platform: detection.platform.id,
@@ -223,10 +238,42 @@ Examples:
       results,
       failedAny,
     };
+    if (wroteHosts) summary.verifyResolution = !verifyFailed;
+
+    if (verifyFailed) {
+      const lines = [];
+      if (repair.controlResolved === true) {
+        lines.push(
+          `The hosts file itself WORKS — a throwaway control entry resolved fine — but ${domain} is still answered by something else before the Windows resolver. Typical culprits: VPN split-DNS, an NRPT policy rule, or antivirus web-protection.`,
+        );
+        if (repair.diagnosis && repair.diagnosis.advice) lines.push(repair.diagnosis.advice);
+      } else if (repair.controlResolved === false) {
+        lines.push(
+          `Windows ignored even a freshly written control entry — the hosts file is being bypassed entirely (DNS interceptor, redirected DataBasePath, or policy), so no amount of rewriting/flushing will help.`,
+        );
+        if (repair.diagnosis && repair.diagnosis.summary) {
+          lines.push(`Deep probes point at: ${repair.diagnosis.summary}.`);
+        }
+      } else if (detection.platform.id === "windows") {
+        lines.push(
+          "Windows DNS Client is still not serving the entry. Run `synapse https doctor " +
+            domain +
+            "` for the deep diagnosis, or restart the machine.",
+        );
+      } else {
+        lines.push(
+          "Hosts file was written but the OS resolver still doesn't return 127.0.0.1. Try restarting nscd / systemd-resolved if you use one, or open a new shell.",
+        );
+      }
+      const aRecord =
+        plannerMod.publicARecordAdvice(after) || plannerMod.publicARecordAdvice(detection);
+      if (aRecord) lines.push(aRecord);
+      summary.verifyHint = lines.join("\n");
+    }
 
     if (ctx.out.json) {
       ctx.out.result(summary, () => {});
-      if (failedAny) process.exitCode = 1;
+      if (failedAny || verifyFailed) process.exitCode = 1;
       return;
     }
 
@@ -241,36 +288,24 @@ Examples:
       return;
     }
 
-    // v1.8.10: post-execute verification. Even after every step
-    // reports ✓ the actual end-state can be wrong — most commonly on
-    // Windows where the DNS Client cache holds a negative response
-    // even after the hosts file is updated. Re-scan and verify the
-    // domain ACTUALLY resolves to 127.0.0.1 (when we wrote hosts).
-    // If it doesn't, surface a yellow warning with a concrete
-    // remediation instead of pretending the setup is healthy.
-    const wroteHosts = results.some(
-      (r) => r.id === "hosts" && r.kind === "ok",
-    );
-    const verifyOk = after.resolution.resolvesToLoopback;
-    if (wroteHosts && !verifyOk && !skipHosts) {
-      summary.verifyResolution = false;
-      summary.verifyHint =
-        detection.platform.id === "windows"
-          ? "Windows DNS Client cache is still serving stale NXDOMAIN for this domain. Run `ipconfig /flushdns` from an Administrator PowerShell, then retry `npm run dev:https`. If it still fails, restart your machine."
-          : "Hosts file was written but the OS resolver still doesn't return 127.0.0.1. Try restarting nscd / systemd-resolved if you use one, or open a new shell.";
-      if (!ctx.out.json) {
-        ctx.out.stdout.write("\n");
-        ctx.out.warn(
-          `${domain} doesn't resolve to 127.0.0.1 yet — ${summary.verifyHint}`,
-        );
-      }
-    } else if (wroteHosts && verifyOk) {
-      summary.verifyResolution = true;
+    if (verifyFailed) {
+      ctx.out.error(`${domain} still doesn't resolve to 127.0.0.1.`);
+      ctx.out.stdout.write(`\n${summary.verifyHint}\n\n`);
+      ctx.out.stdout.write(
+        `${colors.red("✗")} ${colors.bold(`HTTPS NOT ready for ${domain}`)} ${colors.dim("— fix the resolution issue above, then re-run `synapse https setup`.")}\n`,
+      );
+      process.exitCode = 1;
+      return;
     }
 
     ctx.out.stdout.write(
       `${colors.green("✓")} ${colors.bold(`HTTPS ready for ${domain}`)}\n`,
     );
+    if (wroteHosts && repair.domainResolved === true) {
+      ctx.out.stdout.write(
+        colors.dim(`(verified: ${domain} resolves to 127.0.0.1)\n`),
+      );
+    }
     if (after.pkg.hasNext) {
       ctx.out.stdout.write(colors.dim(`Next: run \`npm run dev:https\` in ${ctx.cwd}\n`));
     } else {

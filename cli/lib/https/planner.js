@@ -24,6 +24,22 @@ const detectMod = require("./detect");
 const mkcertMod = require("./mkcert");
 const hostsMod = require("./hosts");
 const nextjsMod = require("./nextjs");
+const windowsDnsMod = require("./windows-dns");
+
+// The "skip the whole hosts circus" escape hatch: when the domain's
+// parent zone exists in public DNS, ONE A record (`<sub> → 127.0.0.1`)
+// makes the dev domain resolve on every machine forever — no hosts
+// file, no ACLs, no cache, no UAC. Returns null when not applicable.
+function publicARecordAdvice(detection) {
+  const zone = detection.publicZone;
+  if (!zone || !zone.hasNs || !detection.domain) return null;
+  const sub = detection.domain.slice(0, detection.domain.length - zone.parent.length - 1);
+  return (
+    `Permanent fix (any machine, no hosts file): add a public DNS A record at your ${zone.parent} provider:\n` +
+    `  ${sub}.${zone.parent}  A  127.0.0.1\n` +
+    `Caveat: a few routers/corporate resolvers block public names answering with loopback (DNS-rebind protection) — if so, the hosts-file path remains the fallback.`
+  );
+}
 
 // Maps a detected platform + pkg manager combo to the canonical
 // install instructions for mkcert. We don't auto-install (mutating
@@ -222,22 +238,24 @@ function plan(detection, {
     });
   } else if (hostsHasEntry && !detection.resolution.resolvesToLoopback) {
     // The entry is present but the name still doesn't resolve. On
-    // Windows there are THREE distinct causes, and only one of them is
-    // a stale DNS cache — the other two (a UTF-8 BOM at the top of the
-    // file, or a hosts ACL that the Dnscache service can't read) make
-    // Windows ignore the whole file, and `ipconfig /flushdns` is
-    // powerless against both. We name the most likely cause so the
-    // operator isn't sent chasing flushdns forever, but the fix is the
-    // same self-healing re-write either way: addEntry now writes in
-    // place without a BOM, regrants the read ACEs the resolver needs
-    // (SID-based, locale-independent), and flushes the cache.
+    // Windows that single symptom hides half a dozen machine states
+    // (encoding, redirected DataBasePath, dead Dnscache service, NRPT
+    // rule, DNS interceptor, stale cache/ACL) — v1.13.0 bisects them
+    // via the deep probes in detection.windowsDns and NAMES the cause
+    // instead of sending the operator on a flushdns pilgrimage. The
+    // repair itself (repairHostsResolution) rewrites without BOM,
+    // regrants the ACL, restarts the Dnscache service, flushes, and
+    // verifies with a control probe — so the outcome distinguishes
+    // "fixed", "hosts works but this name is hijacked", and "Windows
+    // is ignoring the hosts file entirely".
     let reason;
+    let diagnosis = null;
     if (detection.platform.id === "windows") {
-      if (detection.hosts.hasBom) {
-        reason = `${detection.hosts.path} starts with a UTF-8 BOM — Windows ignores the whole file. Rewriting without the BOM (then regranting read ACL + flushing DNS).`;
-      } else {
-        reason = `${detection.hosts.path} has the entry but ${detection.domain} still doesn't resolve. Most often the Dnscache service can't read the file (missing read ACL) or the DNS cache is stale — rewriting in place, regranting read access to NETWORK SERVICE/Users, and flushing the cache.`;
-      }
+      diagnosis = windowsDnsMod.classifyResolutionFailure({
+        ...(detection.windowsDns || {}),
+        hostsHasBom: detection.hosts.hasBom,
+      });
+      reason = `${detection.hosts.path} has the entry but ${detection.domain} still doesn't resolve. Diagnosis: ${diagnosis.summary}. ${diagnosis.advice}`;
     } else {
       reason = `${detection.hosts.path} has the entry but resolution still fails — re-writing to force a refresh`;
     }
@@ -246,15 +264,42 @@ function plan(detection, {
       title: `Repair hosts resolution for ${detection.domain}`,
       kind: "exec",
       reason,
+      diagnosis,
       async run() {
-        // force: the entry is already present, so without this the
-        // write (and its ACL regrant / BOM strip / flushdns side
-        // effects) would be skipped as a no-op.
-        return hostsMod.addEntry(detection.hosts.path, detection.domain, {
-          force: true,
-        });
+        const outcome = await hostsMod.repairHostsResolution(
+          detection.hosts.path,
+          detection.domain,
+          { platform: detection.platform.node },
+        );
+        return { ...outcome, diagnosis };
       },
     });
+    // Non-repairable causes get an explicit warning on top of the
+    // repair step: rewriting harder will never beat a VPN that answers
+    // DNS before Windows does, and the operator deserves to know that
+    // BEFORE watching the repair "succeed" and the domain still fail.
+    if (diagnosis && !diagnosis.repairable) {
+      steps.push({
+        id: "hosts-diagnosis",
+        title:
+          diagnosis.cause === "nrpt"
+            ? "DNS policy (NRPT) overrides the hosts file for this domain"
+            : "A DNS interceptor is answering before the Windows resolver",
+        kind: "warn",
+        reason: diagnosis.summary,
+        skipReason: diagnosis.advice,
+      });
+    }
+    const aRecord = publicARecordAdvice(detection);
+    if (aRecord) {
+      steps.push({
+        id: "hosts-a-record",
+        title: `Permanent alternative: public A record for ${detection.domain}`,
+        kind: "warn",
+        reason: `${detection.publicZone.parent} has a public DNS zone — one A record makes this domain resolve on every dev machine with zero local setup.`,
+        skipReason: aRecord,
+      });
+    }
   } else {
     const needsElevation = !detection.hosts.writable;
     steps.push({
@@ -454,4 +499,5 @@ module.exports = {
   planIsExecutable,
   mkcertInstallHint,
   devHttpsCommandFor,
+  publicARecordAdvice,
 };

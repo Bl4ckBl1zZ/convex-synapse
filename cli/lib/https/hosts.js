@@ -26,10 +26,12 @@
 //   4. Writes new content atomically (tmp + rename)
 //   5. Returns { changed: bool, backupPath?: string }
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const dns = require("node:dns").promises;
 
 class HostsError extends Error {
   constructor(message, { kind } = {}) {
@@ -431,6 +433,258 @@ function writeHostsViaRunAs(hostsPath, content, { execImpl = execFileSync } = {}
   return { method: "runas", elevated: true, backupPath };
 }
 
+// Best-effort Dnscache service restart. One step stronger than
+// `ipconfig /flushdns`: a restart drops the cache AND re-reads the
+// hosts file, which unsticks service states a flush can't (observed
+// on machines where the service had cached a bad read of the file).
+// Win10/11 mark the service protected, so the restart can be refused
+// even elevated — never let that block the flow.
+function restartDnscacheIfWindows({ execImpl = execFileSync, platform = process.platform } = {}) {
+  if (platform !== "win32") return { ran: false, reason: "non-windows platform" };
+  try {
+    execImpl(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Restart-Service -Name Dnscache -Force -ErrorAction Stop",
+      ],
+      { stdio: "ignore", timeout: 15000 },
+    );
+    return { ran: true };
+  } catch (err) {
+    return { ran: false, reason: err.message };
+  }
+}
+
+// ---- Control-probe repair (v1.13.0) -----------------------------------
+//
+// The strongest possible "did the fix actually work?" signal: write a
+// throwaway control entry (`127.0.0.1 synapse-probe-<rand>.invalid` —
+// the .invalid TLD is RFC-reserved and can never resolve via real
+// DNS) alongside the real entry, flush/restart, then resolve BOTH:
+//
+//   control ✓ + domain ✓ → fixed for real
+//   control ✓ + domain ✗ → the hosts file WORKS; something targets
+//     this specific name (NRPT rule / VPN split-DNS) — rewriting
+//     harder will never help, so say so
+//   control ✗            → Windows is ignoring the hosts file
+//     entirely even after the rewrite (interceptor / redirected
+//     path / policy) — flushdns roulette would be a lie
+//
+// The control entry is removed before returning (single UAC prompt:
+// on the elevated path the whole dance happens inside one PowerShell
+// script).
+
+function makeControlName() {
+  return `synapse-probe-${crypto.randomBytes(4).toString("hex")}.invalid`;
+}
+
+// Default verify: OS-level getaddrinfo, identical to what Next.js /
+// Node will do. Returns the address list, or null when resolution
+// failed.
+async function defaultLookup(name) {
+  try {
+    const got = await dns.lookup(name, { all: true });
+    return got.map((r) => r.address);
+  } catch {
+    return null;
+  }
+}
+
+// Elevated repair: one UAC prompt runs the entire write→verify→clean
+// sequence inside a single elevated PowerShell. Results come back via
+// a temp file (`name=addr1,addr2` per line; empty addr list = failed)
+// because Start-Process gives us no stdout channel.
+function repairHostsViaRunAs(hostsPath, withControlContent, finalContent, verifyNames, {
+  execImpl = execFileSync,
+} = {}) {
+  const stamp = Date.now();
+  const tmpWith = path.join(os.tmpdir(), `synapse-hosts-${stamp}-probe.txt`);
+  const tmpFinal = path.join(os.tmpdir(), `synapse-hosts-${stamp}-final.txt`);
+  const resultFile = path.join(os.tmpdir(), `synapse-hosts-${stamp}-result.txt`);
+  fs.writeFileSync(tmpWith, withControlContent);
+  fs.writeFileSync(tmpFinal, finalContent);
+  const backupPath = `${hostsPath}.synapse-bak.${stamp}`;
+  const verifyPs = verifyNames
+    .map(
+      (n) =>
+        `try { $a = ([System.Net.Dns]::GetHostAddresses('${n}') | ForEach-Object { $_.IPAddressToString }) -join ','; } catch { $a = ''; }; Add-Content -LiteralPath '${resultFile}' -Value ('${n}=' + $a) -Encoding Ascii;`,
+    )
+    .join(" ");
+  const script = [
+    `try {`,
+    `  Copy-Item -LiteralPath '${hostsPath}' -Destination '${backupPath}' -ErrorAction Stop;`,
+    `  $enc = New-Object System.Text.UTF8Encoding($false);`,
+    // Phase 1: content WITH the control entry, ACL regrant, restart+flush.
+    `  [System.IO.File]::WriteAllText('${hostsPath}', [System.IO.File]::ReadAllText('${tmpWith}'), $enc);`,
+    `  & icacls '${hostsPath}' /grant '*S-1-5-20:(RX)' '*S-1-5-32-545:(RX)' '*S-1-15-2-1:(RX)' | Out-Null;`,
+    `  Restart-Service -Name Dnscache -Force -ErrorAction SilentlyContinue;`,
+    `  Start-Sleep -Milliseconds 500;`,
+    `  & ipconfig /flushdns | Out-Null;`,
+    // Phase 2: resolve every verify name via getaddrinfo (the same
+    // call Node/Next make). Resolve-DnsName would be WRONG here — it
+    // queries DNS servers directly and never consults the hosts file.
+    `  ${verifyPs}`,
+    // Phase 3: final content (control entry removed), flush again.
+    `  [System.IO.File]::WriteAllText('${hostsPath}', [System.IO.File]::ReadAllText('${tmpFinal}'), $enc);`,
+    `  & ipconfig /flushdns | Out-Null;`,
+    `  Remove-Item -LiteralPath '${tmpWith}','${tmpFinal}' -Force -ErrorAction SilentlyContinue;`,
+    `  exit 0`,
+    `} catch {`,
+    `  Write-Error $_.Exception.Message;`,
+    `  exit 1`,
+    `}`,
+  ].join(" ");
+  try {
+    execImpl(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Start-Process powershell -ArgumentList '-NoProfile','-NonInteractive','-Command','${script.replace(/'/g, "''")}' -Verb RunAs -Wait`,
+      ],
+      { stdio: "inherit" },
+    );
+  } catch (err) {
+    fs.rmSync(tmpWith, { force: true });
+    fs.rmSync(tmpFinal, { force: true });
+    fs.rmSync(resultFile, { force: true });
+    throw new HostsError(
+      `Could not run elevated PowerShell: ${err.message}.`,
+      { kind: "exec" },
+    );
+  }
+  // Parse the verify results the elevated child left behind. A missing
+  // result file means UAC was cancelled (the script never ran).
+  let verify = null;
+  try {
+    const raw = fs.readFileSync(resultFile, "utf8");
+    verify = {};
+    for (const line of raw.split(/\r?\n/)) {
+      const eq = line.indexOf("=");
+      if (eq <= 0) continue;
+      const name = line.slice(0, eq).trim().toLowerCase();
+      const addrs = line.slice(eq + 1).trim();
+      verify[name] = addrs ? addrs.split(",").map((a) => a.trim()) : null;
+    }
+  } catch {
+    verify = null;
+  }
+  fs.rmSync(resultFile, { force: true });
+  if (verify === null) {
+    throw new HostsError(
+      "Hosts repair produced no result — the UAC prompt may have been cancelled. Re-run and accept the prompt, or run from an Administrator PowerShell.",
+      { kind: "permission" },
+    );
+  }
+  return { method: "runas", elevated: true, backupPath, verify };
+}
+
+// repairHostsResolution — the v1.13.0 "entry exists but doesn't
+// resolve" path. Ensures the entry (resolving conflicts), embeds a
+// control probe, rewrites without BOM + regrants ACL + restarts the
+// Dnscache service + flushes, verifies BOTH names via getaddrinfo,
+// and removes the control entry again. Returns:
+//   { changed, method, controlResolved, domainResolved, addresses,
+//     control, backupPath? }
+//
+// On Linux/macOS the control dance is unnecessary (glibc reads
+// /etc/hosts on every call) — we just force-rewrite and verify the
+// domain itself.
+async function repairHostsResolution(hostsPath, domain, {
+  platform = process.platform,
+  execImpl = execFileSync,
+  writeImpl = fs.writeFileSync,
+  lookupImpl = defaultLookup,
+  controlName,
+  sleepMs = 500,
+} = {}) {
+  const domainLower = String(domain || "").trim().toLowerCase();
+  const current = readHosts(hostsPath);
+  const plan = planAddEntry(current, domainLower);
+  const finalContent = (plan.changed ? plan.lines : current.split(/\r?\n/)).join("\n");
+
+  if (platform !== "win32") {
+    writeHosts(hostsPath, finalContent, { execImpl, writeImpl, platform });
+    const addresses = await lookupImpl(domainLower);
+    return {
+      changed: plan.changed,
+      method: "rewrite",
+      controlResolved: null,
+      domainResolved: addressesHitLoopback(addresses),
+      addresses,
+    };
+  }
+
+  const control = (controlName || makeControlName()).toLowerCase();
+  const controlPlan = planAddEntry(finalContent, control);
+  const withControlContent = controlPlan.lines.join("\n");
+  const toCrlf = (s) => stripBom(s).replace(/\r?\n/g, "\r\n");
+
+  // Fast path: the process can write the file directly (elevated
+  // shell, or unusually permissive ACL). Same sequence as the RunAs
+  // script, driven from Node.
+  let direct = true;
+  try {
+    writeImpl(hostsPath, toCrlf(withControlContent));
+  } catch {
+    direct = false;
+  }
+  if (direct) {
+    try {
+      execImpl(
+        "icacls",
+        [hostsPath, "/grant", "*S-1-5-20:(RX)", "*S-1-5-32-545:(RX)", "*S-1-15-2-1:(RX)"],
+        { stdio: "ignore", timeout: 10000 },
+      );
+    } catch {
+      // best-effort — a non-admin direct write won't be able to icacls.
+    }
+    restartDnscacheIfWindows({ execImpl, platform });
+    if (sleepMs > 0) await new Promise((r) => setTimeout(r, sleepMs));
+    flushDnsCacheIfWindows({ execImpl, platform });
+    const controlAddrs = await lookupImpl(control);
+    const domainAddrs = await lookupImpl(domainLower);
+    writeImpl(hostsPath, toCrlf(finalContent));
+    flushDnsCacheIfWindows({ execImpl, platform });
+    return {
+      changed: plan.changed,
+      method: "direct",
+      control,
+      controlResolved: addressesHitLoopback(controlAddrs),
+      domainResolved: addressesHitLoopback(domainAddrs),
+      addresses: domainAddrs,
+    };
+  }
+
+  const ran = repairHostsViaRunAs(
+    hostsPath,
+    toCrlf(withControlContent),
+    toCrlf(finalContent),
+    [control, domainLower],
+    { execImpl },
+  );
+  const controlAddrs = ran.verify ? ran.verify[control] : null;
+  const domainAddrs = ran.verify ? ran.verify[domainLower] : null;
+  return {
+    changed: plan.changed,
+    method: ran.method,
+    control,
+    controlResolved: addressesHitLoopback(controlAddrs),
+    domainResolved: addressesHitLoopback(domainAddrs),
+    addresses: domainAddrs,
+    backupPath: ran.backupPath,
+  };
+}
+
+function addressesHitLoopback(addresses) {
+  if (!addresses || addresses.length === 0) return false;
+  return addresses.some((a) => a === "127.0.0.1" || a === "::1");
+}
+
 // One-shot "add a domain" patch. Idempotent in content, but with a
 // `force` escape hatch.
 //
@@ -481,6 +735,7 @@ module.exports = {
   MANAGED_BLOCK_END,
   hostsPathForOS,
   flushDnsCacheIfWindows,
+  restartDnscacheIfWindows,
   stripBom,
   hasUtf8Bom,
   planAddEntry,
@@ -489,6 +744,10 @@ module.exports = {
   writeHosts,
   writeHostsViaSudo,
   writeHostsViaRunAs,
+  repairHostsViaRunAs,
+  repairHostsResolution,
+  makeControlName,
+  addressesHitLoopback,
   addEntry,
   removeEntry,
 };
