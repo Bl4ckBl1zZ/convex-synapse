@@ -1223,7 +1223,13 @@ await Promise.all([
       <Dialog
         key={editAdopt?.name ?? "edit-adopted-closed"}
         open={!!editAdopt}
-        onClose={() => setEditAdopt(null)}
+        // Esc/overlay-close is gated while the submit is in flight:
+        // otherwise a slow server-side probe lets the user close this
+        // dialog, open another deployment's, and have THIS request's
+        // resolution close (or paint its error into) the wrong dialog.
+        onClose={() => {
+          if (!editAdoptPending) setEditAdopt(null);
+        }}
         title={t("Update adopted deployment")}
       >
         <form onSubmit={submitEditAdopt} className="space-y-4">

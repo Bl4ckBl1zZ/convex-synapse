@@ -97,6 +97,12 @@ func fetchVersionFromURL(ctx context.Context, client *http.Client, base string) 
 		return "", err
 	}
 	defer resp2.Body.Close()
+	if resp2.StatusCode/100 != 2 {
+		// The backend flapped between the two fetches (or an external
+		// adopted URL fronted by a proxy started erroring) — a 503 page
+		// must not be read as a version string.
+		return "", fmt.Errorf("backend /version returned %s", resp2.Status)
+	}
 	buf := make([]byte, 256)
 	n, _ := resp2.Body.Read(buf)
 	raw := strings.TrimSpace(string(buf[:n]))

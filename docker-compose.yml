@@ -243,9 +243,11 @@ services:
       # Per-deployment snapshot backups (v1.26+). The transient CLI
       # containers the backend spawns bind the SAME named volume (fixed
       # name, no compose project prefix) and write the zips; the api
-      # streams downloads + prunes retention through this mount. Path
-      # must agree with SYNAPSE_BACKUP_DIR (default /backups).
-      - synapse-backups:/backups
+      # streams downloads + prunes retention through this mount. The
+      # target tracks SYNAPSE_BACKUP_DIR so an operator override can't
+      # split the env (where Go reads/writes) from the volume (where
+      # the zips actually land).
+      - synapse-backups:${SYNAPSE_BACKUP_DIR:-/backups}
     extra_hosts:
       # host-gateway is a docker 20.10+ magic alias the daemon expands
       # at container-create time to the host's bridge IP. Lets the

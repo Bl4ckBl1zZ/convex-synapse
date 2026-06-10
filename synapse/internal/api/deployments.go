@@ -2151,19 +2151,23 @@ func (h *DeploymentsHandler) updateAdopted(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// The adopted guard in WHERE is defense-in-depth against a re-check
-	// race (the row can't become managed, but cheap insurance). Promoting
-	// to 'running' is safe even mid-health-sweep: the sweep's own UPDATE
-	// guards on the status it read.
+	// Only the fields the caller actually sent are written (CASE guards)
+	// so two concurrent updates — one re-pointing the URL, one rotating
+	// the key — compose instead of the later one silently reverting the
+	// earlier one's column with its stale read. The adopted guard in
+	// WHERE is defense-in-depth against a re-check race. Promoting to
+	// 'running' is safe even mid-health-sweep: the sweep's down-flip
+	// carries a deployment_url guard, so a sweep that probed the OLD url
+	// can't overwrite this fresh re-point.
 	tag, err := h.DB.Exec(r.Context(), `
 		UPDATE deployments
-		   SET deployment_url = $1,
-		       admin_key = $2,
+		   SET deployment_url = CASE WHEN $1 <> '' THEN $1 ELSE deployment_url END,
+		       admin_key      = CASE WHEN $2 <> '' THEN $2 ELSE admin_key END,
 		       status = 'running'
 		 WHERE id = $3
 		   AND adopted = true
 		   AND status <> 'deleted'
-	`, effURL, effKey, d.ID)
+	`, req.DeploymentURL, req.AdminKey, d.ID)
 	if err != nil {
 		logErr("update adopted deployment", err)
 		writeError(w, http.StatusInternalServerError, "internal", "Failed to update deployment")

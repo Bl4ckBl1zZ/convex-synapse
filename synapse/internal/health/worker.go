@@ -24,10 +24,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	synapsedb "github.com/Iann29/synapse/internal/db"
 )
@@ -278,6 +280,13 @@ func (w *Worker) sweep(ctx context.Context, logger *slog.Logger, cfg Config) {
 	w.sweepAdopted(ctx, logger, cfg)
 }
 
+// adoptedRow is one adopted deployment as read at the top of the sweep —
+// the probe verdict is only ever applied back against this exact url
+// (see the deployment_url guard in reconcileAdoptedRow).
+type adoptedRow struct {
+	id, name, url, status string
+}
+
 // adoptedProbeClient is shared by every adopted-deployment probe. No
 // global timeout (each probe carries a ctx deadline) and redirects are
 // not followed — same posture as the adopt-time probe in the API: the
@@ -314,9 +323,6 @@ func (w *Worker) sweepAdopted(ctx context.Context, logger *slog.Logger, cfg Conf
 		logger.Error("health: list adopted deployments", "err", err)
 		return
 	}
-	type adoptedRow struct {
-		id, name, url, status string
-	}
 	var items []adoptedRow
 	for rows.Next() {
 		var it adoptedRow
@@ -333,65 +339,90 @@ func (w *Worker) sweepAdopted(ctx context.Context, logger *slog.Logger, cfg Conf
 		return
 	}
 
-	var changed int
+	// Probe concurrently (bounded): the sweep holds the fleet-wide
+	// advisory lock, and each DEAD adopted row costs a full StatusTimeout
+	// (plus the anti-blip retry when it was 'running'). Run serially, a
+	// handful of abandoned adopted rows would stretch every sweep by
+	// 30s+ and degrade detection latency for MANAGED deployments too.
+	var changed atomic.Int32
+	g := new(errgroup.Group)
+	g.SetLimit(4)
 	for _, it := range items {
-		if it.url == "" {
-			// Shouldn't happen (the adopt probe requires a reachable
-			// URL) but a row we can't probe must not flap to stopped.
-			continue
-		}
-		up := w.probeAdopted(ctx, cfg, it.url)
-		if !up && it.status == "running" {
-			// Anti-blip: only a second consecutive failure takes a
-			// running deployment down. The recovery direction needs no
-			// debounce — a single good probe proves liveness.
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(cfg.ProbeRetryDelay):
+		g.Go(func() error {
+			if w.reconcileAdoptedRow(ctx, logger, cfg, it) {
+				changed.Add(1)
 			}
-			up = w.probeAdopted(ctx, cfg, it.url)
-		}
-		target := "stopped"
-		if up {
-			target = "running"
-		}
-		if target == it.status {
-			continue
-		}
-		var prevStatus string
-		err := w.DB.QueryRow(ctx, `
-			UPDATE deployments d
-			   SET status = $1
-			  FROM (SELECT id, status FROM deployments WHERE id = $2) prev
-			 WHERE d.id = prev.id
-			   AND d.adopted = true
-			   AND d.status IN ('running', 'stopped')
-			   AND d.status <> $1
-			RETURNING prev.status
-		`, target, it.id).Scan(&prevStatus)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue // raced another sweep / a delete — nothing to report
-		}
-		if err != nil {
-			logger.Error("health: update adopted status",
-				"deployment", it.name, "err", err)
-			continue
-		}
-		changed++
-		logger.Info("health: reconciled adopted deployment",
-			"deployment", it.name,
-			"old_status", prevStatus,
-			"new_status", target)
-		if w.Alerter != nil && target == "stopped" {
-			w.Alerter.DeploymentDown(ctx, it.id, prevStatus, target)
-		}
+			return nil
+		})
 	}
-	if changed > 0 {
-		logger.Info("health sweep (adopted)", "checked", len(items), "changed", changed)
+	_ = g.Wait()
+	if n := changed.Load(); n > 0 {
+		logger.Info("health sweep (adopted)", "checked", len(items), "changed", n)
 	} else if len(items) > 0 {
 		logger.Debug("health sweep (adopted)", "checked", len(items))
 	}
+}
+
+// reconcileAdoptedRow probes one adopted deployment and persists the
+// verdict. Returns true when the row's status changed.
+func (w *Worker) reconcileAdoptedRow(ctx context.Context, logger *slog.Logger, cfg Config, it adoptedRow) bool {
+	if it.url == "" {
+		// Shouldn't happen (the adopt probe requires a reachable
+		// URL) but a row we can't probe must not flap to stopped.
+		return false
+	}
+	up := w.probeAdopted(ctx, cfg, it.url)
+	if !up && it.status == "running" {
+		// Anti-blip: only a second consecutive failure takes a
+		// running deployment down. The recovery direction needs no
+		// debounce — a single good probe proves liveness.
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(cfg.ProbeRetryDelay):
+		}
+		up = w.probeAdopted(ctx, cfg, it.url)
+	}
+	target := "stopped"
+	if up {
+		target = "running"
+	}
+	if target == it.status {
+		return false
+	}
+	// The deployment_url guard pins the verdict to the URL we actually
+	// probed: update_adopted can re-point the row mid-sweep (it probes
+	// the NEW pair before writing), and without the guard a slow sweep
+	// would overwrite that fresh 'running' with a stale 'stopped' from
+	// the OLD url — paging the operator who just fixed the deployment.
+	var prevStatus string
+	err := w.DB.QueryRow(ctx, `
+		UPDATE deployments d
+		   SET status = $1
+		  FROM (SELECT id, status FROM deployments WHERE id = $2) prev
+		 WHERE d.id = prev.id
+		   AND d.adopted = true
+		   AND d.deployment_url = $3
+		   AND d.status IN ('running', 'stopped')
+		   AND d.status <> $1
+		RETURNING prev.status
+	`, target, it.id, it.url).Scan(&prevStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false // raced an update_adopted / another sweep / a delete
+	}
+	if err != nil {
+		logger.Error("health: update adopted status",
+			"deployment", it.name, "err", err)
+		return false
+	}
+	logger.Info("health: reconciled adopted deployment",
+		"deployment", it.name,
+		"old_status", prevStatus,
+		"new_status", target)
+	if w.Alerter != nil && target == "stopped" {
+		w.Alerter.DeploymentDown(ctx, it.id, prevStatus, target)
+	}
+	return true
 }
 
 // probeAdopted reports whether the adopted deployment's external URL
