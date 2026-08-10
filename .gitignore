@@ -63,3 +63,7 @@ test-results/
 docs/search/
 __pycache__/
 *.py[cod]
+
+# Local operator credentials written by setup.sh (admin password, Convex
+# admin keys). Never commit — this repo and its forks are public.
+.local/

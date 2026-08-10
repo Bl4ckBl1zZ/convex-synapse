@@ -1,0 +1,33 @@
+services:
+  # Patched build from Bl4ckBl1zZ/convex-synapse, branch
+  # fix/host-port-container-origin: deployment containers advertise the
+  # container-internal Convex origin (127.0.0.1:3210) instead of the
+  # published host port, so `"use node"` action callbacks
+  # (ctx.runQuery/runMutation/storage.*) resolve. Upstream v1.27.3 bakes
+  # the host port, which is unreachable inside the container.
+  #
+  # `build: !reset null` drops the source build inherited from
+  # docker-compose.yml so `up --build` cannot silently overwrite the
+  # pulled image with an unpatched local compile.
+  synapse:
+    build: !reset null
+    image: ghcr.io/bl4ckbl1zz/synapse:host-port-origin
+
+  cloudflare-router:
+    image: caddy:2-alpine
+    container_name: synapse-cloudflare-router
+    restart: unless-stopped
+    depends_on:
+      - synapse
+      - dashboard
+      - convex-dashboard-proxy
+    ports:
+      - "8090:80"
+    volumes:
+      - ./Caddyfile.cloudflare-local:/etc/caddy/Caddyfile:ro
+    networks:
+      - synapse-network
+
+  convex-dashboard-proxy:
+    ports:
+      - "${CONVEX_DASHBOARD_PORT:-6793}:80"

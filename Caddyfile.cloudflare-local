@@ -1,0 +1,30 @@
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	@convexDashboard host convex-dashboard.8u9yhy8fewf.org
+	handle @convexDashboard {
+		reverse_proxy convex-dashboard-proxy:80
+	}
+
+	@synapseApi {
+		host synapse.8u9yhy8fewf.org
+		path /v1/* /d/* /health /__convex/*
+	}
+	handle @synapseApi {
+		reverse_proxy synapse:8080
+	}
+
+	@synapseDashboard host synapse.8u9yhy8fewf.org
+	handle @synapseDashboard {
+		reverse_proxy dashboard:3000
+	}
+
+	handle {
+		reverse_proxy synapse:8080
+	}
+}
