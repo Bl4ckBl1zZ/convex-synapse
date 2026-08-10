@@ -172,11 +172,25 @@ rebake.
 
 When Synapse runs without a base domain and without TLS (`--no-tls`,
 host-port addressing), port 3211 is not published on the host, so there's
-no externally reachable site URL. `Computer.Site()` returns `""`, the
-provisioner keeps `CONVEX_SITE_ORIGIN == CONVEX_CLOUD_ORIGIN`, and the
+no externally reachable site URL. `Computer.Site()` returns `""` and the
 proxy answers 501 for site hosts. Publishing a second host port for 3211
 in this mode is a deliberate, documented TODO — base-domain and
 custom-domain mode (the production shapes) ship unblocked.
+
+**In-container origin (fixed).** The provisioner used to keep
+`CONVEX_SITE_ORIGIN == CONVEX_CLOUD_ORIGIN` here, which named an address
+where HTTP actions 404: the backend mounts them on 3210 only under
+`/http`. That broke every in-container consumer that derives a URL from
+`CONVEX_SITE_URL`. The visible casualty was Better Auth — Convex builds
+its JWKS URL as `CONVEX_SITE_URL + /api/auth/convex/jwks`, the fetch
+404'd, so no JWT could be verified and users completed an OAuth flow only
+to arrive unauthenticated, with every request returning 200 and nothing
+in the logs. `docker.SiteOriginFallback` now advertises
+`<cloud origin>/http`, reproducing what the 3211 proxy would have done.
+
+This fixes what the *container* advertises about itself; it does not make
+3211 externally reachable. Browser-facing site URLs in host-port mode
+still need the second published port.
 
 ## Environment-variable categories (v1.17+)
 

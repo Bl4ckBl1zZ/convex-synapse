@@ -214,8 +214,16 @@ func TestRemoteClient_Provision_BuildsCorrectArgv(t *testing.T) {
 		"--publish " + host + ":4321:3210",
 		"-e INSTANCE_NAME=foo",
 		"-e INSTANCE_SECRET=deadbeef",
-		"-e CONVEX_CLOUD_ORIGIN=http://127.0.0.1:4321",
-		"-e CONVEX_SITE_ORIGIN=http://127.0.0.1:4321",
+		// The origin is the CONTAINER's listen port (3210), not the
+		// published host port (4321): the publish binding exists on the
+		// host, not in the container's network namespace, and this value
+		// is consumed from inside the container (node action callbacks,
+		// storage URLs, JWKS). See ContainerLoopbackOrigin.
+		"-e CONVEX_CLOUD_ORIGIN=http://127.0.0.1:3210",
+		// No site URL configured, so the site origin falls back to the
+		// cloud origin's /http prefix — where the backend actually mounts
+		// HTTP actions. See SiteOriginFallback.
+		"-e CONVEX_SITE_ORIGIN=http://127.0.0.1:3210/http",
 		"-e X_EXTRA=1",
 		"convex/backend:test",
 	}
