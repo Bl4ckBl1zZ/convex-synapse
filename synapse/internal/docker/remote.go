@@ -43,12 +43,15 @@ func NewRemoteClient(ssh *sshprov.Client, t sshprov.Target, image, network strin
 // stays the authoritative reference; remote duplicates the small list of
 // fields we know the v1.18 path uses.
 func (r *RemoteClient) buildEnv(spec DeploymentSpec) []string {
-	internalLoopback := fmt.Sprintf("http://127.0.0.1:%d", spec.HostPort)
-	publicOrigin := internalLoopback
+	// Container-internal origin, not the published host port — see the
+	// publicOrigin comment in Client.Provision. The host binding is not
+	// present in the container's network namespace, so advertising it
+	// breaks every "use node" action callback.
+	publicOrigin := ContainerLoopbackOrigin
 	if spec.PublicURL != "" {
 		publicOrigin = spec.PublicURL
 	}
-	siteOrigin := publicOrigin
+	siteOrigin := SiteOriginFallback(publicOrigin)
 	if spec.SiteURL != "" {
 		siteOrigin = spec.SiteURL
 	}

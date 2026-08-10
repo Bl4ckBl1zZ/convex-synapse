@@ -95,6 +95,44 @@ type DeploymentSpec struct {
 	MemoryMB int64
 }
 
+// ContainerLoopbackOrigin is the address the backend can always reach
+// itself at: its own listen port (3210) on the container's loopback.
+//
+// This is what a deployment must advertise as CONVEX_CLOUD_ORIGIN when no
+// externally-resolvable URL exists. The published host port is bound on
+// the HOST, so "http://127.0.0.1:<hostPort>" is unreachable from inside
+// the container — and CONVEX_CLOUD_ORIGIN is consumed almost entirely
+// from in there (node action callbacks, storage URLs, the JWKS fetch).
+// Advertising the host form makes every `"use node"` action fail with
+// "fetch failed" and zero egress bytes.
+const ContainerLoopbackOrigin = "http://127.0.0.1:3210"
+
+// SiteOriginFallback returns the CONVEX_SITE_ORIGIN to advertise when no
+// dedicated site URL exists (host-port mode, pre-site deployments, adopted
+// backends).
+//
+// The cloud origin is the only reachable address in those shapes, but the
+// backend serves HTTP actions there ONLY under "/http" — it mounts them as
+// .nest("/http/", http_action_routes()) on 3210, and the site proxy on 3211
+// exists precisely to rewrite natural paths to 3210/http<path>. Advertising
+// the bare cloud origin therefore names an address where /api/auth/* 404s,
+// which silently breaks in-container consumers that build URLs from
+// CONVEX_SITE_URL. Better Auth is the visible casualty: Convex derives its
+// JWKS URL from CONVEX_SITE_URL, the fetch 404s, every JWT fails to verify,
+// and users authenticate successfully yet arrive unauthenticated.
+//
+// Appending the prefix reproduces exactly what the site proxy would have
+// done. This is a stopgap for shapes without a published 3211, not a
+// replacement for publishing it — see docs/CONVEX_SITE_ORIGIN.md
+// "Host-port mode".
+func SiteOriginFallback(publicOrigin string) string {
+	trimmed := strings.TrimSuffix(publicOrigin, "/")
+	if trimmed == "" || strings.HasSuffix(trimmed, "/http") {
+		return trimmed
+	}
+	return trimmed + "/http"
+}
+
 // StorageEnv carries the per-deployment Postgres + S3 configuration.
 // Plaintext only — encryption-at-rest happens in internal/crypto before
 // these values are persisted; they're decrypted here for use as env
@@ -389,22 +427,33 @@ func (c *Client) Provision(ctx context.Context, spec DeploymentSpec) (*Deploymen
 
 	// internalURL is what THIS process polls for healthchecks (always
 	// loopback so we never depend on outbound DNS or Caddy being up).
-	// publicOrigin is what the running container advertises as its own
-	// URL via CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN — defaults to the
-	// loopback form (pre-v1.6.15 behaviour) and is overridden by
-	// spec.PublicURL when the caller has a real public address.
 	internalURL := fmt.Sprintf("http://127.0.0.1:%d", spec.HostPort)
-	publicOrigin := internalURL
+
+	// publicOrigin is what the running container advertises as its own URL
+	// via CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN. Every consumer of that
+	// value resolves it from INSIDE the container: `"use node"` action
+	// callbacks (ctx.runQuery / runMutation / storage.*), storage URLs, and
+	// the JWKS fetch all originate in the backend's own network namespace.
+	//
+	// The published host port is bound on the HOST, not in that namespace,
+	// so the host-port form names an address nothing listens on inside the
+	// container. Every node action then dies instantly with an unhelpful
+	// "fetch failed" and zero egress bytes. Advertise the container's own
+	// listen port instead; host-facing consumers use DeploymentURL (still
+	// internalURL, below), never this value.
+	//
+	// spec.PublicURL still wins when the caller has a real public address
+	// (base domain / custom domain), which is reachable from both sides.
+	publicOrigin := ContainerLoopbackOrigin
 	if spec.PublicURL != "" {
 		publicOrigin = spec.PublicURL
 	}
 	// Site origin (Convex port 3211, where HTTP actions live at their
 	// natural paths) diverges from the cloud origin once a base domain or
-	// a role='site' custom domain exists. Falls back to publicOrigin when
-	// no site URL was computed (host-port mode / pre-site deployments) —
-	// preserving the legacy "same URL" behaviour where 3211 isn't
-	// externally reachable anyway.
-	siteOrigin := publicOrigin
+	// a role='site' custom domain exists. Falls back to the cloud origin's
+	// /http prefix when no site URL was computed (host-port mode /
+	// pre-site deployments).
+	siteOrigin := SiteOriginFallback(publicOrigin)
 	if spec.SiteURL != "" {
 		siteOrigin = spec.SiteURL
 	}

@@ -67,9 +67,10 @@ func TestConvexOrigin_BaseDomainWinsOverPublicURL(t *testing.T) {
 }
 
 // TestConvexOrigin_NoConfigFallsBackToLoopback: with neither PublicURL
-// nor BaseDomain wired, the worker must emit "" — the docker layer
-// then defaults to "http://127.0.0.1:<port>", preserving pre-v1.6.15
-// behaviour for local dev / CI.
+// nor BaseDomain wired, the worker must emit "" — the docker layer then
+// defaults to docker.ContainerLoopbackOrigin ("http://127.0.0.1:3210"),
+// the backend's own listen port, which is the only address reachable
+// from inside the container for local dev / CI.
 func TestConvexOrigin_NoConfigFallsBackToLoopback(t *testing.T) {
 	h := Setup(t)
 	owner := h.RegisterRandomUser()
