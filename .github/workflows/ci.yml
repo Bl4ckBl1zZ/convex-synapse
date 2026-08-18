@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Callable so upstream-sync.yml can gate a merge on the full suite. Events
+  # created with GITHUB_TOKEN don't trigger `pull_request`, so the sync PR
+  # would otherwise get zero CI — we call this workflow directly instead.
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit or branch to test. Empty = whatever triggered the run.
+        type: string
+        required: false
+        default: ""
 
 jobs:
   synapse:
@@ -28,6 +38,8 @@ jobs:
         working-directory: synapse
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-go@v6
         with:
           # Pull the exact version from go.mod's `go 1.26.x` directive
@@ -51,6 +63,8 @@ jobs:
         working-directory: dashboard
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -66,6 +80,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
       - run: docker compose build
         env:
           SYNAPSE_JWT_SECRET: dummy-jwt-secret-for-ci-builds-only-do-not-use-in-prod-x
@@ -80,6 +96,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
       - name: shellcheck
         run: |
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
@@ -121,6 +139,8 @@ jobs:
     needs: [synapse, dashboard]
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v6
         with:
           node-version: "22"

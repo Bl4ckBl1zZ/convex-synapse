@@ -1,0 +1,275 @@
+name: upstream-sync
+
+# Keeps this fork current with upstream (Iann29/convex-synapse) without losing
+# the fork-local patches, and merges the result automatically when the whole
+# test suite still passes.
+#
+# Why merge and not rebase: the fork's commits are already published on a
+# public branch, and the local patch to internal/docker/provisioner.go needs a
+# real merge base so each sync only has to consider what's new. Rebasing would
+# rewrite published history and re-resolve the same conflicts every run.
+#
+# Why CI runs inside this workflow instead of on the PR: GitHub deliberately
+# does not trigger workflows from events created with GITHUB_TOKEN, so the PR
+# we open would never fire ci.yml's `pull_request` trigger and "merge when
+# green" would be merging on no evidence at all. We call ci.yml as a reusable
+# workflow pinned to the exact merge commit instead — same coverage, and the
+# merge is genuinely gated on it.
+#
+# Everything runs on GitHub-hosted runners, which are free and unmetered
+# because this repository is public.
+
+on:
+  schedule:
+    # Daily, 06:17 UTC. Off the hour on purpose: the top of the hour is the
+    # busiest slot on GitHub's scheduler and gets queued the longest.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Overwrite the sync branch even if a conflict PR is awaiting manual resolution"
+        type: boolean
+        default: false
+
+# Never let two syncs race on the same branch.
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+# The repo default for GITHUB_TOKEN is read-only; grant exactly what this
+# workflow needs and nothing more. `actions: write` is only for dispatching
+# publish-image.yml after a merge.
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+env:
+  UPSTREAM_URL: https://github.com/Iann29/convex-synapse.git
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCH: automation/upstream-sync
+
+jobs:
+  prepare:
+    name: merge upstream
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.merge.outputs.status }}
+      sha: ${{ steps.merge.outputs.sha }}
+      count: ${{ steps.detect.outputs.count }}
+      pr: ${{ steps.pr.outputs.number }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history: we need a real merge base against upstream.
+          fetch-depth: 0
+
+      - name: Check for an unresolved conflict PR
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          # A draft PR on the sync branch means a previous run hit conflicts and
+          # a human may be part-way through resolving them on that branch.
+          # Force-pushing over that would throw the work away.
+          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
+            --state open --json number,isDraft --jq '.[0] // empty')
+          if [[ -n "$open" ]] && [[ "$(jq -r .isDraft <<<"$open")" == "true" ]] && [[ "$FORCE" != "true" ]]; then
+            num=$(jq -r .number <<<"$open")
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Sync paused"
+              echo
+              echo "PR #${num} is a draft, which means an earlier sync hit merge conflicts"
+              echo "that still need a human. Resolve that PR (or re-run this workflow with"
+              echo "\`force\`) before the fork can pick up more upstream commits."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Detect new upstream commits
+        id: detect
+        if: steps.guard.outputs.blocked != 'true'
+        run: |
+          set -euo pipefail
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null \
+            || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+          count=$(git rev-list --count "origin/${GITHUB_REF_NAME}..upstream/${UPSTREAM_BRANCH}")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Upstream is $count commit(s) ahead of this fork."
+
+          if [[ "$count" == "0" ]]; then
+            echo "### Already up to date with upstream" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Merge upstream into the sync branch
+        id: merge
+        if: steps.guard.outputs.blocked != 'true' && steps.detect.outputs.count != '0'
+        env:
+          COUNT: ${{ steps.detect.outputs.count }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Always rebuild the sync branch from the current default branch, so a
+          # stale branch from a failed run never leaks into a new attempt.
+          git checkout -B "$SYNC_BRANCH" "origin/${GITHUB_REF_NAME}"
+
+          # The commit list goes in the PR body so the diff is reviewable at a
+          # glance even when it's merged automatically.
+          git log --no-merges --reverse --pretty='- %h %s' \
+            "HEAD..upstream/${UPSTREAM_BRANCH}" > /tmp/upstream-commits.txt
+
+          if git merge --no-ff --no-edit \
+              -m "merge: sync ${COUNT} upstream commit(s) from Iann29/convex-synapse" \
+              "upstream/${UPSTREAM_BRANCH}"; then
+            echo "status=clean" >> "$GITHUB_OUTPUT"
+            : > /tmp/conflicts.txt
+          else
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt
+            echo "Conflicting files:"; cat /tmp/conflicts.txt
+            # Commit the conflicted tree, markers and all. It's deliberately
+            # unbuildable — the resulting PR stays a draft and CI is skipped, so
+            # nothing can merge it, and a human (or an agent) gets a branch to
+            # check out and resolve rather than a pile of instructions.
+            git add -A
+            git commit \
+              -m "MERGE CONFLICT: upstream sync needs manual resolution" \
+              -m "Conflict markers are committed on purpose. Resolve them on this branch, push, then mark the PR ready for review."
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+          git push --force origin "$SYNC_BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the sync PR
+        id: pr
+        if: steps.merge.outputs.status != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.merge.outputs.status }}
+          COUNT: ${{ steps.detect.outputs.count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$STATUS" == "clean" ]]; then
+            title="merge: sync ${COUNT} upstream commit(s)"
+          else
+            title="⚠️ CONFLICT: upstream sync needs manual resolution"
+          fi
+
+          {
+            echo "Automated sync of \`Iann29/convex-synapse@${UPSTREAM_BRANCH}\` into this fork."
+            echo
+            if [[ "$STATUS" == "clean" ]]; then
+              echo "The merge applied cleanly on top of the fork's patches. The full \`ci.yml\`"
+              echo "suite runs against this exact merge commit and this PR is merged"
+              echo "automatically only if every job passes — including the Go tests that pin"
+              echo "the fork's container-internal Convex origin behaviour."
+            else
+              echo "**The merge hit conflicts, so this PR is a draft and nothing will merge it.**"
+              echo "The conflict markers are committed on this branch on purpose."
+              echo
+              echo "Conflicting files:"
+              echo '```'
+              cat /tmp/conflicts.txt
+              echo '```'
+              echo
+              echo "To resolve: check out \`${SYNC_BRANCH}\`, fix the markers, push, then mark"
+              echo "this PR ready for review. Further syncs are paused until then."
+            fi
+            echo
+            echo "### Upstream commits (${COUNT})"
+            echo
+            cat /tmp/upstream-commits.txt
+            echo
+            echo "---"
+            echo "[Sync run](${RUN_URL}) · generated by \`.github/workflows/upstream-sync.yml\`"
+          } > /tmp/pr-body.md
+
+          num=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
+            --state open --json number --jq '.[0].number // empty')
+
+          if [[ -z "$num" ]]; then
+            draft=()
+            [[ "$STATUS" == "conflict" ]] && draft=(--draft)
+            num=$(gh pr create --repo "$GITHUB_REPOSITORY" \
+              --base "$GITHUB_REF_NAME" --head "$SYNC_BRANCH" \
+              --title "$title" --body-file /tmp/pr-body.md "${draft[@]}" \
+              | grep -oE '[0-9]+$')
+          else
+            gh pr edit "$num" --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --body-file /tmp/pr-body.md
+            # A previously-clean PR that now conflicts must drop back to draft.
+            [[ "$STATUS" == "conflict" ]] && gh pr ready "$num" --repo "$GITHUB_REPOSITORY" --undo
+          fi
+
+          echo "number=$num" >> "$GITHUB_OUTPUT"
+          echo "### Sync PR #${num} (${STATUS})" >> "$GITHUB_STEP_SUMMARY"
+
+  # The fork's own test suite is the thing that decides whether upstream's
+  # changes are compatible with the local patches. It runs against the merge
+  # commit, not against main and not against upstream.
+  verify:
+    name: verify merge
+    needs: prepare
+    if: needs.prepare.outputs.status == 'clean'
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+
+  merge:
+    name: merge PR
+    needs: [prepare, verify]
+    if: needs.prepare.outputs.status == 'clean'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.prepare.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --merge
+          echo "### Merged PR #${PR}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rebuild the patched GHCR image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The merge above is a GITHUB_TOKEN push, which by design triggers no
+          # workflows — so publish-image.yml has to be dispatched explicitly.
+          # workflow_dispatch is one of the two events exempt from that rule.
+          gh workflow run publish-image.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+
+  report:
+    name: report failure
+    needs: [prepare, verify]
+    if: always() && needs.prepare.outputs.status == 'clean' && needs.verify.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.prepare.outputs.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "The merge itself was clean, but the test suite failed against the merge"
+            echo "commit, so this PR was **not** merged. Upstream changed something the"
+            echo "fork's patches depend on."
+            echo
+            echo "[Failing run](${RUN_URL})"
+            echo
+            echo "The next sync rebuilds this branch from scratch, so a fix landing upstream"
+            echo "resolves this on its own. If the break is in the fork's patches, fix them"
+            echo "on \`${GITHUB_REF_NAME}\` and the next sync picks that up."
+          } > /tmp/comment.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
