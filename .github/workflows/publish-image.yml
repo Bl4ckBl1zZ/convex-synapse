@@ -11,7 +11,13 @@ name: publish-image
 on:
   push:
     branches:
-      - fix/host-port-container-origin
+      - main
+    # Docs and installer churn from an upstream sync shouldn't cost an image
+    # rebuild. workflow_dispatch ignores this filter, which is how
+    # upstream-sync.yml forces a rebuild after it merges.
+    paths:
+      - "synapse/**"
+      - ".github/workflows/publish-image.yml"
   workflow_dispatch:
 
 jobs:
@@ -48,6 +54,7 @@ jobs:
             VERSION=${{ github.sha }}
           tags: |
             ghcr.io/bl4ckbl1zz/synapse:host-port-origin
+            ghcr.io/bl4ckbl1zz/synapse:main
             ghcr.io/bl4ckbl1zz/synapse:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
