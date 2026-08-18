@@ -96,6 +96,10 @@ jobs:
           git remote add upstream "$UPSTREAM_URL" 2>/dev/null \
             || git remote set-url upstream "$UPSTREAM_URL"
           git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          # Explicit refspec rather than trusting whatever remote-tracking ref
+          # actions/checkout happened to leave behind.
+          git fetch --no-tags origin \
+            "+refs/heads/${GITHUB_REF_NAME}:refs/remotes/origin/${GITHUB_REF_NAME}"
 
           count=$(git rev-list --count "origin/${GITHUB_REF_NAME}..upstream/${UPSTREAM_BRANCH}")
           echo "count=$count" >> "$GITHUB_OUTPUT"
@@ -121,8 +125,16 @@ jobs:
 
           # The commit list goes in the PR body so the diff is reviewable at a
           # glance even when it's merged automatically.
-          git log --no-merges --reverse --pretty='- %h %s' \
+          # -n on git log rather than `| head`: under `set -o pipefail` head
+          # closing the pipe early SIGPIPEs git and fails the whole step, but
+          # only once the output outgrows the 64K pipe buffer — a bug that would
+          # hide until some week upstream landed a big batch.
+          git log -n 100 --reverse --pretty='- %h %s' \
             "HEAD..upstream/${UPSTREAM_BRANCH}" > /tmp/upstream-commits.txt
+          if [[ "$COUNT" -gt 100 ]]; then
+            echo "- …and $((COUNT - 100)) older commit(s) not listed" \
+              >> /tmp/upstream-commits.txt
+          fi
 
           if git merge --no-ff --no-edit \
               -m "merge: sync ${COUNT} upstream commit(s) from Iann29/convex-synapse" \
@@ -197,7 +209,9 @@ jobs:
 
           if [[ -z "$num" ]]; then
             draft=()
-            [[ "$STATUS" == "conflict" ]] && draft=(--draft)
+            if [[ "$STATUS" == "conflict" ]]; then
+              draft=(--draft)
+            fi
             num=$(gh pr create --repo "$GITHUB_REPOSITORY" \
               --base "$GITHUB_REF_NAME" --head "$SYNC_BRANCH" \
               --title "$title" --body-file /tmp/pr-body.md "${draft[@]}" \
@@ -206,7 +220,9 @@ jobs:
             gh pr edit "$num" --repo "$GITHUB_REPOSITORY" \
               --title "$title" --body-file /tmp/pr-body.md
             # A previously-clean PR that now conflicts must drop back to draft.
-            [[ "$STATUS" == "conflict" ]] && gh pr ready "$num" --repo "$GITHUB_REPOSITORY" --undo
+            if [[ "$STATUS" == "conflict" ]]; then
+              gh pr ready "$num" --repo "$GITHUB_REPOSITORY" --undo
+            fi
           fi
 
           echo "number=$num" >> "$GITHUB_OUTPUT"
